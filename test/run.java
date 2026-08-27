@@ -10,6 +10,7 @@ void main() throws Exception {
     symbols.SymbolsTest.run();
     symbols.StoreTest.run();
     ffi.PlatformTest.run();
+    uritemplates.TemplatesTest.run();
     project.ProjectTest.run();
     sqlite3.SqliteTest.run();
     sqlite3.ApiTest.run();
