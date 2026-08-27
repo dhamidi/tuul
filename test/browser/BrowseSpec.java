@@ -38,10 +38,10 @@ public final class BrowseSpec {
     public static final Path SPECS = Path.of("spec", "browse");
 
     /// The specs, in the order they read: what the application is for, then
-    /// how it is put together, then what it answers, then its edges, then two
-    /// people at once.
+    /// how it is put together, then what it answers, then where its results
+    /// lead, then its edges, then two people at once.
     public static final List<String> NAMES =
-            List.of("journey", "frames", "results", "edges", "together");
+            List.of("journey", "frames", "results", "members", "edges", "together");
 
     private static final String SUFFIX = ".hyperspec";
 

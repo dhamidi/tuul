@@ -12,3 +12,4 @@ build/
 
 # Stray compiles outside build/.
 *.class
+.claude/worktrees/

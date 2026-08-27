@@ -1,0 +1,53 @@
+# Following a member, which is most of what a search offers.
+#
+# A member is not a page: it is a place on its type's page. Roughly four of
+# every five results name one, so a browser where a type resolves and a member
+# does not is a browser where most of the list goes nowhere — and it looks
+# entirely correct until somebody clicks.
+#
+# results.hyperspec takes the destination out of the page and visits it. This
+# one follows the link, which is a different question: whether the panel can
+# hand somebody over to a whole page at all.
+
+client following {
+    visit /
+    fill q Database#execute
+    submit
+
+    within results {
+        expect item symbol
+        expect link sqlite3.Database#execute
+    }
+
+    # The link is inside the panel, so a browser drives the panel with it unless
+    # the link says otherwise. It has to say otherwise: a symbol page carries no
+    # results panel, and asking it for one blanks the list at HTTP 200.
+    expect link sqlite3.Database#execute targets page
+
+    follow sqlite3.Database#execute
+    expect status 200
+    expect at /symbols/sqlite3.Database
+
+    # Where it landed is the type, and the member is one of the things on it.
+    expect attribute symbol name sqlite3.Database
+    expect item member
+}
+
+# A member of a nested type is the harder shape of the same thing: the name has
+# a dot in it before the hash, so anything splitting on the wrong one arrives
+# somewhere that does not exist.
+client nested {
+    visit /
+    fill q Json.Object#with
+    submit
+
+    within results {
+        expect item symbol
+        expect link json.Json.Object#with
+    }
+
+    follow json.Json.Object#with
+    expect status 200
+    expect at /symbols/json.Json.Object
+    expect attribute symbol name json.Json.Object
+}
