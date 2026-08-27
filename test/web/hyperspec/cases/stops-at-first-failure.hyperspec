@@ -1,0 +1,3 @@
+visit /
+expect link "Sign out"
+expect status 200

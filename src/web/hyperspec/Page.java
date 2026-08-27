@@ -7,6 +7,7 @@ import java.util.List;
 import java.util.Locale;
 import java.util.Map;
 import java.util.Optional;
+import java.util.function.BiConsumer;
 
 /// A page as a client sees it: where it came from, what it answered, and what
 /// it offers.
@@ -25,11 +26,32 @@ public record Page(
         String body,
         Document.Element root) {
 
-    /// Somewhere a client can go.
-    public record Link(String label, String href, String rel) {}
+    private static final String FRAME = "turbo-frame";
 
-    /// Something a client can send, and what it will send by default.
-    public record Form(String name, String method, String action, List<Field> fields) {
+    /// What Turbo reads to send an element's use somewhere other than where it
+    /// is written.
+    private static final String TARGET = "data-turbo-frame";
+
+    private static final String TOP = "_top";
+
+    /// Somewhere a client can go, and what it moves when it is used.
+    ///
+    /// `frame` is the turbo-frame the link navigates, or empty for the page
+    /// itself. It is not decoration: a link inside a frame does not take the
+    /// browser anywhere, it replaces a panel, and a test that cannot tell those
+    /// apart cannot see the most common way a Turbo application breaks.
+    public record Link(String label, String href, String rel, String frame) {
+
+        /// Whether using this link navigates the page rather than a panel.
+        public boolean top() {
+            return frame.isEmpty();
+        }
+    }
+
+    /// Something a client can send, what it will send by default, and what it
+    /// replaces when it is sent — a form targeting a frame is as ordinary in a
+    /// Turbo application as a link inside one.
+    public record Form(String name, String method, String action, String frame, List<Field> fields) {
 
         public Form {
             fields = List.copyOf(fields);
@@ -53,6 +75,20 @@ public record Page(
 
     public record Field(String name, String type, String value, boolean active) {}
 
+    /// A panel the application can replace on its own.
+    ///
+    /// Turbo asks for one by sending `Turbo-Frame: <id>` and then looks for an
+    /// element with that id in the answer. When it is not there the panel is
+    /// wiped and replaced with an error — at HTTP 200, with nothing in any log.
+    /// That is why frames are affordances here rather than markup: a spec has
+    /// to be able to say the panel still works.
+    public record Frame(String id, String src, Document.Element element) {}
+
+    /// One action of a Turbo Stream response: what to do, and to which target.
+    /// A stream is not a page — it is a list of changes to one — so a spec
+    /// asserts on the changes rather than on what they contain.
+    public record Change(String action, String target) {}
+
     /// A resource the page describes, in the page's own words.
     ///
     /// Microdata, rather than `data-` attributes: `itemscope`, `itemtype` and
@@ -71,11 +107,36 @@ public record Page(
 
     public List<Link> links() {
         var links = new ArrayList<Link>();
-        for (var anchor : root.find("a")) {
-            anchor.attribute("href").ifPresent(href ->
-                    links.add(new Link(label(anchor), href, anchor.attribute("rel", ""))));
-        }
+        walk(root, "", (element, frame) -> {
+            if (!element.name().equals("a")) return;
+            element.attribute("href").ifPresent(href ->
+                    links.add(new Link(label(element), href, element.attribute("rel", ""), driven(element, frame))));
+        });
         return links;
+    }
+
+    /// The panels this page offers.
+    public List<Frame> frames() {
+        var frames = new ArrayList<Frame>();
+        for (var element : root.elements()) {
+            if (element.name().equals(FRAME)) {
+                frames.add(new Frame(element.attribute("id", ""), element.attribute("src", ""), element));
+            }
+        }
+        return frames;
+    }
+
+    public Optional<Frame> frame(String id) {
+        return frames().stream().filter(frame -> frame.id().equals(id)).findFirst();
+    }
+
+    /// The same response, seen as only one of its panels.
+    ///
+    /// A spec that says `within results` is asking what the panel offers, not
+    /// what the document around it offers — which is the difference between
+    /// "this page has a link to json.Json somewhere" and "the search found it".
+    public Optional<Page> within(String id) {
+        return frame(id).map(frame -> new Page(uri, method, status, headers, body, frame.element()));
     }
 
     /// A link by what it is called, or by its `rel`. Both are what the page
@@ -89,7 +150,11 @@ public record Page(
     }
 
     public List<Form> forms() {
-        return root.find("form").stream().map(Page::form).toList();
+        var forms = new ArrayList<Form>();
+        walk(root, "", (element, frame) -> {
+            if (element.name().equals("form")) forms.add(form(element, driven(element, frame)));
+        });
+        return forms;
     }
 
     /// A form by its id or its name, or the only one there is. A page with one
@@ -98,6 +163,13 @@ public record Page(
         var forms = forms();
         if (name.isEmpty()) return forms.size() == 1 ? Optional.of(forms.getFirst()) : Optional.empty();
         return forms.stream().filter(form -> form.name().equals(name)).findFirst();
+    }
+
+    /// The changes a Turbo Stream response asks for.
+    public List<Change> changes() {
+        return root.find("turbo-stream").stream()
+                .map(element -> new Change(element.attribute("action", ""), element.attribute("target", "")))
+                .toList();
     }
 
     public List<Item> items() {
@@ -133,7 +205,7 @@ public record Page(
         return anchor.attribute("aria-label").or(() -> anchor.attribute("title")).orElse("");
     }
 
-    private static Form form(Document.Element element) {
+    private static Form form(Document.Element element, String frame) {
         var fields = new ArrayList<Field>();
         for (var input : element.elements()) {
             field(input).ifPresent(fields::add);
@@ -142,7 +214,31 @@ public record Page(
                 element.attribute("id").or(() -> element.attribute("name")).orElse(""),
                 element.attribute("method", "get").toUpperCase(Locale.ROOT),
                 element.attribute("action", ""),
+                frame,
                 fields);
+    }
+
+    /// Which panel using this element replaces, following Turbo's own rules:
+    /// what the element itself asks for, then the frame it is written inside,
+    /// and `_top` at either level means the page rather than a panel.
+    private static String driven(Document.Element element, String enclosing) {
+        var asked = element.attribute(TARGET, "");
+        if (asked.equals(TOP)) return "";
+        if (!asked.isEmpty()) return asked;
+        return enclosing;
+    }
+
+    /// Every element, carrying the frame it is written inside. A frame that
+    /// targets `_top` is one its links escape, so its contents are treated as
+    /// belonging to the page.
+    private static void walk(Document.Element element, String frame, BiConsumer<Document.Element, String> visit) {
+        var here = element.name().equals(FRAME)
+                ? (element.attribute("target", "").equals(TOP) ? "" : element.attribute("id", ""))
+                : frame;
+        visit.accept(element, here);
+        for (var child : element.content()) {
+            if (child instanceof Document.Element nested) walk(nested, here, visit);
+        }
     }
 
     private static Optional<Field> field(Document.Element element) {

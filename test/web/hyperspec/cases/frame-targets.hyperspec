@@ -1,0 +1,7 @@
+visit /
+expect frame results
+expect link "Broken" targets frame results
+expect link "Escapes" targets page
+within results {
+    expect link "Broken"
+}

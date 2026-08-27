@@ -1,0 +1,3 @@
+visit /
+follow "Whole"
+expect item thing

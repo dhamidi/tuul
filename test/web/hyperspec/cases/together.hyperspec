@@ -1,0 +1,23 @@
+client alice {
+    visit /session/new
+    fill who alice
+    submit
+    follow redirect
+    follow "New note"
+    fill title "by alice"
+    submit
+    follow redirect
+    expect attribute note author alice
+}
+concurrently {
+    client bob { visit /notes ; expect item note ; expect no link "Sign out" }
+    client carol { visit /notes ; expect item note }
+}
+client bob {
+    expect requests 1
+    follow "New note"
+    fill title "by bob"
+    submit
+    follow redirect
+    expect attribute note author nobody
+}

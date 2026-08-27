@@ -4,10 +4,12 @@ import static web.ui.Attributes.*;
 import static web.ui.Tags.*;
 
 import harness.Check;
+import java.io.IOException;
 import java.net.URI;
 import java.util.LinkedHashMap;
 import java.util.List;
 import java.util.Map;
+import java.util.concurrent.ConcurrentLinkedQueue;
 import java.util.concurrent.atomic.AtomicInteger;
 import web.Handler;
 import web.Request;
@@ -16,6 +18,7 @@ import web.Routing;
 import web.dispatch.Router;
 import web.serve.Http;
 import web.ui.Html;
+import web.ui.Turbo;
 
 public final class HyperspecTest {
 
@@ -26,6 +29,8 @@ public final class HyperspecTest {
         refusals();
         markup();
         affordances();
+        frames();
+        panels();
         journey();
         together();
         failures();
@@ -180,37 +185,113 @@ public final class HyperspecTest {
 
     /// The whole point: a journey across pages, against a service that is
     /// actually running.
+    /// What a frame changes about an affordance.
+    ///
+    /// A link inside a turbo-frame replaces the panel, and everything about
+    /// this — the header the client sends, the frame the answer has to carry —
+    /// follows from that. These are read from markup rather than from a server,
+    /// because the reading is the part that has to be right.
+    private static void frames() throws Exception {
+        var page = page("""
+                <a href="/away">Away</a>
+                <turbo-frame id="results">
+                  <a href="/one">One</a>
+                  <a href="/two" data-turbo-frame="_top">Two</a>
+                  <a href="/three" data-turbo-frame="other">Three</a>
+                  <form id="inside" action="/search"></form>
+                </turbo-frame>
+                <turbo-frame id="loose" target="_top">
+                  <a href="/four">Four</a>
+                </turbo-frame>
+                <form id="outside" action="/go" data-turbo-frame="results"></form>
+                """);
+
+        Check.equal("a page offers its panels", List.of("results", "loose"),
+                page.frames().stream().map(Page.Frame::id).toList());
+        Check.equal("a link outside every frame moves the page", "", frame(page, "Away"));
+        Check.equal("a link inside one moves that frame", "results", frame(page, "One"));
+        Check.equal("_top on the link escapes it", "", frame(page, "Two"));
+        Check.equal("and a link may name another frame", "other", frame(page, "Three"));
+        Check.equal("a frame that targets _top is one its links escape", "", frame(page, "Four"));
+        Check.equal("a form inside a frame submits into it", "results",
+                page.form("inside").orElseThrow().frame());
+        Check.equal("and one outside may still target it", "results",
+                page.form("outside").orElseThrow().frame());
+
+        var panel = page.within("results").orElseThrow();
+        Check.equal("a panel offers only what is inside it", List.of("One", "Two", "Three"),
+                panel.links().stream().map(Page.Link::label).toList());
+        Check.that("and asking for a panel that is not there answers nothing",
+                page.within("missing").isEmpty());
+
+        var streamed = page("""
+                <turbo-stream action="append" target="results"><template></template></turbo-stream>
+                <turbo-stream action="remove" target="banner"></turbo-stream>
+                """);
+        Check.equal("a stream response offers changes rather than a page",
+                List.of("append results", "remove banner"),
+                streamed.changes().stream().map(change -> change.action() + " " + change.target()).toList());
+    }
+
+    private static String frame(Page page, String label) {
+        return page.link(label).orElseThrow().frame();
+    }
+
+    /// The same thing against a live server, because the half that matters
+    /// happens on the wire: the client says which panel it is replacing, and
+    /// the answer either carries that panel or the panel goes blank.
+    ///
+    /// This is the failure a browser shows and no log records — 200, no console
+    /// error, an empty box — so it is the one a hypermedia tool has to see.
+    private static void panels() throws Exception {
+        var asked = new ConcurrentLinkedQueue<String>();
+        Handler handler = (request, response) -> {
+            asked.add(request.header("Turbo-Frame").orElse("-"));
+            switch (request.path()) {
+                case "/whole" -> render(response, article(flag("itemscope"), attribute("itemtype", "/Thing")));
+                case "/framed" -> render(response, Turbo.frame("results",
+                        article(flag("itemscope"), attribute("itemtype", "/Thing"))));
+                case "/repeats" -> render(response, div(
+                        a(href("/whole"), text("Twice")),
+                        a(href("/whole"), text("Twice")),
+                        a(href("/framed"), text("Once"))));
+                default -> render(response, Turbo.frame("results",
+                        a(href("/whole"), text("Broken")),
+                        a(href("/framed"), text("Whole")),
+                        a(href("/whole"), Turbo.targetFrame("_top"), text("Escapes"))));
+            }
+        };
+
+        try (var server = Http.start(handler, 0)) {
+            var service = URI.create("http://localhost:" + server.port());
+
+            var broken = spec("frame-not-carried", service);
+            Check.that("following into a panel the answer does not carry fails", !broken.ok());
+            Check.that("and names the panel that was left empty",
+                    broken.failures().getFirst().what().contains("\"results\""));
+
+            var whole = spec("frame-carried", service);
+            Check.that("an answer that carries the panel is fine: " + whole.report(), whole.ok());
+
+            var escapes = spec("frame-escaped", service);
+            Check.that("and so is a link that escapes the panel: " + escapes.report(), escapes.ok());
+
+            var targets = spec("frame-targets", service);
+            Check.that("a spec can say where a link goes: " + targets.report(), targets.ok());
+
+            var repeated = spec("repeated-links", service);
+            Check.that("a page offering the same link twice is not offering two things", !repeated.ok());
+            Check.that("and says which one it was", repeated.failures().getFirst().found().contains("Twice"));
+
+            Check.that("the client told the server which panel it was replacing", asked.contains("results"));
+            Check.that("and said nothing when the link escaped it",
+                    asked.stream().filter(header -> header.equals("-")).count() >= 2);
+        }
+    }
+
     private static void journey() throws Exception {
         try (var server = Http.start(notes(), 0)) {
-            var outcome = Hyperspec.run("""
-                    visit /
-                    expect status 200
-                    expect link "Sign in"
-                    expect no link "New note"
-
-                    follow "Sign in"
-                    expect form sign-in
-                    expect field sign-in who
-                    fill who alice
-                    submit
-                    expect status 303
-                    expect redirect /notes
-
-                    follow redirect
-                    expect at /notes
-                    follow "New note"
-                    fill title "First note"
-                    submit
-                    follow redirect
-
-                    expect item note
-                    expect attribute note title "First note"
-                    expect attribute note author alice
-                    set id [attribute note id]
-                    visit /notes/$id
-                    expect attribute note title "First note"
-                    expect requests 8
-                    """, URI.create("http://localhost:" + server.port()));
+            var outcome = spec("journey", URI.create("http://localhost:" + server.port()));
 
             Check.that("a journey across five pages passes: " + outcome.report(), outcome.ok());
             Check.equal("and every expectation is counted", 13, outcome.passed());
@@ -221,31 +302,7 @@ public final class HyperspecTest {
     /// makes "did what she did show up for him" a question a spec can ask.
     private static void together() throws Exception {
         try (var server = Http.start(notes(), 0)) {
-            var outcome = Hyperspec.run("""
-                    client alice {
-                        visit /session/new
-                        fill who alice
-                        submit
-                        follow redirect
-                        follow "New note"
-                        fill title "by alice"
-                        submit
-                        follow redirect
-                        expect attribute note author alice
-                    }
-                    concurrently {
-                        client bob { visit /notes ; expect item note ; expect no link "Sign out" }
-                        client carol { visit /notes ; expect item note }
-                    }
-                    client bob {
-                        expect requests 1
-                        follow "New note"
-                        fill title "by bob"
-                        submit
-                        follow redirect
-                        expect attribute note author nobody
-                    }
-                    """, URI.create("http://localhost:" + server.port()));
+            var outcome = spec("together", URI.create("http://localhost:" + server.port()));
 
             Check.that("two clients run at once and both are asked: " + outcome.report(), outcome.ok());
             Check.equal("every client's expectations are counted", 6, outcome.passed());
@@ -267,44 +324,48 @@ public final class HyperspecTest {
         try (var server = Http.start(notes(), 0)) {
             var service = URI.create("http://localhost:" + server.port());
 
-            var missing = Hyperspec.run("visit /\nexpect link \"Sign out\"", service);
+            var missing = spec("missing-link", service);
             Check.that("a missing affordance fails", !missing.ok());
             var failure = missing.failures().getFirst();
             Check.equal("on the line it was asked on", 2, failure.line());
             Check.that("saying what was wanted", failure.what().contains("Sign out"));
             Check.that("and what the page offers instead: " + failure.found(), failure.found().contains("Sign in"));
 
-            var status = Hyperspec.run("visit /nowhere\nexpect status 200", service);
+            var status = spec("wrong-status", service);
             Check.that("a wrong status says what came back: " + status.failures().getFirst().found(),
                     status.failures().getFirst().found().contains("404"));
 
-            var stopped = Hyperspec.run("""
-                    visit /
-                    expect link "Sign out"
-                    expect status 200
-                    """, service);
+            var stopped = spec("stops-at-first-failure", service);
             Check.equal("a journey stops at its first wrong turn", 0, stopped.passed());
             Check.equal("and reports it once", 1, stopped.failures().size());
 
-            var separate = Hyperspec.run("""
-                    client alice { visit / ; expect link "Sign out" }
-                    client bob { visit / ; expect link "Sign in" }
-                    """, service);
+            var separate = spec("clients-fail-separately", service);
             Check.equal("one client's failure is not another's", 1, separate.failures().size());
             Check.equal("and the other one carries on", 1, separate.passed());
             Check.equal("the failure names the client it belongs to", "alice", separate.failures().getFirst().client());
 
-            var unknown = Hyperspec.run("visit /\nvist /again", service);
+            var unknown = spec("unknown-command", service);
             Check.that("an unknown command names the commands there are: " + unknown.failures().getFirst().what(),
                     unknown.failures().getFirst().what().contains("visit"));
 
-            var unset = Hyperspec.run("visit /$nothing", service);
+            var unset = spec("unset-variable", service);
             Check.that("so does an unset variable", unset.failures().getFirst().what().contains("$nothing"));
 
-            var noRedirect = Hyperspec.run("visit /\nfollow redirect", service);
+            var noRedirect = spec("redirect-that-is-not-there", service);
             Check.that("and a redirect that is not there: " + noRedirect.failures().getFirst().found(),
                     noRedirect.failures().getFirst().found().contains("200"));
         }
+    }
+
+    /// One of the specs in `cases`, by name.
+    ///
+    /// The cases are files rather than string literals because they are specs,
+    /// and a spec is a document: it reads as one, it can be run by hand against
+    /// a server, and changing one does not mean recompiling a test. They load
+    /// as resources rather than as paths so that they are found the same way
+    /// wherever the tests are run from.
+    private static Outcome spec(String name, URI service) throws IOException {
+        return Hyperspec.run(HyperspecTest.class, "cases/" + name + ".hyperspec", service);
     }
 
     // The application under test: sign in, list, compose, read.

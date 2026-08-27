@@ -1,0 +1,27 @@
+visit /
+expect status 200
+expect link "Sign in"
+expect no link "New note"
+
+follow "Sign in"
+expect form sign-in
+expect field sign-in who
+fill who alice
+submit
+expect status 303
+expect redirect /notes
+
+follow redirect
+expect at /notes
+follow "New note"
+fill title "First note"
+submit
+follow redirect
+
+expect item note
+expect attribute note title "First note"
+expect attribute note author alice
+set id [attribute note id]
+visit /notes/$id
+expect attribute note title "First note"
+expect requests 8

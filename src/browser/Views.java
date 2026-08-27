@@ -40,6 +40,10 @@ public final class Views {
     private static final java.util.regex.Pattern QUALIFIED =
             java.util.regex.Pattern.compile("[a-zA-Z_$][\\w$]*(?:\\.[a-zA-Z_$][\\w$]*)*\\.[A-Z][\\w$]*");
 
+    /// The icon, by its logical name — the one place it is spelled, so the
+    /// page's link and the conventional path cannot point at different files.
+    public static final String ICON = "favicon.svg";
+
     private Views() {}
 
     /// A whole page. The import map and the module that starts Turbo and
@@ -53,7 +57,7 @@ public final class Views {
                                 meta(charset("utf-8")),
                                 meta(name("viewport"), content("width=device-width, initial-scale=1")),
                                 title(text(title + " — tuul")),
-                                link(rel("icon"), type("image/svg+xml"), href(assets.url("favicon.svg"))),
+                                link(rel("icon"), type("image/svg+xml"), href(assets.url(ICON))),
                                 link(rel("stylesheet"), href(assets.url("browser.css"))),
                                 Html.deferred(out -> modules.write(assets, out)),
                                 script(BOOT, type("module"))),
@@ -91,7 +95,7 @@ public final class Views {
     /// whatever page it arrives in, so the same markup answers a search whether
     /// it was typed or asked for directly.
     public static Html results(Router routes, Found found) {
-        if (!found.problem().isEmpty()) return Turbo.frame(RESULTS, p(classes("problem"), text(found.problem())));
+        if (!found.problem().isEmpty()) return Turbo.frame(RESULTS, problem(found.problem()));
         if (!found.asked()) {
             return Turbo.frame(RESULTS, p(classes("hint"), text("Type to search the index.")));
         }
@@ -116,10 +120,22 @@ public final class Views {
                 documentation(entry.string("doc", "")));
     }
 
+    /// A failure the reader can see, described as a resource rather than left
+    /// as prose.
+    ///
+    /// A test cannot honestly assert on a sentence — that is a raw string
+    /// assertion, which is what web.hyperspec exists to refuse — so a page that
+    /// says what went wrong only in prose is a page whose failures no spec can
+    /// catch. Saying it is a problem makes `expect no item problem` mean
+    /// something, and it meant nothing while this was a bare paragraph.
+    private static Html problem(String message) {
+        return p(classes("problem"), Microdata.scope(), Microdata.type("/Problem"),
+                span(Microdata.of("message"), text(message)));
+    }
+
     /// One symbol: what it is, what it says about itself, and what it declares.
     public static Html symbol(Router routes, Symbol state) {
-        if (!state.problem().isEmpty()) return section(classes("problem"), h1(text(state.name())),
-                p(text(state.problem())));
+        if (!state.problem().isEmpty()) return section(h1(text(state.name())), problem(state.problem()));
 
         var description = state.description();
         var content = new ArrayList<Node>();

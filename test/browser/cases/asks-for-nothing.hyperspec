@@ -1,0 +1,2 @@
+visit /
+expect link "Nothing offers this"

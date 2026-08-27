@@ -1,0 +1,37 @@
+# The edges: a symbol nobody has, a search nothing answers, a query that is not
+# a question, and the request every browser makes without being asked.
+
+# A name that does not exist is a 404 that still lets somebody carry on.
+visit /symbols/nothing.At.All
+expect status 404
+expect form search
+expect no item symbol
+
+# A search that matches nothing is an empty answer, not a failure: the panel is
+# still there and still offers the box that produced it.
+visit /
+fill q zzzznothingmatchesthis
+submit
+expect status 200
+expect frame results
+within results {
+    expect no item symbol
+}
+
+# A query made only of punctuation is a question the index cannot answer. It is
+# still not a failure of the page, and whatever the page says about it has to be
+# something a client can recognise rather than prose. See the note in
+# test/browser/BrowseSpec.java: today this passes for the wrong reason.
+visit /
+fill q ...
+submit
+expect status 200
+expect frame results
+within results {
+    expect no item symbol
+    expect no item problem
+}
+
+# Every browser asks for this on every page, and answering it is one file.
+visit /favicon.ico
+expect status 200

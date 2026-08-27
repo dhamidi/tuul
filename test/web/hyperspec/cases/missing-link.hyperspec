@@ -1,0 +1,2 @@
+visit /
+expect link "Sign out"

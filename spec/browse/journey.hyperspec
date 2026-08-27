@@ -1,0 +1,47 @@
+# The journey somebody actually walks: arrive, search, read the results, follow
+# one, follow a type from there to another symbol, come back, search again.
+#
+# $service is injected by the runner. Nothing here names a port, and nothing
+# here asserts on the words a page uses — only on what it lets somebody do.
+
+visit /
+expect status 200
+expect form search
+expect field search q
+expect frame results
+expect no item symbol
+
+fill q json.Json
+submit
+expect status 200
+
+# The results arrive in their panel, and the panel is what was asked about:
+# "the search found something", not "the word appears on the page".
+within results {
+    expect item symbol
+}
+
+# Following a result is the second step of the journey and the first thing
+# anybody does with a list. The link lives inside the panel, so a browser asks
+# for the panel — and the answer has to be able to fill it.
+follow "json.Json.Null"
+expect at /symbols/json.Json.Null
+expect item symbol
+expect attribute symbol name json.Json.Null
+expect item member
+
+# A type named on a page is a link to that type — the reason somebody opens a
+# documentation browser rather than reading the source.
+visit /symbols/json.JsonWriter
+expect attribute symbol name json.JsonWriter
+follow "java.io.Writer"
+expect at /symbols/java.io.Writer
+expect attribute symbol name java.io.Writer
+
+# The search box is on every page, so the journey can begin again from here.
+expect form search
+fill q eventstream.Event
+submit
+within results {
+    expect item symbol
+}

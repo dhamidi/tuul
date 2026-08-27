@@ -1,0 +1,2 @@
+visit /nowhere
+expect status 200

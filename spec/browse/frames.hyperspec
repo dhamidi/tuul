@@ -1,0 +1,29 @@
+# What the panels promise.
+#
+# A link inside a turbo-frame replaces the panel rather than the page, and the
+# answer has to contain that panel or the browser blanks it — at HTTP 200, with
+# nothing in any log and nothing in the console. These are the assertions that
+# can see that.
+
+visit /
+expect frame results
+
+# The search box drives the panel. That is why typing does not reload the page,
+# and it is the one piece of this design a spec should hold still.
+expect form search targets frame results
+
+fill q json
+submit
+expect status 200
+expect frame results
+
+within results {
+    expect item symbol
+}
+
+# A result link leaves the panel behind: it goes to a whole symbol page, which
+# is not a panel and cannot be delivered as one, so the link has to say so.
+#
+# This is the assertion of the fix rather than of the symptom. Somebody who
+# removes the `_top` will fail here, on the line that says why it was there.
+expect link "json.Json.Null" targets page

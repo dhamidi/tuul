@@ -10,6 +10,9 @@ set -euo pipefail
 release=$(javac --version | cut -d' ' -f2 | cut -d. -f1)
 mkdir -p build/classes
 javac --release "$release" -nowarn -d build/classes $(find src -name '*.java')
+# javac -d writes class files and nothing else, so anything beside the code
+# that is not code has to be put on the classpath by hand.
+(cd src && find . -type f ! -name '*.java' -exec sh -c 'mkdir -p "../build/classes/$(dirname "$1")" && cp "$1" "../build/classes/$1"' _ {} \;)
 java --enable-native-access=ALL-UNNAMED -cp build/classes main build --native
 '''
 
@@ -21,8 +24,18 @@ set -euo pipefail
 release=$(javac --version | cut -d' ' -f2 | cut -d. -f1)
 mkdir -p build/test
 javac --release "$release" -nowarn -cp build/classes -d build/test $(find test -name '*.java')
+(cd test && find . -type f ! -name '*.java' -exec sh -c 'mkdir -p "../build/test/$(dirname "$1")" && cp "$1" "../build/test/$1"' _ {} \;)
+# The application's own specs, on the classpath under the name they are loaded
+# by, so editing one and re-running is all it takes.
+mkdir -p build/test/spec
+(cd spec && find . -type f -exec sh -c 'mkdir -p "../build/test/spec/$(dirname "$1")" && cp "$1" "../build/test/spec/$1"' _ {} \;)
 java --enable-native-access=ALL-UNNAMED -cp build/classes:build/test run
 '''
+
+[tasks.spec]
+description = "Run the hyperspecs in spec/ against a live application"
+depends = ["test"]
+run = 'java --enable-native-access=ALL-UNNAMED -cp build/classes:build/test spec'
 
 [tasks.natives]
 description = "Cross-build the native modules for every platform tuul ships"

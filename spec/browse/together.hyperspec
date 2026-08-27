@@ -1,0 +1,36 @@
+# Two people reading at once.
+#
+# A documentation browser holds no state for anybody, and this is what says so:
+# two clients searching for different things at the same time each get their
+# own answer, and neither sees the other's. A shared cursor, a cached last
+# query, a session that remembers what was typed — any of those would show up
+# here as one client reading the other's results.
+
+concurrently {
+    client ada {
+        visit /
+        fill q json.Json
+        submit
+        within results {
+            expect item symbol
+        }
+    }
+
+    client grace {
+        visit /
+        fill q eventstream.Event
+        submit
+        within results {
+            expect item symbol
+        }
+    }
+}
+
+# And each of them can carry on afterwards from where it was.
+client ada {
+    expect at /search?q=json.Json
+}
+
+client grace {
+    expect at /search?q=eventstream.Event
+}

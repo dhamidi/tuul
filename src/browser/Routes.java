@@ -20,6 +20,11 @@ public final class Routes {
 
     public static final String ASSET = "asset";
 
+    /// The path every client asks for whether or not a page mentions one. A
+    /// `<link rel="icon">` stops a browser asking, and stops nothing else —
+    /// so answering here costs one route and removes a class of 404 for good.
+    public static final String FAVICON = "favicon";
+
     private Routes() {}
 
     public static Router of() {
@@ -28,6 +33,7 @@ public final class Routes {
                 .get(SEARCH, "/search")
                 .get(SYMBOL, "/symbols/{name}")
                 .get(UPDATES, "/updates")
-                .get(ASSET, "/assets/{file}");
+                .get(ASSET, "/assets/{file}")
+                .get(FAVICON, "/favicon.ico");
     }
 }

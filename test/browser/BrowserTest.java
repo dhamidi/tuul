@@ -116,50 +116,29 @@ public final class BrowserTest {
         Check.equal("so is a page that does not exist", 404, nowhere.status());
     }
 
-    /// The journey, as a hyperspec, against a live server — which is the only
-    /// way a hyperspec runs, and dogfoods the test tool while it is at it.
+    /// That the application answers a hyperspec at all, against a live server —
+    /// which is the only way a hyperspec runs.
+    ///
+    /// The journey itself lives in `spec/browse` now, as files somebody can
+    /// edit without a compiler, run by [BrowseSpec].
+    /// One of the specs in `cases`, by name — a resource, so it is found the
+    /// same way wherever the tests are run from.
+    private static Outcome spec(String name, URI service) throws IOException {
+        return Hyperspec.run(BrowserTest.class, "cases/" + name + ".hyperspec", service);
+    }
+
     private static void journey(Browser browser) throws IOException {
         try (var server = Http.start(browser.handler(), 0)) {
             var service = URI.create("http://localhost:" + server.port());
-            var outcome = Hyperspec.run(JOURNEY, service);
-            Check.that("the journey through the browser holds: " + outcome.report(), outcome.ok());
-            Check.that("and it actually asserted something", outcome.passed() >= 10);
+            var arrives = spec("arrives", service);
+            Check.that("the front page answers a spec: " + arrives.report(), arrives.ok());
 
-            var broken = Hyperspec.run("visit /\nexpect link \"Nothing offers this\"\n", service);
+            var broken = spec("asks-for-nothing", service);
             Check.that("a spec that asks for what is not there fails", !broken.ok());
             Check.that("and says what the page did offer",
                     broken.failures().getFirst().found().contains("offers"));
         }
     }
-
-    /// Search for a symbol, follow the result, follow that symbol to another —
-    /// which is the whole of what somebody does with a documentation browser.
-    private static final String JOURNEY = """
-            visit /
-            expect status 200
-            expect form search
-            expect field search q
-            expect no item symbol
-
-            fill q json.Json
-            submit
-            expect status 200
-            expect item symbol
-            expect attribute symbol name json.Json
-
-            follow "json.Json"
-            expect at /symbols/json.Json
-            expect item symbol
-            expect attribute symbol kind interface
-            expect attribute symbol name json.Json
-            expect item member
-
-            visit /symbols/json.JsonWriter
-            expect attribute symbol name json.JsonWriter
-            follow "java.io.Writer"
-            expect at /symbols/java.io.Writer
-            expect attribute symbol name java.io.Writer
-            """;
 
     private static Json.Object params(Map<String, String> values) {
         var params = Json.Object.of();

@@ -5,6 +5,7 @@ import java.io.IOException;
 import java.nio.charset.StandardCharsets;
 import java.nio.file.Files;
 import java.nio.file.Path;
+import java.nio.file.StandardCopyOption;
 import java.util.ArrayList;
 import java.util.List;
 import java.util.stream.Collectors;
@@ -37,14 +38,14 @@ public final class Build {
 
         var libraries = javac(sources(layout.libraries()), layout.classes(), classpath);
         if (!libraries.ok()) return libraries;
+        resources(layout.libraries(), layout.src(), layout.classes());
 
         var classes = libraries.classes();
         for (var entrypoint : layout.entrypoints()) {
-            var built = javac(
-                    sources(List.of(layout.src().resolve(entrypoint))),
-                    layout.entry(entrypoint),
-                    with(classpath, layout.classes()));
+            var directory = layout.src().resolve(entrypoint);
+            var built = javac(sources(List.of(directory)), layout.entry(entrypoint), with(classpath, layout.classes()));
             if (!built.ok()) return built;
+            resources(List.of(directory), directory, layout.entry(entrypoint));
             classes += built.classes();
         }
         return new Result(classes, List.of());
@@ -55,7 +56,9 @@ public final class Build {
     public static Result compileTests(Layout layout) throws IOException {
         if (!Files.isDirectory(layout.test())) return new Result(0, List.of("no test/ in " + layout.root().toAbsolutePath()));
         var classpath = with(Vendor.of(List.of(layout.vendor())).classpath(), layout.classes());
-        return javac(sources(List.of(layout.test())), layout.tests(), classpath);
+        var built = javac(sources(List.of(layout.test())), layout.tests(), classpath);
+        if (built.ok()) resources(List.of(layout.test()), layout.test(), layout.tests());
+        return built;
     }
 
     private static Result javac(List<Path> sources, Path out, List<Path> classpath) throws IOException {
@@ -77,6 +80,31 @@ public final class Build {
         var task = compiler.getTask(null, files, problems, options, null, files.getJavaFileObjectsFromPaths(sources));
         if (!task.call()) return new Result(0, report(problems));
         return new Result(written(out), List.of());
+    }
+
+    /// Everything beside the code that is not code, copied where the code
+    /// went.
+    ///
+    /// `javac -d` writes class files and nothing else, so a file sitting next
+    /// to a class — an icon, a template, a spec — is not on the classpath when
+    /// the program runs, and [Class#getResourceAsStream] answers null. That is
+    /// a confusing failure: the file is plainly there in the source tree, and
+    /// the only thing wrong is that nobody copied it.
+    ///
+    /// `from` is the directory the package structure is measured against, so a
+    /// resource lands beside the class that expects to find it.
+    private static void resources(List<Path> roots, Path from, Path out) throws IOException {
+        for (var root : roots) {
+            if (!Files.isDirectory(root)) continue;
+            try (var tree = Files.walk(root)) {
+                for (var file : tree.filter(Files::isRegularFile).sorted().toList()) {
+                    if (file.toString().endsWith(".java")) continue;
+                    var to = out.resolve(from.relativize(file).toString());
+                    Files.createDirectories(to.getParent());
+                    Files.copy(file, to, StandardCopyOption.REPLACE_EXISTING);
+                }
+            }
+        }
     }
 
     private static List<Path> sources(List<Path> roots) throws IOException {

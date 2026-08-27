@@ -1,0 +1,2 @@
+client alice { visit / ; expect link "Sign out" }
+client bob { visit / ; expect link "Sign in" }

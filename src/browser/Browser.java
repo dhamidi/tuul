@@ -121,6 +121,7 @@ public final class Browser implements AutoCloseable {
                 .on(Routes.SYMBOL, showing())
                 .on(Routes.UPDATES, cable.stream(Topics.fixed(INDEX)))
                 .on(Routes.ASSET, this::asset)
+                .on(Routes.FAVICON, this::favicon)
                 .otherwise(this::missing);
     }
 
@@ -181,6 +182,13 @@ public final class Browser implements AutoCloseable {
 
     private void asset(Request request, Response response) throws IOException {
         Responses.send(assets.serve(request.path(), request.headers().first("If-None-Match").orElse(null)), response);
+    }
+
+    /// The icon, answered at the conventional path as well as its digested
+    /// one. The digested URL is what a page points at and what a cache keeps;
+    /// this is for everything that asks without reading the page first.
+    private void favicon(Request request, Response response) throws IOException {
+        Responses.send(assets.serve(assets.url(Views.ICON), request.headers().first("If-None-Match").orElse(null)), response);
     }
 
     private void missing(Request request, Response response) throws IOException {

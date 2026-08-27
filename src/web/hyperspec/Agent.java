@@ -34,6 +34,18 @@ public final class Agent {
     /// stopped answering is a result.
     private static final Duration PATIENCE = Duration.ofSeconds(10);
 
+    /// What a browser asks for when somebody types an address.
+    private static final String BROWSING = "text/html,application/xhtml+xml,application/xml;q=0.9,*/*;q=0.8";
+
+    /// What Turbo asks for when it follows a link or submits a form itself.
+    /// The difference is not cosmetic: an application that answers a frame
+    /// request with only the frame is doing the right thing, and a client that
+    /// never sends the header cannot tell that apart from one that ignores it.
+    private static final String TURBO = "text/html, application/xhtml+xml";
+
+    /// The header Turbo sends to say which panel it is replacing.
+    private static final String FRAME = "Turbo-Frame";
+
     /// What the client did, for the assertions that are about the conversation
     /// rather than about a page.
     public record Exchange(String method, String path, int status) {}
@@ -75,11 +87,13 @@ public final class Agent {
     }
 
     public Page visit(String path) {
-        return request("GET", resolve(path), null);
+        return request("GET", resolve(path), null, "", BROWSING);
     }
 
+    /// Follows a link the way Turbo would: if it drives a frame, the request
+    /// says so, and the answer is expected to contain that frame.
     public Page follow(Page.Link link) {
-        return request("GET", resolve(link.href()), null);
+        return request("GET", resolve(link.href()), null, link.frame(), TURBO);
     }
 
     /// Follows the redirect the last response asked for. A GET, because every
@@ -90,7 +104,7 @@ public final class Agent {
             throw new SpecException(0, "there is no redirect to follow"
                     + (page == null ? "" : " — the last response was " + page.status()));
         }
-        return request("GET", resolve(page.location().orElseThrow()), null);
+        return request("GET", resolve(page.location().orElseThrow()), null, "", TURBO);
     }
 
     public Page submit(Page.Form form, Map<String, String> filled) {
@@ -99,9 +113,9 @@ public final class Agent {
         var body = encode(values);
         var action = form.action().isEmpty() ? at() : form.action();
         if (form.method().equals("GET")) {
-            return request("GET", resolve(action + (body.isEmpty() ? "" : "?" + body)), null);
+            return request("GET", resolve(action + (body.isEmpty() ? "" : "?" + body)), null, form.frame(), TURBO);
         }
-        return request(form.method(), resolve(action), body);
+        return request(form.method(), resolve(action), body, form.frame(), TURBO);
     }
 
     private URI resolve(String reference) {
@@ -109,8 +123,9 @@ public final class Agent {
         return base.resolve(reference);
     }
 
-    private Page request(String method, URI uri, String body) {
-        var builder = HttpRequest.newBuilder(uri).timeout(PATIENCE);
+    private Page request(String method, URI uri, String body, String frame, String accept) {
+        var builder = HttpRequest.newBuilder(uri).timeout(PATIENCE).header("Accept", accept);
+        if (!frame.isEmpty()) builder.header(FRAME, frame);
         if (body == null) {
             builder.method(method, HttpRequest.BodyPublishers.noBody());
         } else {

@@ -1,0 +1,59 @@
+# What the panel offers after a search, read as a list somebody has to use.
+#
+# Each question gets a client of its own. A client stops at its first failure —
+# a journey after a wrong turn is a report about a page nobody meant to be on —
+# so four questions asked by one client would only ever answer the first. These
+# are four readers asking four separate things.
+
+client ranking {
+    visit /
+    fill q json.Json
+    submit
+    within results {
+        # A search for a type finds the type. Its own name is the strongest
+        # thing anybody can type, and a list that buries it under its own
+        # nested types and members is answering a different question.
+        expect link json.Json
+    }
+}
+
+client duplicates {
+    visit /
+    fill q json.Json
+    submit
+    within results {
+        # Every result goes somewhere different. Overloads share a name and a
+        # page, so a list carrying three of them offers one thing three times
+        # and leaves a reader to work out that they are the same.
+        expect distinct link
+    }
+}
+
+client members {
+    visit /
+    fill q json.Json#parse
+    submit
+    within results {
+        expect item symbol
+
+        # Take the destination out of the page and go there directly, rather
+        # than following the link: this asks whether the page exists at all,
+        # which is a different question from whether the panel can show it.
+        set where [link json.Json#parse]
+    }
+    visit $where
+    expect status 200
+    expect item symbol
+}
+
+client private {
+    visit /
+    fill q arena
+    submit
+    within results {
+        # A search offers what the browser can show. `arena` is a private field:
+        # a symbol page will not show it and `tuul docs` does not list it, so
+        # offering it here is offering a door with nothing behind it.
+        expect no link sqlite3.Database#arena
+    }
+}
