@@ -72,6 +72,11 @@ Command tuul() {
                     .value("port", "which port to listen on (default: 8080)")
                     .repeated("source-path", "where to look for sources (default: src)")
                     .repeated("vendor", "where to look for jars (default: vendor)"))
+            .command(Command.named("hyperspec", "run hyperspecs against an application that is already running")
+                    .value("eval", 'e', "a spec to run, instead of reading files")
+                    .flag("quiet", "print only what failed")
+                    .optional("host", "where it is listening: :8099, localhost:8099, http://host:8099")
+                    .rest("specs", "the spec files to run, or - for standard input"))
             .command(Command.named("self-test", "build a project in a temporary directory and exercise tuul on it"))
             .command(Command.named("message", "run one JSON message read from stdin"))
             .command(Command.named("help", "this"));
@@ -89,6 +94,7 @@ int dispatch(Parsed.Values parsed, Writer out, Writer err) throws IOException {
         case "test" -> manage(Message.of("project.test", values), out, err);
         case "bind" -> manage(Message.of("project.bind", values), out, err);
         case "self-test" -> manage(Message.of("project.selftest", values), out, err);
+        case "hyperspec" -> manage(Message.of("project.hyperspec", values), out, err);
         case "install" -> manage(Message.of("project.install", values), out, err);
         case "browse" -> browse(values, out, err);
         case "docs" -> ask(docs(values), out, err);

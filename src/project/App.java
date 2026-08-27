@@ -39,6 +39,8 @@ public final class App {
                 .on("project.natives", App::natives)
                 .on("project.distributed", App::distributed)
                 .on("project.bind", App::bind)
+                .on("project.hyperspec", App::hyperspec)
+                .on("project.specced", App::specced)
                 .on("project.bound", App::bound)
                 .on("project.created", App::created)
                 .on("project.native.built", App::compiled)
@@ -53,6 +55,7 @@ public final class App {
                 .effect("project.launch.tests", (effect, emit) -> launchTests(effect, emit, out))
                 .effect("project.selftest", App::selfTest)
                 .effect("project.bind", App::generate)
+                .effect("project.hyperspec", (effect, emit) -> specs(effect, emit, out))
                 .effect("project.install", (effect, emit) -> vendor(effect, emit, out))
                 .effect("project.natives", (effect, emit) -> distribute(effect, emit, out))
                 .effect("project.report", (effect, _) -> write(effect, out))
@@ -195,6 +198,26 @@ public final class App {
                 : Step.of(state.failed(), problem(text.toString()));
     }
 
+    /// `tuul hyperspec` runs against something already listening, so unlike
+    /// every other command here there is nothing to build first.
+    private static Step<State> hyperspec(State state, Message message) {
+        return Step.of(state, Effect.of("project.hyperspec")
+                .with("host", message.string("host", ""))
+                .with("eval", message.string("eval", ""))
+                .with("quiet", message.flag("quiet"))
+                .with("specs", Json.Array.of(message.list("specs"))));
+    }
+
+    /// The specs have already reported themselves, one by one, as they ran.
+    /// This is the line at the end that says whether to be pleased, and the
+    /// exit status that lets a script find out without reading anything.
+    private static Step<State> specced(State state, Message message) {
+        var ran = (long) number(message, "ran");
+        var failed = (long) number(message, "failed");
+        if (failed == 0) return Step.of(state, report(ran == 1 ? "the spec holds" : "every spec holds"));
+        return Step.of(state.failed(), problem(failed + " of " + ran + " do not hold"));
+    }
+
     private static Step<State> failed(State state, Message message) {
         return Step.of(state.failed(), problem("error: " + message.string("reason", "unknown")));
     }
@@ -314,6 +337,28 @@ public final class App {
                                 .with("ok", check.ok())
                                 .with("detail", check.detail()))
                         .toList())));
+    }
+
+    /// The report streams to `out` as each spec finishes rather than arriving
+    /// in the message, because a suite against a live server takes as long as
+    /// the server does and somebody watching wants to see which one is slow.
+    private static void specs(Effect effect, Effect.Emitter emit, Writer out) throws IOException {
+        var eval = effect.string("eval", "");
+        var sources = eval.isEmpty()
+                ? Specs.files(strings(effect.list("specs")))
+                : List.of(new Specs.Source("--eval", eval));
+        var result = Specs.run(Specs.host(effect.string("host", "")), sources, effect.flag("quiet"), out);
+        emit.emit(Message.of("project.specced")
+                .with("ran", Json.of(result.ran()))
+                .with("failed", Json.of(result.failed())));
+    }
+
+    private static List<String> strings(List<Json> values) {
+        var strings = new ArrayList<String>();
+        for (var value : values) {
+            if (value instanceof Json.Str(var text)) strings.add(text);
+        }
+        return List.copyOf(strings);
     }
 
     private static void write(Effect effect, Writer out) throws IOException {

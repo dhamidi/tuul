@@ -196,7 +196,7 @@ public final class Hyperspec {
             } catch (Failed failed) {
                 failures.add(failed.asFailure());
             } catch (SpecException e) {
-                failures.add(new Outcome.Failure(name, e.line(), e.getMessage(), ""));
+                failures.add(new Outcome.Failure(name, e.line(), e.reason(), ""));
             }
         }
 

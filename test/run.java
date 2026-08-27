@@ -22,6 +22,7 @@ void main() throws Exception {
     web.dispatch.DispatchTest.run();
     browser.BrowserTest.run();
     project.ProjectTest.run();
+    project.SpecsTest.run();
     sqlite3.SqliteTest.run();
     sqlite3.ApiTest.run();
     System.exit(Check.report());
