@@ -18,9 +18,38 @@ up to our modern JDK 24 standard:
    - `web.ui`: a component abstraction rendering HTML to a stream,
    - `web.assets`: a library integrating with file systems for efficient serving of assets,
    - `web.dispatch`: a bidirectional router for named routes, based on URI-templates, used for constructing and recognizing urls,
+   - `web.forms`: capturing an incoming request as a message, and rendering that message back to the user with what was wrong with it — the part of ActiveRecord that is about the round trip, not the part that is about a database,
+   - `web.controllers`: the things every request needs and no handler should rewrite — authentication, file uploads, content negotiation,
    - `web.cable`: ActionCable-inspired live dispatch of events to connected clients,
    - `web.hyperspec`: a TCL-like DSL, interpreter, and harness runner for testing hypermedia applications, testing affordances, using them (following links, filling forms, following redirects, etc) and nothing else.  Asserts are against navigation state, requests made, resource attributes and affordances.
    - backed by jdk.httpserver
+
+A web application is an `application`: the same update functions, the same
+messages, the same effects. A request becomes a message, an update returns a
+state and effects, and rendering is what the runtime does with the state. Web
+applications therefore compose the way any other application does.
+
+Reactivity is [Hotwired](https://hotwired.dev), first-class and out of the box:
+Turbo Drive, Turbo Frames and Turbo Streams, with Stimulus for the behaviour
+that is genuinely client-side. Turbo Streams arrive over `eventstream` rather
+than WebSocket — `jdk.httpserver` has no WebSocket, and Turbo will connect to
+an `EventSource` — which is what `web.cable` is.
+
+`web.assets` follows what Rails 8 settled on and invents nothing: digest the
+file name, serve it immutable, rewrite the references inside stylesheets, and
+pin ES modules in an import map. No bundler, no transpiler, no build step that
+has to be installed.
+
+`jdk.httpserver` is HTTP/1.1 only, has no WebSocket, and routes by longest
+prefix. That is a fair trade for a framework we control end to end, and it puts
+two obligations on `web`: set the request and response timeouts, since a server
+that does not is trivially held open by a slow client; and expect to be deployed
+behind Caddy or nginx, which terminate TLS and speak HTTP/2 or HTTP/3 to the
+browser. One consequence is not hidden by the proxy: an event stream holds a
+connection per client, and browsers allow about six per origin over HTTP/1.1.
+
+The application tuul dogfoods this with is a fast, interactive browser for a
+symbol index — the one `tuul docs` already builds.
 
 These are all plain Java libraries.
 
