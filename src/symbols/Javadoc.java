@@ -2,14 +2,19 @@ package symbols;
 
 import com.sun.source.doctree.DeprecatedTree;
 import com.sun.source.doctree.DocTree;
+import com.sun.source.doctree.EndElementTree;
 import com.sun.source.doctree.EntityTree;
+import com.sun.source.doctree.IndexTree;
 import com.sun.source.doctree.LinkTree;
 import com.sun.source.doctree.LiteralTree;
 import com.sun.source.doctree.ParamTree;
 import com.sun.source.doctree.RawTextTree;
+import com.sun.source.doctree.ReferenceTree;
 import com.sun.source.doctree.ReturnTree;
 import com.sun.source.doctree.SeeTree;
 import com.sun.source.doctree.SinceTree;
+import com.sun.source.doctree.StartElementTree;
+import com.sun.source.doctree.SummaryTree;
 import com.sun.source.doctree.TextTree;
 import com.sun.source.doctree.ThrowsTree;
 import com.sun.source.doctree.UnknownBlockTagTree;
@@ -27,7 +32,9 @@ import java.util.ArrayList;
 import java.util.Deque;
 import java.util.LinkedHashMap;
 import java.util.List;
+import java.util.Locale;
 import java.util.Map;
+import java.util.Set;
 import java.util.regex.Pattern;
 import java.util.stream.Collectors;
 import javax.tools.JavaFileObject;
@@ -49,6 +56,17 @@ public final class Javadoc {
     private static final Pattern QUALIFIERS = Pattern.compile("(\\w+\\.)+");
     private static final Pattern LINKS = Pattern.compile("\\[#?([^\\]]+)\\](\\([^)]*\\))?");
     private static final Pattern FENCES = Pattern.compile("(?m)^\\s*```.*$");
+
+    /// HTML that stands a block apart from what surrounds it.
+    private static final Set<String> PARAGRAPH = Set.of(
+            "p", "pre", "blockquote", "div", "ul", "ol", "dl", "table", "hr",
+            "h1", "h2", "h3", "h4", "h5", "h6");
+
+    /// HTML that starts a new line without standing apart.
+    private static final Set<String> LINE = Set.of("br", "li", "tr", "dt", "dd");
+
+    /// HTML whose content is laid out by hand and must not be squeezed.
+    private static final Set<String> PREFORMATTED = Set.of("pre");
 
     private Javadoc() {}
 
@@ -167,26 +185,71 @@ public final class Javadoc {
     }
 
     /// Flattens doc markup to the text a reader would see: `{@code x}` becomes
-    /// x, `{@link Foo}` becomes Foo, HTML becomes a space, and a markdown
-    /// comment — the `///` kind this project writes — keeps its text without
-    /// the link brackets and backticks.
+    /// x, `{@link Foo}` becomes Foo, and a markdown comment — the `///` kind
+    /// this project writes — keeps its text without the link brackets and
+    /// backticks.
+    ///
+    /// HTML keeps its shape rather than becoming a space. A comment in the JDK
+    /// is HTML: `<p>` between paragraphs, `<pre>` around an example, `<li>` per
+    /// item. Flattening those to spaces is what turned `java.lang.String`'s
+    /// documentation into one immense sentence with a code sample lying down in
+    /// the middle of it.
     private static String flatten(List<? extends DocTree> parts) {
         var text = new StringBuilder();
-        for (var part : parts) {
-            switch (part) {
-                case TextTree tree -> text.append(tree.getBody().replaceAll("\\s+", " "));
-                case LiteralTree tree -> text.append(tree.getBody().getBody());
-                case LinkTree tree -> text.append(reference(tree));
-                case EntityTree tree -> text.append(entity(tree));
-                case RawTextTree tree -> text.append(markdown(tree.getContent()));
-                default -> text.append(' ');
-            }
-        }
+        write(parts, text);
         return text.toString()
                 .strip()
                 .replaceAll("(?<=\\S)[ \t]{2,}", " ")
                 .replaceAll("[ \t]+\n", "\n")
+                // A line of prose begins with the single space left where the
+                // source wrapped; a line of code begins with the author's
+                // indentation. Only the first is worth removing, so only a lone
+                // space before a non-space goes.
+                .replaceAll("(?m)^ (?=\\S)", "")
                 .replaceAll("\n{3,}", "\n\n");
+    }
+
+    /// Appends without normalising, so that a nested body — the summary inside
+    /// `{@summary}` — is written into the same text as everything around it and
+    /// tidied once at the end.
+    private static void write(List<? extends DocTree> parts, StringBuilder text) {
+        var preformatted = 0;
+        for (var part : parts) {
+            switch (part) {
+                case TextTree tree -> text.append(preformatted > 0 ? tree.getBody() : squeeze(tree.getBody()));
+                case LiteralTree tree -> text.append(tree.getBody().getBody());
+                case LinkTree tree -> text.append(reference(tree));
+                case EntityTree tree -> text.append(entity(tree));
+                case RawTextTree tree -> text.append(markdown(tree.getContent()));
+                case ReferenceTree tree -> text.append(tree.getSignature());
+                case SummaryTree tree -> write(tree.getSummary(), text);
+                case IndexTree tree -> write(List.of(tree.getSearchTerm()), text);
+                case StartElementTree tree -> {
+                    if (PREFORMATTED.contains(name(tree.getName()))) preformatted++;
+                    text.append(gap(name(tree.getName())));
+                }
+                case EndElementTree tree -> {
+                    if (PREFORMATTED.contains(name(tree.getName()))) preformatted = Math.max(0, preformatted - 1);
+                    text.append(PARAGRAPH.contains(name(tree.getName())) ? "\n\n" : "");
+                }
+                default -> {}
+            }
+        }
+    }
+
+    /// Whitespace in prose is whitespace; inside `<pre>` it is the author's
+    /// layout, and squeezing it is how an example becomes a paragraph.
+    private static String squeeze(String body) {
+        return body.replaceAll("\\s+", " ");
+    }
+
+    private static String name(javax.lang.model.element.Name element) {
+        return element.toString().toLowerCase(Locale.ROOT);
+    }
+
+    private static String gap(String element) {
+        if (PARAGRAPH.contains(element)) return "\n\n";
+        return LINE.contains(element) ? "\n" : "";
     }
 
     private static String reference(LinkTree tree) {

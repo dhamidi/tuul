@@ -10,6 +10,7 @@ import java.net.InetSocketAddress;
 import java.nio.charset.StandardCharsets;
 import java.util.LinkedHashMap;
 import java.util.List;
+import java.util.Locale;
 import java.util.Map;
 import java.util.concurrent.Executors;
 import java.util.function.Consumer;
@@ -107,10 +108,38 @@ public final class Http implements AutoCloseable {
                 handler.handle(request(exchange), response);
                 response.close();
             } catch (Exception e) {
-                failures.accept(e);
+                if (!left(e)) failures.accept(e);
                 fail(response);
             }
         }
+    }
+
+    /// Whether the client hung up rather than the handler breaking.
+    ///
+    /// A page that navigates away, a search box that cancels the request it
+    /// made two keystrokes ago, an `EventSource` reconnecting — all of them end
+    /// as a write to a socket nobody is reading, and none of them is a failure
+    /// of this server. Reporting them teaches whoever reads the log to stop
+    /// reading it, which costs far more than the one real failure it hides.
+    ///
+    /// Blocking IO has no exception of its own for this, so the connection is
+    /// taken at its word: the operating system says `Broken pipe` when the peer
+    /// is gone and `Connection reset` when it went abruptly, and the JDK says
+    /// `Stream closed` for a stream that ended underneath a write. A disconnect
+    /// never reaches a failure consumer at all, because it is not one — a
+    /// caller counting failures wants handlers that threw, not readers who
+    /// left.
+    private static boolean left(Exception failure) {
+        if (!(failure instanceof IOException)) return false;
+        var reason = failure.getMessage();
+        if (reason == null) return false;
+        var said = reason.toLowerCase(Locale.ROOT);
+        return said.contains("broken pipe")
+                || said.contains("connection reset")
+                || said.contains("stream closed")
+                || said.contains("socket closed")
+                || said.contains("connection aborted")
+                || said.contains("closed by the remote host");
     }
 
     private static Request request(HttpExchange exchange) {

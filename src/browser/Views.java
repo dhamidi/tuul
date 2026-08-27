@@ -149,6 +149,8 @@ public final class Views {
         content.add(documentation(description.string("doc", "")));
         content.add(inherits(routes, "extends", one(description, "extends")));
         content.add(inherits(routes, "implements", strings(description, "implements")));
+        content.add(relates(routes, "permits", "case", strings(description, "permits")));
+        content.add(relates(routes, "declares", "declares", strings(description, "nested")));
         content.add(tags(description));
         content.add(members(routes, "Constructors and methods", description, "methods"));
         content.add(members(routes, "Fields", description, "fields"));
@@ -169,11 +171,18 @@ public final class Views {
     /// type to its supertype is the whole reason somebody opens a page like
     /// this.
     private static Html inherits(Router routes, String label, List<String> types) {
+        return relates(routes, label, "supertype", types);
+    }
+
+    /// The types a type names, each a link and each said to be what it is: a
+    /// supertype, a case of a sealed type, a type declared inside this one. A
+    /// spec asking for a case should not have to accept a supertype.
+    private static Html relates(Router routes, String label, String property, List<String> types) {
         if (types.isEmpty()) return Html.nothing();
         var linked = new ArrayList<Html>();
         for (var type : types) {
             if (!linked.isEmpty()) linked.add(text(", "));
-            linked.add(reference(routes, type));
+            linked.add(reference(routes, type, property));
         }
         return p(classes("inherits"), span(classes("label"), text(label + " ")), Html.fragment(linked));
     }
@@ -181,11 +190,11 @@ public final class Views {
     /// A type name as a link, when it is a name this browser could show. A
     /// generic argument is part of what is written but not part of what is
     /// linked, so `Comparable<String>` links on `Comparable` and reads whole.
-    private static Html reference(Router routes, String type) {
+    private static Html reference(Router routes, String type, String property) {
         var base = type.contains("<") ? type.substring(0, type.indexOf('<')) : type;
         var rest = type.substring(base.length());
-        if (!base.contains(".")) return code(Microdata.of("supertype"), text(type));
-        return code(Microdata.of("supertype"),
+        if (!base.contains(".")) return code(Microdata.of(property), text(type));
+        return code(Microdata.of(property),
                 a(href(symbolPath(routes, base)), text(base)),
                 text(rest));
     }

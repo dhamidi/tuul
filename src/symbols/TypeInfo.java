@@ -7,6 +7,11 @@ import java.util.Locale;
 /// What a class file says about a type: what it is, what it extends, and what
 /// it declares. Names are fully qualified — shortening them is a rendering
 /// decision, not a fact about the symbol.
+///
+/// `permits` and `nested` are the two things a reader cannot otherwise see. A
+/// sealed type's permitted subtypes are its cases, and a type that declares
+/// nothing but other types — a marker interface with records under it — has a
+/// page with nothing on it unless they are named.
 public record TypeInfo(
         String name,
         Kind kind,
@@ -14,6 +19,8 @@ public record TypeInfo(
         List<String> typeParameters,
         String superclass,
         List<String> interfaces,
+        List<String> permits,
+        List<String> nested,
         List<Method> methods,
         List<Field> fields,
         String doc,
@@ -105,6 +112,7 @@ public record TypeInfo(
     }
 
     public TypeInfo documented(String doc, List<Tag> tags, List<Method> methods, List<Field> fields) {
-        return new TypeInfo(name, kind, modifiers, typeParameters, superclass, interfaces, methods, fields, doc, tags);
+        return new TypeInfo(name, kind, modifiers, typeParameters, superclass, interfaces, permits, nested,
+                methods, fields, doc, tags);
     }
 }

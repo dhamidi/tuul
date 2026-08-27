@@ -23,7 +23,7 @@ final class Schema {
 
     /// Bumped when the shape below changes in a way that would make an older
     /// file answer differently — version 2 stopped indexing private members.
-    static final int VERSION = 2;
+    static final int VERSION = 3;
 
     /// The whole format. Types, the members they declare, the parameters those
     /// take, the tags on either, and the origin each type was learned from.
@@ -57,11 +57,16 @@ final class Schema {
                 primary key (type, position)
             ) without rowid;
 
-            create table implemented (
+            -- What a type says about other types: the interfaces it
+            -- implements, the subtypes it permits, the types it declares. One
+            -- table because they are one kind of fact, and a reader asking
+            -- "what else does this name" wants all three.
+            create table related (
                 type     integer not null references type (id) on delete cascade,
+                relation text    not null check (relation in ('implements', 'permits', 'nested')),
                 position integer not null,
                 name     text    not null,
-                primary key (type, position)
+                primary key (type, relation, position)
             ) without rowid;
 
             create table member (

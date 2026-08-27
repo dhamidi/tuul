@@ -103,12 +103,21 @@ public final class ViewsTest {
         Check.that("but not linked, because there is no page for a name with brackets in it",
                 !page.contains("href=\"/symbols/java.lang.Comparable&lt;"));
 
+        Check.that("a sealed type's cases are links, because they are where the reader goes next",
+                page.contains("href=\"/symbols/json.JsonWriter.Pretty\""));
+        Check.that("and are called cases rather than supertypes, which they are the opposite of",
+                page.contains("itemprop=\"case\""));
+        Check.that("a type it declares is a link too — otherwise a marker interface is a blank page",
+                page.contains("href=\"/symbols/json.JsonWriter.Frame\""));
+        Check.that("said to be declared, not inherited", page.contains("itemprop=\"declares\""));
+
         Check.that("a tag on the type is shown", page.contains("@since"));
 
         var empty = markup(Views.symbol(routes, Symbol.nothing().asking("json.Empty")
                 .describing(Json.Object.of().with("class", "json.Empty").with("kind", "class"))));
         Check.that("a type with no members has no section for them", !empty.contains("<h2>"));
         Check.that("a type with no supertype says nothing about one", !empty.contains("extends"));
+        Check.that("nor about cases it does not have", !empty.contains("permits"));
         Check.that("and one with nothing to say says nothing", !empty.contains("class=\"doc\""));
     }
 
@@ -173,6 +182,8 @@ public final class ViewsTest {
                 .with("modifiers", Json.Array.strings(List.of("public", "final")))
                 .with("extends", "java.io.Writer")
                 .with("implements", Json.Array.strings(List.of("java.lang.Comparable<json.Json>")))
+                .with("permits", Json.Array.strings(List.of("json.JsonWriter.Pretty")))
+                .with("nested", Json.Array.strings(List.of("json.JsonWriter.Frame")))
                 .with("tags", Json.Array.of(List.of(tag("since", "", "1.0"))))
                 .with("methods", Json.Array.of(List.of()))
                 .with("fields", Json.Array.of(List.of()));

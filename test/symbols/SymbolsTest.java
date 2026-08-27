@@ -51,6 +51,16 @@ public final class SymbolsTest {
                         .filter(method -> method.name().equals("compareTo"))
                         .noneMatch(method -> method.parameters().getFirst().type().equals("java.lang.Object")));
         Check.that("nested types are found", index.lookup("invoicing.Invoice.Kind").isPresent());
+        Check.equal("a type says what it declares, which is otherwise invisible",
+                List.of("invoicing.Invoice.Kind", "invoicing.Invoice.State"),
+                invoice.nested().stream().sorted().toList());
+
+        var state = index.lookup("invoicing.Invoice.State").orElseThrow();
+        Check.equal("a sealed type says what its cases are — the only thing on the page of an "
+                        + "interface that declares no methods",
+                List.of("invoicing.Invoice.State.Owing", "invoicing.Invoice.State.Paid"),
+                state.permits().stream().sorted().toList());
+        Check.that("and does not name them a second time as nested types", state.nested().isEmpty());
         Check.that("everything compiled is indexed", index.names().contains("invoicing.Invoice"));
     }
 
@@ -64,8 +74,8 @@ public final class SymbolsTest {
 
     private static void javadoc(Index index) {
         var invoice = index.lookup("invoicing.Invoice").orElseThrow();
-        Check.equal("a type carries its doc comment",
-                "An invoice for a fixed amount, identified by id. Invoices are compared by amount.",
+        Check.equal("a type carries its doc comment, paragraphs and all",
+                "An invoice for a fixed amount, identified by id.\n\nInvoices are compared by amount.",
                 invoice.doc());
         Check.equal("so does a method", "Orders invoices by amount, then id.", method(invoice, "compareTo").doc());
         Check.equal("markdown doc comments are read too",
@@ -95,6 +105,14 @@ public final class SymbolsTest {
                 method(string, "length").doc().startsWith("Returns the length of this string."));
         Check.that("markup is flattened to text, not left as tags",
                 !string.doc().contains("{@") && !string.doc().contains("<p>"));
+        Check.that("HTML paragraphs stay paragraphs, so the JDK's prose is not one wall of text",
+                string.doc().contains("\n\n"));
+        Check.that("and a <pre> example keeps the layout somebody wrote it with",
+                string.doc().contains("\n    String str = \"abc\";"));
+        Check.that("@see carries what it points at, rather than pointing nowhere",
+                string.tags().stream()
+                        .filter(tag -> tag.tag().equals("see"))
+                        .anyMatch(tag -> tag.text().contains("java.lang.StringBuffer")));
 
         Check.that("overloads are matched by parameter type, not by name",
                 overload(string, "valueOf", "char").doc().startsWith("Returns the string representation of the char argument."));
@@ -165,7 +183,7 @@ public final class SymbolsTest {
 
         try (var index = Index.of(List.of(root), List.of(), kept)) {
             Check.equal("a first lookup indexes the project",
-                    "An invoice for a fixed amount, identified by id. Invoices are compared by amount.",
+                    "An invoice for a fixed amount, identified by id.\n\nInvoices are compared by amount.",
                     index.lookup("invoicing.Invoice").orElseThrow().doc());
             Check.that("and every type in it, not only the one asked for",
                     index.names().containsAll(List.of("invoicing.Invoice", "invoicing.Invoice$Kind")));
@@ -375,6 +393,16 @@ public final class SymbolsTest {
                     /// The customer this invoice is for.
                     public String customer() {
                         return "nobody";
+                    }
+
+                    /** What an invoice can be, and nothing else. */
+                    public sealed interface State {
+
+                        /** Nobody has paid yet. */
+                        record Owing(BigDecimal left) implements State {}
+
+                        /** Somebody did. */
+                        record Paid(String when) implements State {}
                     }
                 }
                 """);

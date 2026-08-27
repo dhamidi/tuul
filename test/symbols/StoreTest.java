@@ -186,7 +186,10 @@ public final class StoreTest {
         var amount = new TypeInfo.Field("amount", "java.math.BigDecimal", List.of("private", "final"),
                 "What is owed.", List.of());
         return new TypeInfo("invoicing.Invoice", TypeInfo.Kind.RECORD, List.of("public"), List.of("T"),
-                "", List.of("java.lang.Comparable<invoicing.Invoice>"), List.of(compareTo, id), List.of(amount),
+                "", List.of("java.lang.Comparable<invoicing.Invoice>"),
+                List.of("invoicing.Invoice.Paid", "invoicing.Invoice.Owing"),
+                List.of("invoicing.Invoice.Kind"),
+                List.of(compareTo, id), List.of(amount),
                 "An invoice for a fixed amount, identified by id.",
                 List.of(new TypeInfo.Tag("since", "", "1.0")));
     }

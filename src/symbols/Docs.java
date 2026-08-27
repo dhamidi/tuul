@@ -18,7 +18,8 @@ public final class Docs {
 
     private static final int WIDTH = 78;
 
-    public static final List<String> SECTIONS = List.of("doc", "extends", "implements", "methods", "fields");
+    public static final List<String> SECTIONS =
+            List.of("doc", "extends", "implements", "permits", "nested", "methods", "fields");
 
     private Docs() {}
 
@@ -31,6 +32,8 @@ public final class Docs {
                 .with("typeParameters", Json.Array.strings(type.typeParameters()))
                 .with("extends", type.superclass())
                 .with("implements", Json.Array.strings(type.interfaces()))
+                .with("permits", Json.Array.strings(type.permits()))
+                .with("nested", Json.Array.strings(type.nested()))
                 .with("tags", tags(type.tags()))
                 .with("methods", methods(type, all))
                 .with("fields", fields(type, all));
@@ -63,6 +66,8 @@ public final class Docs {
         wrap(summary(description.string("doc", "")), "  ", out);
         line(description, "extends", "  extends ", out);
         line(description, "implements", "  implements ", out);
+        line(description, "permits", "  permits ", out);
+        line(description, "nested", "  declares ", out);
         members(description, "methods", out);
         members(description, "fields", out);
     }

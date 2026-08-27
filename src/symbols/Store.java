@@ -89,12 +89,23 @@ final class Store implements AutoCloseable {
                     words(rows.text(2)),
                     strings("select name from type_parameter where type = ? order by position", id),
                     rows.text(3),
-                    strings("select name from implemented where type = ? order by position", id),
+                    related(id, "implements"),
+                    related(id, "permits"),
+                    related(id, "nested"),
                     methods(id),
                     fields(id),
                     rows.text(4),
                     tags("select position, tag, name, text from tag where type = ? order by position", id)));
         }
+    }
+
+    private List<String> related(long type, String relation) {
+        var values = new ArrayList<String>();
+        try (var rows = database.query(
+                "select name from related where type = ? and relation = ? order by position", type, relation)) {
+            while (rows.next()) values.add(rows.text(0));
+        }
+        return List.copyOf(values);
     }
 
     /// Every type name an origin holds, which is only meaningful for one that
@@ -192,8 +203,8 @@ final class Store implements AutoCloseable {
                 "insert into type (origin, name, kind, modifiers, superclass, doc) values (?, ?, ?, ?, ?, ?)");
         private final Statement parameter = Statement.of(database,
                 "insert into type_parameter (type, position, name) values (?, ?, ?)");
-        private final Statement implemented = Statement.of(database,
-                "insert into implemented (type, position, name) values (?, ?, ?)");
+        private final Statement related = Statement.of(database,
+                "insert into related (type, relation, position, name) values (?, ?, ?, ?)");
         private final Statement member = Statement.of(database,
                 "insert into member (type, position, kind, name, returns, modifiers, doc) values (?, ?, ?, ?, ?, ?, ?)");
         private final Statement argument = Statement.of(database,
@@ -209,9 +220,9 @@ final class Store implements AutoCloseable {
             for (var at = 0; at < info.typeParameters().size(); at++) {
                 parameter.run(id, at, info.typeParameters().get(at));
             }
-            for (var at = 0; at < info.interfaces().size(); at++) {
-                implemented.run(id, at, info.interfaces().get(at));
-            }
+            related(id, "implements", info.interfaces());
+            related(id, "permits", info.permits());
+            related(id, "nested", info.nested());
             tags(id, null, info.tags());
 
             var position = 0;
@@ -231,6 +242,10 @@ final class Store implements AutoCloseable {
             }
         }
 
+        private void related(long type_, String relation, List<String> names) {
+            for (var at = 0; at < names.size(); at++) related.run(type_, relation, at, names.get(at));
+        }
+
         private void tags(Long type_, Long member_, List<TypeInfo.Tag> tags) {
             for (var at = 0; at < tags.size(); at++) {
                 var written = tags.get(at);
@@ -243,7 +258,7 @@ final class Store implements AutoCloseable {
             forget.close();
             type.close();
             parameter.close();
-            implemented.close();
+            related.close();
             member.close();
             argument.close();
             tag.close();

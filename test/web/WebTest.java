@@ -1,5 +1,6 @@
 package web;
 
+import static java.nio.charset.StandardCharsets.UTF_8;
 import static web.serve.Memory.get;
 import static web.serve.Memory.post;
 
@@ -7,6 +8,7 @@ import application.Step;
 import harness.Check;
 import java.io.BufferedReader;
 import java.io.IOException;
+import java.net.Socket;
 import java.net.URI;
 import java.net.http.HttpClient;
 import java.net.http.HttpRequest;
@@ -14,6 +16,7 @@ import java.net.http.HttpResponse;
 import java.nio.file.Files;
 import java.util.List;
 import java.util.Map;
+import java.util.concurrent.CopyOnWriteArrayList;
 import web.assets.Assets;
 import web.dispatch.Router;
 import web.serve.Http;
@@ -35,6 +38,7 @@ public final class WebTest {
         responses();
         pages();
         sockets();
+        hangups();
         streaming();
     }
 
@@ -285,6 +289,50 @@ public final class WebTest {
             Check.that("and the response timeout is not, because an event stream is a long response",
                     System.getProperty(Http.MAX_RESPONSE_TIME) == null);
             Check.that("a request the server never answers is still a request", failing.uri().getPath().equals("/boom"));
+        }
+    }
+
+    /// A client that goes away is not a failure of this server.
+    ///
+    /// It is normal traffic — a page navigating away, a search box cancelling
+    /// the request it made two keystrokes ago, an `EventSource` reconnecting —
+    /// and reporting it filled the console with `Broken pipe` on every click.
+    /// The test hangs up mid-response with a raw socket, because an HttpClient
+    /// is too polite to reproduce it: it reads the whole body before it lets go.
+    private static void hangups() throws Exception {
+        var reported = new CopyOnWriteArrayList<Exception>();
+        Handler large = (request, response) -> {
+            response.header("Content-Type", "text/plain; charset=utf-8");
+            var out = response.writer();
+            for (var written = 0; written < 4096; written++) {
+                out.write("a line long enough that the socket buffer fills before the client is done\n");
+                out.flush();
+            }
+        };
+        try (var server = Http.start(large, 0, reported::add)) {
+            try (var socket = new Socket("localhost", server.port())) {
+                socket.getOutputStream().write("GET /big HTTP/1.1\r\nHost: localhost\r\n\r\n".getBytes(UTF_8));
+                socket.getOutputStream().flush();
+                Check.that("the server started answering", socket.getInputStream().read() >= 0);
+                socket.setSoLinger(true, 0);
+            }
+            Thread.sleep(400);
+            Check.equal("a client that hangs up is not reported as a failure: " + reported, List.of(), reported);
+        }
+
+        var broken = new CopyOnWriteArrayList<Exception>();
+        try (var server = Http.start((request, response) -> {
+            throw new IllegalStateException("no");
+        }, 0, broken::add)) {
+            try {
+                HttpClient.newHttpClient().send(
+                        HttpRequest.newBuilder(URI.create("http://localhost:" + server.port() + "/boom")).build(),
+                        HttpResponse.BodyHandlers.ofString());
+            } catch (IOException ignored) {
+                // the answer is not the point here; what reached the consumer is
+            }
+            Check.equal("while a handler that throws still is, or the filter has swallowed everything",
+                    1, broken.size());
         }
     }
 

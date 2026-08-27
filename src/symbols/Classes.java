@@ -42,10 +42,43 @@ public final class Classes {
                 signature.map(ClassSignature::typeParameters).orElse(List.of()).stream().map(Signatures::parameter).toList(),
                 superclass(model, signature, kind),
                 interfaces(model, signature),
+                permits(model),
+                nested(model, permits(model)),
                 model.methods().stream().filter(Classes::declared).map(method -> method(method, simple)).toList(),
                 model.fields().stream().filter(Classes::declared).map(Classes::field).toList(),
                 "",
                 List.of());
+    }
+
+    /// The subtypes a sealed type allows, which are its cases — the most
+    /// important thing about it, and the only thing on the page of an interface
+    /// that declares no methods.
+    private static List<String> permits(ClassModel model) {
+        return model.findAttribute(Attributes.permittedSubclasses())
+                .map(attribute -> attribute.permittedSubclasses().stream()
+                        .map(entry -> Signatures.name(entry.asSymbol()))
+                        .toList())
+                .orElse(List.of());
+    }
+
+    /// The types declared inside this one.
+    ///
+    /// `InnerClasses` names every nested type the class file mentions,
+    /// including the ones it is nested in itself, so only those whose outer
+    /// class is this one are declarations here. A sealed type's cases are
+    /// usually also nested in it, and naming them twice on one page tells the
+    /// reader nothing the second time.
+    private static List<String> nested(ClassModel model, List<String> permitted) {
+        var here = model.thisClass().asInternalName();
+        return model.findAttribute(Attributes.innerClasses())
+                .map(attribute -> attribute.classes().stream()
+                        .filter(inner -> inner.outerClass()
+                                .map(outer -> outer.asInternalName().equals(here))
+                                .orElse(false))
+                        .map(inner -> Signatures.name(inner.innerClass().asSymbol()))
+                        .filter(name -> !permitted.contains(name))
+                        .toList())
+                .orElse(List.of());
     }
 
     /// `record`, `enum` and `interface` carry flags that cannot be written in
