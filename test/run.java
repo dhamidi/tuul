@@ -12,6 +12,8 @@ void main() throws Exception {
     ffi.PlatformTest.run();
     uritemplates.TemplatesTest.run();
     eventstream.EventStreamTest.run();
+    web.ui.UiTest.run();
+    web.assets.AssetsTest.run();
     web.dispatch.DispatchTest.run();
     project.ProjectTest.run();
     sqlite3.SqliteTest.run();

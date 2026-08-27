@@ -67,6 +67,7 @@ public final class Install {
 
         var native_ = directory.resolve(Home.NATIVE);
         var platforms = source ? source(home, native_) : binaries(home, native_, log);
+        web(home, directory.resolve(Home.ASSETS));
         return new Result(directory, Version.NUMBER, classes, written, platforms);
     }
 
@@ -79,6 +80,7 @@ public final class Install {
             for (var path : existing.filter(Install::artifact).toList()) Files.delete(path);
         }
         remove(directory.resolve(Home.NATIVE));
+        remove(directory.resolve(Home.ASSETS));
     }
 
     private static boolean artifact(Path path) {
@@ -105,6 +107,16 @@ public final class Install {
             throw new IOException("this tuul carries no prebuilt libraries — install with --source to vendor the C");
         }
         return List.copyOf(written);
+    }
+
+    /// Turbo and Stimulus, beside the jar, because that is where a vendored
+    /// tuul looks for them. A tuul that carries none is not an error — the
+    /// libraries still work, and an import map that cannot resolve a pin says
+    /// which directories it looked in.
+    private static void web(Home home, Path destination) throws IOException {
+        try (var shipped = home.web()) {
+            if (Files.isDirectory(shipped.root())) copyTree(shipped.root(), destination);
+        }
     }
 
     /// Cross-builds anything the checkout is missing. `mise run natives` does

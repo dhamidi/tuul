@@ -136,6 +136,10 @@ public final class SelfTest {
         check(checks, "and no C, since nothing here has to compile any",
                 !Files.isDirectory(project.resolve("vendor/tuul/native/sqlite3")),
                 listing(project.resolve("vendor/tuul/native")));
+        check(checks, "and Turbo and Stimulus, so a page has its behaviour without a package manager",
+                exists(project, "vendor/tuul/assets/hotwired/turbo.js")
+                        && exists(project, "vendor/tuul/assets/hotwired/stimulus.js"),
+                listing(project.resolve("vendor/tuul/assets")));
 
         Files.writeString(project.resolve("src/demo/Notes.java"), NOTES);
         Files.writeString(project.resolve("src/cli/main.java"), ENTRYPOINT);
