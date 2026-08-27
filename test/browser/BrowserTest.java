@@ -1,0 +1,180 @@
+package browser;
+
+import harness.Check;
+import java.io.IOException;
+import java.net.URI;
+import java.nio.file.Files;
+import java.nio.file.Path;
+import java.util.List;
+import java.util.Map;
+import json.Json;
+import symbols.Index;
+import web.Headers;
+import web.hyperspec.Hyperspec;
+import web.hyperspec.Outcome;
+import web.serve.Http;
+import web.serve.Memory;
+
+public final class BrowserTest {
+
+    private BrowserTest() {}
+
+    public static void run() throws Exception {
+        var sources = sources();
+        try (var index = Index.of(List.of(sources), List.of(), index(sources));
+             var browser = Browser.of(index, null)) {
+            updates(browser);
+            negotiates(browser);
+            missing(browser);
+            journey(browser);
+        }
+    }
+
+    /// The updates an application asks for are arithmetic on values: no server,
+    /// no index, no disk. That is the whole reason a page is an `application`
+    /// and not a handler that does the work itself.
+    private static void updates(Browser browser) {
+        var asked = Symbols.asked(Symbols.Symbol.nothing(),
+                application.Message.of(Routes.SYMBOL, params(Map.of("name", "json.Json"))));
+        Check.equal("asking for a symbol asks the index for it", 1, asked.effects().size());
+        Check.equal("and remembers what was asked for", "json.Json", asked.state().name());
+
+        var nothing = Symbols.asked(Symbols.Symbol.nothing(), application.Message.of(Routes.SYMBOL, params(Map.of())));
+        Check.that("a request naming no symbol asks the index nothing", nothing.effects().isEmpty());
+        Check.that("and says why", !nothing.state().problem().isEmpty());
+
+        var empty = Symbols.searched(Symbols.Found.nothing(), application.Message.of(Routes.HOME, params(Map.of())));
+        Check.that("an empty search is the front page, not a failure", empty.effects().isEmpty());
+        Check.that("and has nothing to say about itself", empty.state().problem().isEmpty());
+
+        var typed = Symbols.searched(Symbols.Found.nothing(),
+                application.Message.of(Routes.SEARCH, params(Map.of("q", "json"))));
+        Check.equal("a search that was typed asks the index once", 1, typed.effects().size());
+        Check.equal("and keeps the question, so the box still holds it", "json", typed.state().query());
+    }
+
+    /// The same URL answers a person and an agent differently, which is the
+    /// point of a documentation browser in a toolchain whose main user is an
+    /// agent.
+    private static void negotiates(Browser browser) {
+        var page = Memory.handle(browser.handler(),
+                Memory.request("GET", "/symbols/json.Json", Headers.of("Accept", "text/html"), ""));
+        Check.equal("a browser is answered with a page", 200, page.status());
+        Check.that("which is HTML", page.headers().first("Content-Type").orElse("").startsWith("text/html"));
+        Check.that("and describes the symbol as a resource", page.text().contains("itemtype=\"/Symbol\""));
+
+        var agent = Memory.handle(browser.handler(),
+                Memory.request("GET", "/symbols/json.Json", Headers.of("Accept", "application/json"), ""));
+        Check.that("an agent is answered with JSON",
+                agent.headers().first("Content-Type").orElse("").startsWith("application/json"));
+        Check.equal("and it is the description tuul docs prints", "json.Json",
+                Json.parse(agent.text()) instanceof Json.Object described ? described.string("class", "") : "");
+    }
+
+    private static void missing(Browser browser) {
+        var unknown = Memory.handle(browser.handler(), Memory.get("/symbols/nothing.At.All"));
+        Check.equal("a symbol that does not exist is a 404", 404, unknown.status());
+        Check.that("and still offers the search box", unknown.text().contains("name=\"q\""));
+
+        var nowhere = Memory.handle(browser.handler(), Memory.get("/nowhere"));
+        Check.equal("so is a page that does not exist", 404, nowhere.status());
+    }
+
+    /// The journey, as a hyperspec, against a live server — which is the only
+    /// way a hyperspec runs, and dogfoods the test tool while it is at it.
+    private static void journey(Browser browser) throws IOException {
+        try (var server = Http.start(browser.handler(), 0)) {
+            var service = URI.create("http://localhost:" + server.port());
+            var outcome = Hyperspec.run(JOURNEY, service);
+            Check.that("the journey through the browser holds: " + outcome.report(), outcome.ok());
+            Check.that("and it actually asserted something", outcome.passed() >= 10);
+
+            var broken = Hyperspec.run("visit /\nexpect link \"Nothing offers this\"\n", service);
+            Check.that("a spec that asks for what is not there fails", !broken.ok());
+            Check.that("and says what the page did offer",
+                    broken.failures().getFirst().found().contains("offers"));
+        }
+    }
+
+    /// Search for a symbol, follow the result, follow that symbol to another —
+    /// which is the whole of what somebody does with a documentation browser.
+    private static final String JOURNEY = """
+            visit /
+            expect status 200
+            expect form search
+            expect field search q
+            expect no item symbol
+
+            fill q json.Json
+            submit
+            expect status 200
+            expect item symbol
+            expect attribute symbol name json.Json
+
+            follow "json.Json"
+            expect at /symbols/json.Json
+            expect item symbol
+            expect attribute symbol kind interface
+            expect attribute symbol name json.Json
+            expect item member
+
+            visit /symbols/json.JsonWriter
+            expect attribute symbol name json.JsonWriter
+            follow "java.io.Writer"
+            expect at /symbols/java.io.Writer
+            expect attribute symbol name java.io.Writer
+            """;
+
+    private static Json.Object params(Map<String, String> values) {
+        var params = Json.Object.of();
+        for (var entry : values.entrySet()) params = params.with(entry.getKey(), entry.getValue());
+        return Json.Object.of().with("params", params);
+    }
+
+    /// An index of its own, so a test never writes over the one the project is
+    /// using and never depends on what happens to be in it.
+    private static Path index(Path sources) throws IOException {
+        return sources.resolveSibling("index.db");
+    }
+
+    /// A small source tree, indexed for the test. Using tuul's own would make
+    /// the test depend on tuul's source, which changes every time somebody
+    /// works on it.
+    private static Path sources() throws IOException {
+        var root = Files.createTempDirectory("tuul-browser");
+        root.toFile().deleteOnExit();
+        var sources = Files.createDirectories(root.resolve("src").resolve("json"));
+        Files.writeString(sources.resolve("Json.java"), """
+                package json;
+
+                /// A JSON value, for a browser to show.
+                public interface Json {
+
+                    /// Writes this value somewhere.
+                    ///
+                    /// @param out where it goes
+                    /// @return what was written
+                    String write(java.io.Writer out);
+                }
+                """);
+        Files.writeString(sources.resolve("JsonWriter.java"), """
+                package json;
+
+                import java.io.Writer;
+
+                /// Writes JSON to a writer.
+                public class JsonWriter extends Writer {
+
+                    @Override
+                    public void write(char[] buffer, int from, int length) {}
+
+                    @Override
+                    public void flush() {}
+
+                    @Override
+                    public void close() {}
+                }
+                """);
+        return root.resolve("src");
+    }
+}

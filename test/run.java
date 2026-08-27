@@ -20,6 +20,7 @@ void main() throws Exception {
     web.forms.FormsTest.run();
     web.cable.CableTest.run();
     web.dispatch.DispatchTest.run();
+    browser.BrowserTest.run();
     project.ProjectTest.run();
     sqlite3.SqliteTest.run();
     sqlite3.ApiTest.run();

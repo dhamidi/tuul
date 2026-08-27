@@ -109,10 +109,24 @@ final class Store implements AutoCloseable {
     /// Names come back the way a person would write them, as they do everywhere
     /// else: a nested type is filed under `Outer$Inner` and read out as
     /// `Outer.Inner`.
+    /// FTS5's match syntax is a language of its own, where a dot, a hyphen or a
+    /// colon is punctuation with meaning — so `json.Json`, which is exactly what
+    /// somebody searching for a symbol types, is a syntax error rather than a
+    /// query. Every run of word characters becomes a quoted token and the
+    /// tokens are ANDed, which is what the typist meant and cannot fail
+    /// whatever they type.
+    static String query(String typed) {
+        var tokens = new ArrayList<String>();
+        for (var token : typed.split("[^\\p{IsAlphabetic}\\p{IsDigit}_]+")) {
+            if (!token.isBlank()) tokens.add('"' + token + '"');
+        }
+        return String.join(" ", tokens);
+    }
+
     List<Index.Match> search(String text, int limit) {
         var found = new ArrayList<Index.Match>();
         try (var rows = database.query(
-                "select symbol, kind, doc from search where search match ? order by rank limit ?", text, limit)) {
+                "select symbol, kind, doc from search where search match ? order by rank limit ?", query(text), limit)) {
             while (rows.next()) {
                 found.add(new Index.Match(rows.text(0).replace('$', '.'), rows.text(1), rows.text(2)));
             }

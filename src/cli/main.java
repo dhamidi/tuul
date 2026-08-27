@@ -68,6 +68,10 @@ Command tuul() {
                     .value("package", "the package to write it into (default: the module)")
                     .value("class", "the class to call it (default: Api)")
                     .optional("module", "the native module to bind"))
+            .command(Command.named("browse", "read the symbol index in a browser")
+                    .value("port", "which port to listen on (default: 8080)")
+                    .repeated("source-path", "where to look for sources (default: src)")
+                    .repeated("vendor", "where to look for jars (default: vendor)"))
             .command(Command.named("self-test", "build a project in a temporary directory and exercise tuul on it"))
             .command(Command.named("message", "run one JSON message read from stdin"))
             .command(Command.named("help", "this"));
@@ -86,6 +90,7 @@ int dispatch(Parsed.Values parsed, Writer out, Writer err) throws IOException {
         case "bind" -> manage(Message.of("project.bind", values), out, err);
         case "self-test" -> manage(Message.of("project.selftest", values), out, err);
         case "install" -> manage(Message.of("project.install", values), out, err);
+        case "browse" -> browse(values, out, err);
         case "docs" -> ask(docs(values), out, err);
         case "message" -> deliver(stdin(), out, err);
         case "help" -> help("tuul", tuul(), out);
@@ -99,6 +104,41 @@ int dispatch(Parsed.Values parsed, Writer out, Writer err) throws IOException {
 /// happens to be.
 int deliver(Message message, Writer out, Writer err) {
     return message.type().startsWith("project.") ? manage(message, out, err) : ask(message, out, err);
+}
+
+/// `tuul browse` is the one command that does not dispatch a message: it starts
+/// a server and stays there, so there is no state for an application to end up
+/// in and nothing to report when it does.
+int browse(Json.Object values, Writer out, Writer err) {
+    try {
+        browser.Browser.serve(paths(values, "source-path", "src"), paths(values, "vendor", "vendor"),
+                Integer.parseInt(values.string("port", "8080")), out);
+        return 0;
+    } catch (NumberFormatException notAPort) {
+        return complain("--port must be a number: " + values.string("port", ""), err);
+    } catch (Exception failed) {
+        return complain(failed.getMessage() == null ? failed.toString() : failed.getMessage(), err);
+    }
+}
+
+/// The paths a command was given, or the conventional one when it was given
+/// none and that directory is there.
+List<Path> paths(Json.Object values, String option, String fallback) {
+    var given = new ArrayList<Path>();
+    for (var value : values.list(option)) {
+        if (value instanceof Json.Str(var directory)) given.add(Path.of(directory));
+    }
+    return given.isEmpty() ? directory(fallback) : List.copyOf(given);
+}
+
+int complain(String reason, Writer err) {
+    try {
+        err.write("error: " + reason + "\n");
+        err.flush();
+    } catch (IOException unwritable) {
+        // there is nowhere left to say so
+    }
+    return 1;
 }
 
 /// `tuul docs invoicing.Invoice --methods --json`. The sections are one field

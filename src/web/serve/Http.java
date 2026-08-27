@@ -150,6 +150,8 @@ public final class Http implements AutoCloseable {
         private Headers headers = Headers.NONE;
         private int status = Status.OK;
         private boolean committed;
+
+        private boolean closed;
         private OutputStream body;
         private Writer writer;
 
@@ -194,15 +196,33 @@ public final class Http implements AutoCloseable {
             return committed;
         }
 
+        /// A writer whose close is the response's close.
+        private final class Closing extends java.io.FilterWriter {
+
+            private Closing(Writer out) {
+                super(out);
+            }
+
+            @Override
+            public void close() throws IOException {
+                if (closed) return;
+                out.flush();
+                Exchange.this.close();
+            }
+        }
+
         @Override
         public OutputStream body() throws IOException {
             commit();
             return body;
         }
 
+        /// The writer and the response are one resource, so closing the writer
+        /// closes the response — a handler using a try-with-resources is not
+        /// doing something the server then has to undo.
         @Override
         public Writer writer() throws IOException {
-            if (writer == null) writer = new OutputStreamWriter(body(), StandardCharsets.UTF_8);
+            if (writer == null) writer = new Closing(new OutputStreamWriter(body(), StandardCharsets.UTF_8));
             return writer;
         }
 
@@ -213,8 +233,18 @@ public final class Http implements AutoCloseable {
             body.flush();
         }
 
+        /// Closing twice does nothing the second time, which is what
+        /// [java.io.Closeable] asks of every implementation and what this one
+        /// actually needs: a handler that writes inside a try-with-resources
+        /// has already closed the writer by the time a server closes the
+        /// response, and flushing a closed writer throws. The failure was
+        /// invented by the plumbing rather than met by it, and a server that
+        /// logs one per successful response teaches everybody to ignore its
+        /// log.
         @Override
         public void close() throws IOException {
+            if (closed) return;
+            closed = true;
             commit();
             if (writer != null) writer.flush();
             body.close();
