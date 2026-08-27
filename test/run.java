@@ -6,5 +6,6 @@ void main() throws Exception {
     json.JsonTest.run();
     application.ApplicationTest.run();
     symbols.SymbolsTest.run();
+    project.ProjectTest.run();
     System.exit(Check.report());
 }

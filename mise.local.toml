@@ -23,6 +23,11 @@ javac --enable-preview --release "$release" -nowarn -cp build/classes -d build/t
 java --enable-preview -cp build/classes:build/test run
 '''
 
+[tasks.self-test]
+description = "Scaffold a project in a temporary directory and exercise tuul on it"
+depends = ["build"]
+run = 'java --enable-preview -cp build/classes main self-test'
+
 [tasks.tuul]
 description = "Run the cli, e.g. mise run tuul -- docs json.Json"
 depends = ["build"]

@@ -13,16 +13,27 @@ It borrows:
 - **from mise** — CLI ergonomics: a simple, predictable task-running surface
   (`tuul run <task>`), not its config format.
 
-> **Status:** most of this README is still the target, not a changelog. What
-> runs today is one vertical slice — `tuul docs` — and the libraries under it:
-> `json` (streaming parser and serializer), `application` (the Elm
-> Architecture runtime from [ARCHITECTURE.md](./ARCHITECTURE.md)), and
-> `symbols` (javac compiles a source tree in memory; the JDK's class file
-> parser reads the symbols back out). `tuul docs` answers for your code, for
-> the jars in `vendor/`, and for the JDK itself, with doc comments and their
-> `@param`/`@return`/`@throws` tags read from the matching source — a
-> `-sources.jar` for a dependency, `lib/src.zip` for the JDK. Until `tuul`
-> installs itself: `mise run build`, `mise run test`,
+> **Status:** parts of this README are still the target, not a changelog.
+> What runs today is `tuul new`, `tuul build`, `tuul run`, `tuul test`,
+> `tuul docs` and `tuul self-test`, over four libraries: `json` (streaming
+> parser and serializer), `application` (the Elm Architecture runtime from
+> [ARCHITECTURE.md](./ARCHITECTURE.md)), `symbols` (javac compiles a source
+> tree in memory; the JDK's class file parser reads the symbols back out) and
+> `project` (scaffold, build, launch).
+>
+> `tuul docs` answers for your code, for the jars in `vendor/`, and for the
+> JDK itself, with doc comments and their `@param`/`@return`/`@throws` tags
+> read from the matching source — a `-sources.jar` for a dependency,
+> `lib/src.zip` for the JDK. `tuul run [entry] -- <args>` runs an entrypoint;
+> running a file from `tasks/` is not implemented yet. `tuul new` scaffolds
+> one library, one entrypoint and a test rather than the full reference
+> project described below, and `tuul add`, `dev`, `console`, `generate`,
+> `deploy` and `doctor` do not exist.
+>
+> `tuul self-test` is the end-to-end proof: it scaffolds a project in a
+> temporary directory, drives the real command line against it, and keeps the
+> directory when an assertion fails. Until `tuul` installs itself:
+> `mise run build`, `mise run test`, `mise run self-test`,
 > `mise run tuul -- docs <symbol>`.
 
 ## Why

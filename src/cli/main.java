@@ -1,6 +1,4 @@
 import application.Message;
-import docs.App;
-import docs.State;
 import java.io.BufferedWriter;
 import java.io.IOException;
 import java.io.InputStreamReader;
@@ -30,11 +28,27 @@ int run(List<String> args, Writer out, Writer err) throws IOException {
     if (args.isEmpty()) return usage(out);
     var rest = args.subList(1, args.size());
     return switch (args.getFirst()) {
-        case "docs" -> apply(docs(rest), out, err);
-        case "message" -> apply(stdin(), out, err);
+        case "docs" -> ask(docs(rest), out, err);
+        case "message" -> ask(stdin(), out, err);
+        case "new" -> manage(Message.of("project.new").with("name", rest.isEmpty() ? "" : rest.getFirst()), out, err);
+        case "build" -> manage(Message.of("project.build"), out, err);
+        case "run" -> manage(started(rest), out, err);
+        case "test" -> manage(Message.of("project.test"), out, err);
+        case "self-test" -> manage(Message.of("project.selftest"), out, err);
         case "help", "-h", "--help" -> usage(out);
-        default -> apply(Message.error("unknown command: " + args.getFirst()), out, err);
+        default -> ask(Message.error("unknown command: " + args.getFirst()), out, err);
     };
+}
+
+/// `tuul run [entrypoint] -- <arguments>` — everything after `--` belongs to
+/// the application, not to tuul.
+Message started(List<String> args) {
+    var separator = args.indexOf("--");
+    var head = separator < 0 ? args : args.subList(0, separator);
+    var tail = separator < 0 ? List.<String>of() : args.subList(separator + 1, args.size());
+    return Message.of("project.run")
+            .with("entrypoint", head.isEmpty() ? "" : head.getFirst())
+            .with("arguments", Json.Array.strings(tail));
 }
 
 /// `tuul docs invoicing.Invoice --methods --json`
@@ -67,8 +81,12 @@ Message stdin() {
     return value instanceof Json.Object body ? new Message(body) : Message.error("a message must be a JSON object");
 }
 
-int apply(Message message, Writer out, Writer err) {
-    return App.of(State.of(directory("src"), directory("vendor")), out, err).dispatch(message).exit();
+int ask(Message message, Writer out, Writer err) {
+    return docs.App.of(docs.State.of(directory("src"), directory("vendor")), out, err).dispatch(message).exit();
+}
+
+int manage(Message message, Writer out, Writer err) {
+    return project.App.of(project.State.of(Path.of(".")), out, err).dispatch(message).exit();
 }
 
 /// A tuul project keeps its code in `src/` and its dependencies in `vendor/`,
@@ -83,7 +101,12 @@ int usage(Writer out) throws IOException {
             tuul — a toolchain for modern Java
 
             usage:
-              tuul docs <symbol> [options]   describe a type from the project or the JDK
+              tuul new <name>                scaffold a project
+              tuul build                     compile src/ into build/
+              tuul run [entry] -- <args>     run an entrypoint, arguments and all
+              tuul test                      compile and run test/
+              tuul docs <symbol> [options]   describe a type from the project, vendor/ or the JDK
+              tuul self-test                 build a project in a temporary directory and exercise tuul on it
               tuul message                   run one JSON message read from stdin
               tuul help                      this
 
