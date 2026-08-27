@@ -67,6 +67,13 @@ public record Request(
         return new Request(method, path, query, headers, body, remote, attributes);
     }
 
+    /// The same request reading from somewhere else. Middleware that has to
+    /// look inside a body — a CSRF token in a form, a form a handler will read
+    /// again — puts back what it took, and the handler never knows.
+    public Request body(InputStream body) {
+        return new Request(method, path, query, headers, body, remote, attributes);
+    }
+
     public Request headers(Headers headers) {
         return new Request(method, path, query, headers, body, remote, attributes);
     }

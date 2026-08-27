@@ -15,6 +15,7 @@ void main() throws Exception {
     web.WebTest.run();
     web.ui.UiTest.run();
     web.assets.AssetsTest.run();
+    web.controllers.ControllersTest.run();
     web.forms.FormsTest.run();
     web.cable.CableTest.run();
     web.dispatch.DispatchTest.run();

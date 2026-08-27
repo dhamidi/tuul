@@ -1,0 +1,47 @@
+package web.controllers;
+
+import java.time.Duration;
+import java.util.LinkedHashMap;
+import java.util.Map;
+import java.util.Optional;
+import web.Request;
+import web.Response;
+
+/// Reading what a client sent back, and saying what to keep.
+///
+/// A request carries every cookie in one header, separated by semicolons; a
+/// response sets them one header each, which is why [web.Headers] keeps values
+/// that repeat. Nothing here decodes a value: what goes in comes out, and a
+/// caller that wants to store something a cookie cannot hold encodes it — see
+/// [Signature], which is what both users of this package do.
+public final class Cookies {
+
+    private Cookies() {}
+
+    public static Map<String, String> of(Request request) {
+        var cookies = new LinkedHashMap<String, String>();
+        for (var header : request.headers().all("Cookie")) {
+            for (var pair : header.split(";")) {
+                var split = pair.indexOf('=');
+                if (split < 0) continue;
+                var name = pair.substring(0, split).strip();
+                if (!name.isEmpty()) cookies.putIfAbsent(name, pair.substring(split + 1).strip());
+            }
+        }
+        return Map.copyOf(cookies);
+    }
+
+    public static Optional<String> first(Request request, String name) {
+        return Optional.ofNullable(of(request).get(name));
+    }
+
+    public static void set(Response response, Cookie cookie) {
+        response.add("Set-Cookie", cookie.header());
+    }
+
+    /// Removes one, which is done by setting it to nothing and telling the
+    /// browser it expired an hour ago — there is no other way to say it.
+    public static void clear(Response response, String name, String path) {
+        set(response, new Cookie(name, "", path, Optional.of(Duration.ZERO), true, false, "Lax"));
+    }
+}
