@@ -1,15 +1,22 @@
 package project;
 
 import ffi.Library;
+import application.Message;
 import harness.Check;
 import java.io.IOException;
 import java.io.StringWriter;
 import java.lang.foreign.FunctionDescriptor;
 import java.lang.foreign.ValueLayout;
 import java.lang.invoke.MethodHandle;
+import symbols.Sources;
+import tuul.Version;
 import java.nio.file.Files;
 import java.nio.file.Path;
+import java.util.LinkedHashMap;
 import java.util.List;
+import java.util.jar.JarEntry;
+import java.util.jar.JarFile;
+import java.util.jar.JarOutputStream;
 
 public final class ProjectTest {
 
@@ -27,6 +34,8 @@ public final class ProjectTest {
         builds(layout);
         launches(layout);
         refuses(layout, project);
+        vendored(layout, project);
+        installs(layout);
     }
 
     private static void scaffolds(Path project) throws IOException {
@@ -127,6 +136,103 @@ public final class ProjectTest {
 
         Check.that("a directory that is not a project says so",
                 !Build.compile(new Layout(project.resolve("nowhere"))).ok());
+    }
+
+    /// A dependency that is on the classpath to compile and missing to run is a
+    /// dependency that fails on its first call. This runs the project the way
+    /// `tuul run` and `tuul test` do — through the application — because that is
+    /// where the classpath is assembled.
+    private static void vendored(Layout layout, Path project) throws IOException {
+        var classes = new LinkedHashMap<String, byte[]>();
+        var source = Files.createTempDirectory("tuul-tiny");
+        source.toFile().deleteOnExit();
+        Files.createDirectories(source.resolve("tiny"));
+        Files.writeString(source.resolve("tiny/Tiny.java"), """
+                package tiny;
+
+                public final class Tiny {
+
+                    public static String hello() {
+                        return "from a vendored jar";
+                    }
+                }
+                """);
+        Sources.compile(List.of(source)).forEach((type, bytes) -> classes.put(type.replace('.', '/') + ".class", bytes));
+        Files.createDirectories(project.resolve("vendor/tiny"));
+        try (var jar = new JarOutputStream(Files.newOutputStream(project.resolve("vendor/tiny/tiny-1.0.jar")))) {
+            for (var entry : classes.entrySet()) {
+                jar.putNextEntry(new JarEntry(entry.getKey()));
+                jar.write(entry.getValue());
+                jar.closeEntry();
+            }
+        }
+
+        Files.writeString(project.resolve("src/cli/main.java"), """
+                import tiny.Tiny;
+
+                void main(String[] args) {
+                    System.out.println(Tiny.hello());
+                }
+                """);
+        Files.writeString(project.resolve("test/run.java"), """
+                void main() {
+                    if (!tiny.Tiny.hello().isBlank()) System.out.println("all tests passed");
+                }
+                """);
+
+        Check.equal("a vendored jar is on the classpath that runs the application",
+                "from a vendored jar\n",
+                ran(layout, Message.of("project.run")));
+        Check.that("and on the one that runs the tests",
+                ran(layout, Message.of("project.test")).contains("all tests passed"));
+    }
+
+    /// tuul putting itself into a project is tuul producing an ordinary
+    /// dependency: two jars and the C, in a directory `vendor/` already
+    /// understands.
+    private static void installs(Layout layout) throws IOException {
+        var installed = Install.into(layout);
+        var jar = installed.directory().resolve(Version.artifact() + ".jar");
+        Check.that("it writes a jar named for the version", Files.isRegularFile(jar));
+        Check.that("and a sources jar beside it",
+                Files.isRegularFile(installed.directory().resolve(Version.artifact() + "-sources.jar")));
+        Check.that("and the C that sqlite3 binds, so the project can build it",
+                Files.isRegularFile(installed.directory().resolve("native/sqlite3/sqlite3.c")));
+        Check.that("it says how much it packed", installed.classes() > 100 && installed.sources() > 30);
+
+        var entries = entries(jar);
+        Check.that("the libraries are in it", entries.contains("json/Json.class"));
+        Check.that("no entrypoint is: a default-package class would take a name it does not own",
+                entries.stream().noneMatch(entry -> entry.endsWith(".class") && !entry.contains("/")));
+        Check.that("and the manifest says which tuul this is",
+                new String(read(jar, "META-INF/MANIFEST.MF")).contains("Implementation-Version: " + Version.NUMBER));
+
+        Install.into(layout);
+        try (var again = Files.list(installed.directory())) {
+            Check.equal("installing twice replaces the artifact rather than stacking a second copy of every class",
+                    2,
+                    (int) again.filter(path -> path.getFileName().toString().endsWith(".jar")).count());
+        }
+    }
+
+    private static List<String> entries(Path jar) throws IOException {
+        try (var file = new JarFile(jar.toFile())) {
+            return file.stream().map(JarEntry::getName).toList();
+        }
+    }
+
+    private static byte[] read(Path jar, String entry) throws IOException {
+        try (var file = new JarFile(jar.toFile()); var in = file.getInputStream(file.getEntry(entry))) {
+            return in.readAllBytes();
+        }
+    }
+
+    private static String ran(Layout layout, Message message) {
+        var out = new StringWriter();
+        var err = new StringWriter();
+        var state = App.of(State.of(layout.root()), out, err).dispatch(message);
+        Check.equal("running " + message.type() + " succeeds: " + err, 0, state.exit());
+        return out.toString();
     }
 
     private static void uncheck(Body body) {

@@ -10,6 +10,7 @@ import java.nio.file.Path;
 import java.util.ArrayList;
 import java.util.List;
 import json.Json;
+import symbols.Vendor;
 import selftest.SelfTest;
 
 /// The project commands as one application: `new`, `build`, `run`, `test` and
@@ -32,6 +33,8 @@ public final class App {
                 .on("project.run", App::run)
                 .on("project.test", App::test)
                 .on("project.selftest", App::selftest)
+                .on("project.install", App::install)
+                .on("project.installed", App::installed)
                 .on("project.bind", App::bind)
                 .on("project.bound", App::bound)
                 .on("project.created", App::created)
@@ -47,6 +50,7 @@ public final class App {
                 .effect("project.launch.tests", (effect, emit) -> launchTests(effect, emit, out))
                 .effect("project.selftest", App::selfTest)
                 .effect("project.bind", App::generate)
+                .effect("project.install", App::vendor)
                 .effect("project.report", (effect, _) -> write(effect, out))
                 .effect("project.problem", (effect, _) -> write(effect, err));
     }
@@ -110,6 +114,17 @@ public final class App {
 
     private static Step<State> exited(State state, Message message) {
         return Step.of(state.exited((int) number(message, "status")));
+    }
+
+    private static Step<State> install(State state, Message message) {
+        return Step.of(state, Effect.of("project.install").with("directory", where(state)));
+    }
+
+    private static Step<State> installed(State state, Message message) {
+        var native_ = message.flag("native") ? "\n  " + message.string("directory", "") + "/native — built by tuul build" : "";
+        return Step.of(state, report("installed " + message.string("version", "") + " into "
+                + message.string("directory", "") + native_
+                + "\n  its libraries are now on this project's classpath"));
     }
 
     private static Step<State> bind(State state, Message message) {
@@ -203,18 +218,39 @@ public final class App {
         for (var argument : effect.list("arguments")) {
             if (argument instanceof Json.Str(var text)) arguments.add(text);
         }
-        start(Launch.java(List.of(), List.of(layout.classes(), layout.entry(entrypoint)), "main", arguments),
-                layout, emit, out);
+        start(Launch.java(List.of(), running(layout, layout.entry(entrypoint)), "main", arguments), layout, emit, out);
     }
 
     private static void launchTests(Effect effect, Effect.Emitter emit, Writer out) throws Exception {
         var layout = new Layout(Path.of(effect.string("directory", ".")));
-        start(Launch.java(List.of(), List.of(layout.classes(), layout.tests()), "run", List.of()), layout, emit, out);
+        start(Launch.java(List.of(), running(layout, layout.tests()), "run", List.of()), layout, emit, out);
+    }
+
+    /// What a project runs against: its own classes, then the code it was
+    /// compiled against. A dependency that is on the classpath to compile and
+    /// missing to run is a dependency that fails on its first call, so the two
+    /// classpaths are the same list — with the project's own classes first, so
+    /// its class wins over a vendored one of the same name.
+    private static List<Path> running(Layout layout, Path own) throws IOException {
+        var classpath = new ArrayList<Path>(List.of(layout.classes(), own));
+        classpath.addAll(Vendor.of(List.of(layout.vendor())).classpath());
+        return classpath;
     }
 
     private static void start(List<String> command, Layout layout, Effect.Emitter emit, Writer out) throws Exception {
         var status = Launch.run(command, layout.root(), out);
         emit.emit(Message.of("project.exited").with("status", Json.of(status)));
+    }
+
+    private static void vendor(Effect effect, Effect.Emitter emit) throws Exception {
+        var layout = new Layout(Path.of(effect.string("directory", ".")));
+        var result = Install.into(layout);
+        emit.emit(Message.of("project.installed")
+                .with("directory", result.directory().toString())
+                .with("version", result.version())
+                .with("classes", Json.of(result.classes()))
+                .with("sources", Json.of(result.sources()))
+                .with("native", result.natives()));
     }
 
     private static void generate(Effect effect, Effect.Emitter emit) throws Exception {

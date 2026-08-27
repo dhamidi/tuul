@@ -52,7 +52,7 @@ public final class Sources {
 
     private static List<String> options(List<Path> classpath) {
         var options = new ArrayList<>(List.of("-proc:none", "-parameters", "-g:none", "-nowarn",
-                "--enable-preview", "--release", String.valueOf(Runtime.version().feature())));
+                "--release", String.valueOf(Runtime.version().feature())));
         if (classpath.isEmpty()) return options;
         options.add("-classpath");
         options.add(classpath.stream().map(Path::toString).collect(Collectors.joining(File.pathSeparator)));

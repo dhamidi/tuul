@@ -77,15 +77,31 @@ public record Layout(Path root) {
     /// file sitting directly in it. Either way it compiles to one library,
     /// named after the directory or the file.
     public Map<String, List<Path>> natives() throws IOException {
-        if (!Files.isDirectory(nativeRoot())) return Map.of();
         var modules = new LinkedHashMap<String, List<Path>>();
-        try (var tree = Files.list(nativeRoot())) {
+        for (var directory : vendored()) collect(directory, modules);
+        collect(nativeRoot(), modules);
+        return modules;
+    }
+
+    /// A dependency can bring C with it — that is how a project vendoring tuul
+    /// gets SQLite without fetching a binary for its own machine. The project's
+    /// own `native/` is read last, so a module it defines wins over one that
+    /// arrived in `vendor/`.
+    private List<Path> vendored() throws IOException {
+        if (!Files.isDirectory(vendor())) return List.of();
+        try (var tree = Files.list(vendor())) {
+            return tree.map(dependency -> dependency.resolve("native")).filter(Files::isDirectory).sorted().toList();
+        }
+    }
+
+    private static void collect(Path root, Map<String, List<Path>> modules) throws IOException {
+        if (!Files.isDirectory(root)) return;
+        try (var tree = Files.list(root)) {
             for (var path : tree.sorted().toList()) {
                 if (Files.isDirectory(path)) sources(path).ifPresent(files -> modules.put(name(path), files));
                 else if (path.toString().endsWith(".c")) modules.put(stem(path), List.of(path));
             }
         }
-        return modules;
     }
 
     private static Optional<List<Path>> sources(Path directory) throws IOException {

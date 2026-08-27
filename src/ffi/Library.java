@@ -8,7 +8,9 @@ import java.lang.foreign.MemoryLayout;
 import java.lang.foreign.SymbolLookup;
 import java.lang.invoke.MethodHandle;
 import java.nio.file.Files;
+import java.net.URISyntaxException;
 import java.nio.file.Path;
+import java.util.ArrayList;
 import java.util.List;
 
 /// A shared library, and the handles to call into it.
@@ -18,9 +20,17 @@ import java.util.List;
 /// against the global arena, so a handle can never outlive the code it points
 /// at.
 ///
-/// Libraries are looked for in `build/native` first, which is where
-/// `tuul build` puts them, and then wherever the operating system looks. Set
-/// `-Dtuul.native=<dir>[:<dir>]` to look somewhere else.
+/// A library is looked for where the code asking for it lives, and then where
+/// the project being worked on puts its own: beside the jar or classes
+/// directory this class was loaded from, and then `build/native` under the
+/// working directory. `-Dtuul.native=<dir>[:<dir>]` replaces the lot.
+///
+/// Asking the code where it is, rather than asking the shell, is what lets an
+/// installed tuul work in somebody else's project: it is run from a directory
+/// that knows nothing about it, and the library it binds ships with it, not
+/// with them. The working directory is still searched afterwards, because that
+/// is where a project's own `tuul build` leaves the modules it compiled —
+/// including the ones that arrived in `vendor/`.
 public final class Library {
 
     private static final Linker LINKER = Linker.nativeLinker();
@@ -34,12 +44,32 @@ public final class Library {
     }
 
     /// Opens `libsqlite3.dylib` — or `.so`, or `.dll` — by its plain name,
-    /// `sqlite3`.
+    /// `sqlite3`, from the libraries this project built.
+    ///
+    /// It does not fall back to whatever the operating system has under that
+    /// name. A binding is generated against one library's header with one set of
+    /// compiler flags, and the system's copy is a different library that happens
+    /// to share a name: the difference shows up as a missing symbol, in
+    /// production, on somebody else's machine. Use [#system] when the system's
+    /// copy is genuinely what is wanted.
     public static Library open(String name) {
         var file = System.mapLibraryName(name);
         var built = directories().stream().map(directory -> directory.resolve(file)).filter(Files::isRegularFile).findFirst();
         if (built.isPresent()) return new Library(name, SymbolLookup.libraryLookup(built.get(), Arena.global()));
-        return new Library(name, system(name, file));
+        throw new UnsatisfiedLinkError(
+                "no " + file + " in " + directories() + " — run tuul build to compile the native modules");
+    }
+
+    /// Opens a library the operating system provides, by asking it. For the ones
+    /// that are genuinely the system's — libc, and whatever a machine happens to
+    /// have — rather than the ones a project ships.
+    public static Library system(String name) {
+        var file = System.mapLibraryName(name);
+        try {
+            return new Library(name, SymbolLookup.libraryLookup(file, Arena.global()));
+        } catch (IllegalArgumentException e) {
+            throw new UnsatisfiedLinkError("the system has no " + file);
+        }
     }
 
     public static Library open(Path file) {
@@ -77,10 +107,28 @@ public final class Library {
     }
 
     private static List<Path> directories() {
-        return List.of(System.getProperty("tuul.native", "build/native").split(File.pathSeparator))
-                .stream()
-                .map(Path::of)
-                .toList();
+        var override = System.getProperty("tuul.native");
+        if (override != null) return List.of(override.split(File.pathSeparator)).stream().map(Path::of).toList();
+        var directories = new ArrayList<>(beside());
+        directories.add(Path.of("build", "native"));
+        return List.copyOf(directories);
+    }
+
+    /// Where the running code keeps its own libraries. A classes directory has
+    /// them in its sibling `native` — `build/classes` and `build/native` — and a
+    /// jar has them beside it, or in a `native` directory beside it, which is
+    /// where an installed tuul would put the one it ships.
+    private static List<Path> beside() {
+        try {
+            var code = Path.of(Library.class.getProtectionDomain().getCodeSource().getLocation().toURI())
+                    .toAbsolutePath()
+                    .normalize();
+            if (Files.isDirectory(code)) return List.of(code.resolveSibling("native"));
+            var directory = code.getParent();
+            return List.of(directory, directory.resolve("native"));
+        } catch (URISyntaxException | RuntimeException e) {
+            return List.of();
+        }
     }
 
     private static SymbolLookup system(String name, String file) {

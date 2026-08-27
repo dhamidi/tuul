@@ -15,6 +15,14 @@ up to our modern JDK 24 standard:
 
 These are all plain Java libraries.
 
+Structured concurrency here means the lifetime of a task is a block of code,
+not the preview `StructuredTaskScope` API. Tasks are forked into a
+virtual-thread executor inside a try-with-resources, whose `close()` does not
+return until every one of them has finished — the same guarantee, without
+pinning tuul's class files, and every project that vendors them, to one exact
+JDK build. When `StructuredTaskScope` is final, the executor is a two-line
+change.
+
 Applications follow The Elm Architecture, with a slight twist:
 
 - messages are expressed using a `json` object,

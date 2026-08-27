@@ -6,8 +6,7 @@ import java.util.List;
 import java.util.Map;
 import java.util.Queue;
 import java.util.concurrent.ConcurrentLinkedQueue;
-import java.util.concurrent.ExecutionException;
-import java.util.concurrent.StructuredTaskScope;
+import java.util.concurrent.Executors;
 import java.util.function.BiFunction;
 import java.util.function.Function;
 import json.Json;
@@ -25,8 +24,8 @@ import json.Json;
 ///
 /// [#dispatch(Message...)] runs until nothing is pending: update the state,
 /// apply the effects of that step, feed whatever they emit back in. The effects
-/// of one step run together in a single task scope, so the step is over only
-/// when all of them are.
+/// of one step run together, each on its own virtual thread, and the step is
+/// over only when all of them are.
 ///
 /// The loop fails open at both ends. An update that throws leaves the state
 /// alone and produces an `error` message; so does an effect with no handler, or
@@ -99,18 +98,24 @@ public final class Application<S> {
         }
     }
 
+    /// Structured concurrency, by the route that is not a preview API: the
+    /// effects of a step are forked into an executor that is closed before the
+    /// method returns, and `close()` does not return until every one of them has
+    /// finished. Their lifetime is the block, which is the whole point.
+    ///
+    /// Nothing here propagates a failure, because there is nothing to propagate
+    /// — an effect that throws has already been turned into an `error` message
+    /// by [#run]. That is what makes an ordinary executor enough, and it is why
+    /// this does not reach for `StructuredTaskScope` while that is still a
+    /// preview API: tuul's class files would be pinned to one exact JDK build,
+    /// and so would every project that vendors them.
     private List<Message> apply(List<Effect> effects) {
         if (effects.isEmpty()) return List.of();
         var emitted = new ConcurrentLinkedQueue<Message>();
-        try (var scope = StructuredTaskScope.<Void>open()) {
-            for (var effect : effects) scope.fork(() -> run(effect, emitted::add));
-            scope.join();
-        } catch (InterruptedException e) {
-            Thread.currentThread().interrupt();
-            emitted.add(Message.error("interrupted while applying effects"));
-        } catch (ExecutionException e) {
-            emitted.add(failure(e));
+        try (var effecting = Executors.newVirtualThreadPerTaskExecutor()) {
+            for (var effect : effects) effecting.execute(() -> run(effect, emitted::add));
         }
+        if (Thread.currentThread().isInterrupted()) emitted.add(Message.error("interrupted while applying effects"));
         return List.copyOf(emitted);
     }
 

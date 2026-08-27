@@ -11,6 +11,7 @@ import java.util.Comparator;
 import java.util.List;
 import json.Json;
 import project.Launch;
+import tuul.Version;
 
 /// tuul, tested the way it is used: a real project in a temporary directory,
 /// driven by running the tuul command against it.
@@ -37,6 +38,7 @@ public final class SelfTest {
         runs(project, checks);
         tests(project, checks);
         documents(project, checks);
+        vendors(project, checks);
         recovers(project, checks);
 
         var ok = checks.stream().allMatch(Report.Check::ok);
@@ -111,6 +113,59 @@ public final class SelfTest {
         check(checks, "an unknown symbol is a failure, not an empty answer", missing.status() == 1, missing.output());
     }
 
+    /// The whole point of `tuul install`: a project that vendors tuul writes an
+    /// application on tuul's own libraries, and SQLite works without anybody
+    /// fetching a binary for their machine.
+    private static void vendors(Path project, List<Report.Check> checks) throws IOException, InterruptedException {
+        var installed = tuul(project, "install");
+        check(checks, "tuul install exits cleanly", installed.status() == 0, installed.output());
+        check(checks, "it vendors a jar and its sources",
+                exists(project, "vendor/tuul/tuul-" + Version.NUMBER + ".jar")
+                        && exists(project, "vendor/tuul/tuul-" + Version.NUMBER + "-sources.jar"),
+                listing(project.resolve("vendor")));
+        check(checks, "and the C that sqlite3 binds",
+                exists(project, "vendor/tuul/native/sqlite3/sqlite3.c"),
+                listing(project.resolve("vendor")));
+
+        Files.writeString(project.resolve("src/demo/Notes.java"), NOTES);
+        Files.writeString(project.resolve("src/cli/main.java"), ENTRYPOINT);
+        Files.writeString(project.resolve("test/run.java"), RUNNER);
+
+        var built = tuul(project, "build");
+        check(checks, "a project using tuul's libraries builds", built.status() == 0, built.output());
+        check(checks, "compiling the vendored C into its own build",
+                exists(project, "build/native/" + System.mapLibraryName("sqlite3")),
+                built.output());
+
+        var ran = tuul(project, "run", "--", "the first note");
+        check(checks, "and runs on argparse, application and sqlite3 together",
+                ran.status() == 0 && ran.output().contains("notes: 1"),
+                ran.output());
+        check(checks, "against the SQLite tuul vendored, not the one the machine happened to have",
+                ran.output().contains("sqlite " + version(project)),
+                ran.output());
+
+        var tested = tuul(project, "test");
+        check(checks, "its tests run against them too",
+                tested.status() == 0 && tested.output().contains("all tests passed"),
+                tested.output());
+
+        var docs = tuul(project, "docs", "application.Application");
+        check(checks, "and tuul docs answers about a vendored tuul type",
+                docs.output().contains("An application: a state, the handlers that update it"),
+                docs.output());
+
+        check(checks, "tuul found its own sqlite3 from a directory that is not its own",
+                exists(project, "build/index.db"),
+                listing(project.resolve("build")));
+    }
+
+    /// What the vendored SQLite says its version is, asked of the library the
+    /// project just built rather than assumed.
+    private static String version(Path project) {
+        return sqlite3.Database.version();
+    }
+
     /// The failure path matters as much as the happy one: a build that cannot
     /// work has to say so, and has to keep working once the problem is gone.
     private static void recovers(Path project, List<Report.Check> checks) throws IOException, InterruptedException {
@@ -124,6 +179,90 @@ public final class SelfTest {
         var again = tuul(project, "build");
         check(checks, "removing it builds again", again.status() == 0, again.output());
     }
+
+    private static final String NOTES = """
+            package demo;
+
+            import application.Application;
+            import application.Effect;
+            import application.Message;
+            import application.Step;
+            import java.io.Writer;
+            import java.nio.file.Path;
+            import sqlite3.Database;
+
+            /// An application whose state is a database.
+            public final class Notes {
+
+                private Notes() {}
+
+                public static Database open(Path file) {
+                    return Database.open(file);
+                }
+
+                public static Application<Long> of(Database database, Writer out) {
+                    database.execute("create table if not exists notes (id integer primary key, body text)");
+                    return Application.<Long>of(0L)
+                            .on("note.write", (kept, message) -> Step.of(kept + 1,
+                                    Effect.of("note.store").with("body", message.string("body", ""))))
+                            .effect("note.store", (effect, emit) -> {
+                                database.execute("insert into notes (body) values (?)", effect.string("body", ""));
+                                emit.emit(Message.of("note.stored"));
+                            })
+                            .on("note.stored", (kept, message) -> Step.of(kept, Effect.of("note.say")))
+                            .effect("note.say", (effect, emit) -> {
+                                try (var rows = database.query("select count(*) from notes")) {
+                                    rows.next();
+                                    out.write("notes: " + rows.integer(0) + " (sqlite " + Database.version() + ")\\n");
+                                    out.flush();
+                                }
+                            });
+                }
+            }
+            """;
+
+    private static final String ENTRYPOINT = """
+            import application.Message;
+            import argparse.Command;
+            import argparse.Parsed;
+            import demo.Notes;
+            import java.io.OutputStreamWriter;
+            import java.nio.file.Path;
+            import java.util.List;
+
+            void main(String[] args) throws Exception {
+                var out = new OutputStreamWriter(System.out);
+                var command = Command.named("demo", "keep notes")
+                        .value("store", "where to keep them", "notes.db")
+                        .argument("body", "what to write down");
+                if (!(command.parse(List.of(args)) instanceof Parsed.Values values)) {
+                    System.err.println("say what to write down");
+                    return;
+                }
+                try (var database = Notes.open(Path.of(values.values().string("store", "notes.db")))) {
+                    Notes.of(database, out)
+                            .dispatch(Message.of("note.write").with("body", values.values().string("body", "")));
+                }
+            }
+            """;
+
+    private static final String RUNNER = """
+            import java.io.StringWriter;
+            import java.nio.file.Files;
+
+            void main() throws Exception {
+                var file = Files.createTempDirectory("demo").resolve("notes.db");
+                var out = new StringWriter();
+                try (var database = demo.Notes.open(file)) {
+                    demo.Notes.of(database, out)
+                            .dispatch(application.Message.of("note.write").with("body", "first"));
+                }
+                if (!out.toString().contains("notes: 1")) throw new AssertionError(out.toString());
+                if (!Files.isRegularFile(file)) throw new AssertionError("no database on disk");
+                greet.GreeterTest.run();
+                System.out.println("all tests passed");
+            }
+            """;
 
     private static void check(List<Report.Check> checks, String what, boolean ok, String detail) {
         checks.add(new Report.Check(what, ok, ok ? "" : detail.strip()));
@@ -140,7 +279,7 @@ public final class SelfTest {
 
     private static List<String> command(List<String> arguments) {
         var classpath = List.of(System.getProperty("java.class.path").split(File.pathSeparator)).stream().map(Path::of).toList();
-        return Launch.java(List.of("--enable-preview"), classpath, "main", arguments);
+        return Launch.java(List.of(), classpath, "main", arguments);
     }
 
     private static Json.Object describe(String output) {

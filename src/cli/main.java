@@ -14,6 +14,7 @@ import java.util.ArrayList;
 import java.util.List;
 import json.Json;
 import symbols.Docs;
+import tuul.Version;
 
 /// The command line: turn arguments into a message, run the application, exit
 /// with what it says. Everything else lives in a library.
@@ -51,6 +52,7 @@ Command tuul() {
     for (var section : Docs.SECTIONS) docs = docs.flag(section, "print only the " + section + " section");
 
     return Command.named("tuul", "a toolchain for modern Java")
+            .flag("version", "print which tuul this is and stop")
             .command(Command.named("new", "scaffold a project")
                     .optional("name", "what to call it"))
             .command(Command.named("build", "compile native/ and src/ into build/")
@@ -59,6 +61,7 @@ Command tuul() {
                     .optional("entrypoint", "which entrypoint (default: cli)")
                     .passthrough("arguments", "what to pass to the application"))
             .command(Command.named("test", "compile and run test/"))
+            .command(Command.named("install", "vendor tuul into this project, libraries and all"))
             .command(docs)
             .command(Command.named("bind", "generate a Java binding for a native module")
                     .value("package", "the package to write it into (default: the module)")
@@ -81,9 +84,11 @@ int dispatch(Parsed.Values parsed, Writer out, Writer err) throws IOException {
         case "test" -> manage(Message.of("project.test", values), out, err);
         case "bind" -> manage(Message.of("project.bind", values), out, err);
         case "self-test" -> manage(Message.of("project.selftest", values), out, err);
+        case "install" -> manage(Message.of("project.install", values), out, err);
         case "docs" -> ask(docs(values), out, err);
         case "message" -> ask(stdin(), out, err);
         case "help" -> help("tuul", tuul(), out);
+        case "tuul" -> values.flag("version") ? announce(out) : help(parsed.path(), parsed.command(), out);
         default -> help(parsed.path(), parsed.command(), out);
     };
 }
@@ -126,6 +131,11 @@ int manage(Message message, Writer out, Writer err) {
 List<Path> directory(String name) {
     var path = Path.of(name);
     return Files.isDirectory(path) ? List.of(path) : List.of();
+}
+
+int announce(Writer out) throws IOException {
+    out.write(Version.describe() + "\n");
+    return 0;
 }
 
 int help(String path, Command command, Writer out) throws IOException {
