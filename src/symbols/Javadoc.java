@@ -1,0 +1,280 @@
+package symbols;
+
+import com.sun.source.doctree.DeprecatedTree;
+import com.sun.source.doctree.DocTree;
+import com.sun.source.doctree.EntityTree;
+import com.sun.source.doctree.LinkTree;
+import com.sun.source.doctree.LiteralTree;
+import com.sun.source.doctree.ParamTree;
+import com.sun.source.doctree.RawTextTree;
+import com.sun.source.doctree.ReturnTree;
+import com.sun.source.doctree.SeeTree;
+import com.sun.source.doctree.SinceTree;
+import com.sun.source.doctree.TextTree;
+import com.sun.source.doctree.ThrowsTree;
+import com.sun.source.doctree.UnknownBlockTagTree;
+import com.sun.source.tree.ClassTree;
+import com.sun.source.tree.MethodTree;
+import com.sun.source.tree.VariableTree;
+import com.sun.source.util.DocTrees;
+import com.sun.source.util.JavacTask;
+import com.sun.source.util.TreePathScanner;
+import java.io.IOException;
+import java.net.URI;
+import java.nio.charset.StandardCharsets;
+import java.util.ArrayDeque;
+import java.util.ArrayList;
+import java.util.Deque;
+import java.util.LinkedHashMap;
+import java.util.List;
+import java.util.Map;
+import java.util.regex.Pattern;
+import java.util.stream.Collectors;
+import javax.tools.JavaFileObject;
+import javax.tools.SimpleJavaFileObject;
+import javax.tools.ToolProvider;
+
+/// Doc comments, which class files do not carry — the only thing tuul has to
+/// read out of Java source rather than out of bytes.
+///
+/// javac does the reading: parse only, no attribution, no classpath, so a
+/// single file out of `src.zip` is enough and nothing has to resolve. The
+/// comments come back keyed by where they were written — `String#length()`,
+/// `Map.Entry#getKey()` — and [#attach] matches those keys against the members
+/// that came out of the class file.
+public final class Javadoc {
+
+    private static final Pattern ANNOTATIONS = Pattern.compile("@\\w+(\\.\\w+)*");
+    private static final Pattern GENERICS = Pattern.compile("<[^<>]*>");
+    private static final Pattern QUALIFIERS = Pattern.compile("(\\w+\\.)+");
+    private static final Pattern LINKS = Pattern.compile("\\[#?([^\\]]+)\\](\\([^)]*\\))?");
+    private static final Pattern FENCES = Pattern.compile("(?m)^\\s*```.*$");
+
+    private Javadoc() {}
+
+    /// What the source says about a declaration and the class file cannot: the
+    /// prose, the block tags under it, and the names of the parameters.
+    public record Comment(String doc, List<TypeInfo.Tag> tags, List<String> parameters) {
+
+        static final Comment NONE = new Comment("", List.of(), List.of());
+
+        boolean empty() {
+            return doc.isEmpty() && tags.isEmpty() && parameters.isEmpty();
+        }
+    }
+
+    /// Every doc comment in one source file, keyed by declaration.
+    public static Map<String, Comment> of(String source, String fileName) {
+        var compiler = ToolProvider.getSystemJavaCompiler();
+        if (compiler == null) return Map.of();
+        var docs = new LinkedHashMap<String, Comment>();
+        try {
+            var files = compiler.getStandardFileManager(null, null, StandardCharsets.UTF_8);
+            var task = (JavacTask) compiler.getTask(
+                    null, files, diagnostic -> {}, List.of("-proc:none"), null, List.of(new Text(fileName, source)));
+            var trees = DocTrees.instance(task);
+            for (var unit : task.parse()) new Walk(trees, docs).scan(unit, null);
+        } catch (IOException | RuntimeException e) {
+            return Map.of();
+        }
+        return docs;
+    }
+
+    /// Puts the comments where they belong. `path` is the type as it is written
+    /// inside its file — `TypeInfo.Kind` for a nested type.
+    public static TypeInfo attach(TypeInfo type, Map<String, Comment> docs, String path) {
+        if (docs.isEmpty()) return type;
+        var here = docs.getOrDefault(path, Comment.NONE);
+        return type.documented(
+                here.doc(),
+                here.tags(),
+                type.methods().stream().map(method -> documented(method, find(docs, path, method))).toList(),
+                type.fields().stream()
+                        .map(field -> documented(field, docs.getOrDefault(path + "#" + field.name(), Comment.NONE)))
+                        .toList());
+    }
+
+    private static TypeInfo.Method documented(TypeInfo.Method method, Comment comment) {
+        return method.documented(comment.doc(), comment.tags()).named(comment.parameters());
+    }
+
+    private static TypeInfo.Field documented(TypeInfo.Field field, Comment comment) {
+        return field.documented(comment.doc(), comment.tags());
+    }
+
+    /// Matches on erased parameter types, and falls back to the name alone when
+    /// there is only one method with it — spelling differs between source and
+    /// class file more often than arity does.
+    private static Comment find(Map<String, Comment> docs, String path, TypeInfo.Method method) {
+        var name = method.constructor() ? "<init>" : method.name();
+        var exact = docs.get(path + "#" + signature(name, method.parameters().stream().map(TypeInfo.Parameter::type).toList()));
+        if (exact != null) return exact;
+        var prefix = path + "#" + name + "(";
+        var candidates = docs.entrySet().stream()
+                .filter(doc -> doc.getKey().startsWith(prefix))
+                .map(Map.Entry::getValue)
+                .toList();
+        return candidates.size() == 1 ? candidates.getFirst() : Comment.NONE;
+    }
+
+    /// `@param`, `@return`, `@throws` and the rest, in the order they were
+    /// written. Tags nobody has a use for are left out rather than guessed at.
+    private static List<TypeInfo.Tag> tags(List<? extends DocTree> blocks) {
+        var tags = new ArrayList<TypeInfo.Tag>();
+        for (var block : blocks) {
+            switch (block) {
+                case ParamTree tree -> tags.add(tag("param", parameter(tree), flatten(tree.getDescription())));
+                case ReturnTree tree -> tags.add(tag("return", "", flatten(tree.getDescription())));
+                case ThrowsTree tree -> tags.add(tag(tree.getTagName(), reference(tree), flatten(tree.getDescription())));
+                case SeeTree tree -> tags.add(tag("see", "", flatten(tree.getReference())));
+                case SinceTree tree -> tags.add(tag("since", "", flatten(tree.getBody())));
+                case DeprecatedTree tree -> tags.add(tag("deprecated", "", flatten(tree.getBody())));
+                case UnknownBlockTagTree tree -> tags.add(tag(tree.getTagName(), "", flatten(tree.getContent())));
+                default -> {}
+            }
+        }
+        return List.copyOf(tags);
+    }
+
+    private static TypeInfo.Tag tag(String tag, String name, String text) {
+        return new TypeInfo.Tag(tag, name, text);
+    }
+
+    /// A type parameter keeps its angle brackets, so `@param <T>` cannot be
+    /// mistaken for a parameter named T.
+    private static String parameter(ParamTree tree) {
+        return tree.isTypeParameter() ? "<" + tree.getName() + ">" : tree.getName().toString();
+    }
+
+    private static String reference(ThrowsTree tree) {
+        return tree.getExceptionName() == null ? "" : tree.getExceptionName().getSignature();
+    }
+
+    private static String signature(String name, List<String> types) {
+        return name + "(" + types.stream().map(Javadoc::erase).collect(Collectors.joining(",")) + ")";
+    }
+
+    /// `java.util.List<? extends T>` and `List<T>` are the same parameter as far
+    /// as a doc comment is concerned; so are `T...` and `T[]`.
+    private static String erase(String type) {
+        var erased = ANNOTATIONS.matcher(type).replaceAll("");
+        while (true) {
+            var next = GENERICS.matcher(erased).replaceAll("");
+            if (next.equals(erased)) break;
+            erased = next;
+        }
+        return QUALIFIERS.matcher(erased.replace("...", "[]").replaceAll("\\s+", "")).replaceAll("");
+    }
+
+    /// Flattens doc markup to the text a reader would see: `{@code x}` becomes
+    /// x, `{@link Foo}` becomes Foo, HTML becomes a space, and a markdown
+    /// comment — the `///` kind this project writes — keeps its text without
+    /// the link brackets and backticks.
+    private static String flatten(List<? extends DocTree> parts) {
+        var text = new StringBuilder();
+        for (var part : parts) {
+            switch (part) {
+                case TextTree tree -> text.append(tree.getBody().replaceAll("\\s+", " "));
+                case LiteralTree tree -> text.append(tree.getBody().getBody());
+                case LinkTree tree -> text.append(reference(tree));
+                case EntityTree tree -> text.append(entity(tree));
+                case RawTextTree tree -> text.append(markdown(tree.getContent()));
+                default -> text.append(' ');
+            }
+        }
+        return text.toString()
+                .strip()
+                .replaceAll("(?<=\\S)[ \t]{2,}", " ")
+                .replaceAll("[ \t]+\n", "\n")
+                .replaceAll("\n{3,}", "\n\n");
+    }
+
+    private static String reference(LinkTree tree) {
+        if (tree.getReference() == null) return "";
+        var signature = tree.getReference().getSignature();
+        return signature.startsWith("#") ? signature.substring(1) : signature;
+    }
+
+    /// Markdown comments keep their line structure — an example in a doc
+    /// comment is worth more with its line breaks than without.
+    private static String markdown(String text) {
+        return FENCES.matcher(LINKS.matcher(text).replaceAll("$1").replace("`", "")).replaceAll("");
+    }
+
+    private static String entity(EntityTree tree) {
+        var name = tree.getName().toString();
+        return switch (name) {
+            case "lt" -> "<";
+            case "gt" -> ">";
+            case "amp" -> "&";
+            case "quot" -> "\"";
+            case "nbsp" -> " ";
+            default -> name.startsWith("#") ? String.valueOf((char) Integer.parseInt(name.substring(1))) : "";
+        };
+    }
+
+    /// Walks the declarations, not the code: method bodies hold nothing worth
+    /// documenting.
+    private static final class Walk extends TreePathScanner<Void, Void> {
+
+        private final DocTrees trees;
+        private final Map<String, Comment> docs;
+        private final Deque<String> enclosing = new ArrayDeque<>();
+
+        private Walk(DocTrees trees, Map<String, Comment> docs) {
+            this.trees = trees;
+            this.docs = docs;
+        }
+
+        @Override
+        public Void visitClass(ClassTree node, Void ignored) {
+            if (node.getSimpleName().isEmpty()) return null;
+            enclosing.addLast(node.getSimpleName().toString());
+            put(String.join(".", enclosing), List.of());
+            var scanned = super.visitClass(node, ignored);
+            enclosing.removeLast();
+            return scanned;
+        }
+
+        @Override
+        public Void visitMethod(MethodTree node, Void ignored) {
+            var types = node.getParameters().stream().map(parameter -> parameter.getType().toString()).toList();
+            var names = node.getParameters().stream().map(parameter -> parameter.getName().toString()).toList();
+            put(String.join(".", enclosing) + "#" + signature(node.getName().toString(), types), names);
+            return null;
+        }
+
+        @Override
+        public Void visitVariable(VariableTree node, Void ignored) {
+            if (getCurrentPath().getParentPath().getLeaf() instanceof ClassTree) {
+                put(String.join(".", enclosing) + "#" + node.getName(), List.of());
+            }
+            return null;
+        }
+
+        private void put(String key, List<String> parameters) {
+            var comment = trees.getDocCommentTree(getCurrentPath());
+            var doc = comment == null
+                    ? new Comment("", List.of(), parameters)
+                    : new Comment(flatten(comment.getFullBody()), tags(comment.getBlockTags()), parameters);
+            if (!doc.empty()) docs.put(key, doc);
+        }
+    }
+
+    /// Source held in memory, wherever it came from: a file, a zip entry, a
+    /// pipe.
+    private static final class Text extends SimpleJavaFileObject {
+
+        private final String source;
+
+        private Text(String name, String source) {
+            super(URI.create("source:///" + name), JavaFileObject.Kind.SOURCE);
+            this.source = source;
+        }
+
+        @Override
+        public CharSequence getCharContent(boolean ignoreEncodingErrors) {
+            return source;
+        }
+    }
+}

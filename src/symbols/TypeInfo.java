@@ -1,0 +1,110 @@
+package symbols;
+
+import java.util.ArrayList;
+import java.util.List;
+import java.util.Locale;
+
+/// What a class file says about a type: what it is, what it extends, and what
+/// it declares. Names are fully qualified — shortening them is a rendering
+/// decision, not a fact about the symbol.
+public record TypeInfo(
+        String name,
+        Kind kind,
+        List<String> modifiers,
+        List<String> typeParameters,
+        String superclass,
+        List<String> interfaces,
+        List<Method> methods,
+        List<Field> fields,
+        String doc,
+        List<Tag> tags) {
+
+    public enum Kind {
+        CLASS, INTERFACE, RECORD, ENUM, ANNOTATION;
+
+        /// How the type would be written in source.
+        public String keyword() {
+            return this == ANNOTATION ? "@interface" : name().toLowerCase(Locale.ROOT);
+        }
+    }
+
+    /// A block tag out of a doc comment: `@param id the invoice number` is the
+    /// tag `param`, the name `id` and the rest as text. `@return` and the other
+    /// nameless tags leave the name empty.
+    public record Tag(String tag, String name, String text) {
+
+        public String line() {
+            return ("@" + tag + " " + name).strip() + (text.isEmpty() ? "" : " " + text);
+        }
+    }
+
+    /// One parameter. The name is there when the class file was compiled with
+    /// `-parameters`, and empty when it was not.
+    public record Parameter(String type, String name) {
+
+        public String text() {
+            return name.isEmpty() ? type : type + " " + name;
+        }
+    }
+
+    /// A method or a constructor. Constructors carry the simple type name and
+    /// an empty return type, the way they are written.
+    public record Method(String name, String returns, List<Parameter> parameters, List<String> modifiers, String doc, List<Tag> tags) {
+
+        public String signature() {
+            var parameters_ = parameters.stream().map(Parameter::text).toList();
+            return (returns.isEmpty() ? "" : returns + " ") + name + "(" + String.join(", ", parameters_) + ")";
+        }
+
+        public boolean constructor() {
+            return returns.isEmpty();
+        }
+
+        public boolean api() {
+            return modifiers.contains("public") || modifiers.contains("protected");
+        }
+
+        public Method documented(String doc, List<Tag> tags) {
+            return new Method(name, returns, parameters, modifiers, doc, tags);
+        }
+
+        /// Names the parameters from the source, for the class files that were
+        /// compiled without `-parameters` — which is most jars, and the JDK.
+        public Method named(List<String> names) {
+            if (names.size() != parameters.size()) return this;
+            if (parameters.stream().noneMatch(parameter -> parameter.name().isEmpty())) return this;
+            var named = new ArrayList<Parameter>();
+            for (var i = 0; i < names.size(); i++) named.add(new Parameter(parameters.get(i).type(), names.get(i)));
+            return new Method(name, returns, List.copyOf(named), modifiers, doc, tags);
+        }
+    }
+
+    public record Field(String name, String type, List<String> modifiers, String doc, List<Tag> tags) {
+
+        public String signature() {
+            return type + " " + name;
+        }
+
+        public boolean api() {
+            return modifiers.contains("public") || modifiers.contains("protected");
+        }
+
+        public Field documented(String doc, List<Tag> tags) {
+            return new Field(name, type, modifiers, doc, tags);
+        }
+    }
+
+    /// `class invoicing.Invoice<T>` — the head of the declaration.
+    public String declaration() {
+        var parameters = typeParameters.isEmpty() ? "" : "<" + String.join(", ", typeParameters) + ">";
+        return kind.keyword() + " " + name + parameters;
+    }
+
+    public String simpleName() {
+        return name.substring(name.lastIndexOf('.') + 1);
+    }
+
+    public TypeInfo documented(String doc, List<Tag> tags, List<Method> methods, List<Field> fields) {
+        return new TypeInfo(name, kind, modifiers, typeParameters, superclass, interfaces, methods, fields, doc, tags);
+    }
+}

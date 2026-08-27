@@ -1,0 +1,112 @@
+package application;
+
+import harness.Check;
+import java.util.ArrayList;
+import java.util.List;
+import java.util.concurrent.atomic.AtomicInteger;
+import json.Json;
+
+public final class ApplicationTest {
+
+    private ApplicationTest() {}
+
+    public static void run() {
+        wiring();
+        loops();
+        failsOpen();
+        concurrent();
+        composes();
+    }
+
+    /// Define the messages, define the effects, dispatch.
+    private static void wiring() {
+        var written = new ArrayList<String>();
+        var app = Application.<Integer>of(0)
+                .on("add", (state, message) -> Step.of(state + 1, Effect.of("log").with("line", "now " + (state + 1))))
+                .effect("log", (effect, _) -> written.add(effect.string("line", "")));
+
+        Check.equal("dispatch returns the new state", 2, app.dispatch(Message.of("add"), Message.of("add")));
+        Check.equal("the state stays between dispatches", 2, app.state());
+        Check.equal("effects reached their handler", List.of("now 1", "now 2"), written);
+        Check.equal("unknown messages are ignored", 2, app.dispatch(Message.of("nothing anyone handles")));
+    }
+
+    /// An effect emits a message, which updates the state, which asks for
+    /// another effect. The loop is over when nothing is pending.
+    private static void loops() {
+        var app = Application.<Integer>of(3)
+                .on("tick", (state, message) -> state == 0 ? Step.of(state) : Step.of(state - 1, Effect.send(Message.of("tick"))));
+        Check.equal("the loop runs to a standstill", 0, app.dispatch(Message.of("tick")));
+    }
+
+    private static void failsOpen() {
+        var app = Application.<List<String>>of(List.of())
+                .on("boom", (state, message) -> {
+                    throw new IllegalStateException("no");
+                })
+                .on("ask", (state, message) -> Step.of(state, Effect.of("broken")))
+                .on("astray", (state, message) -> Step.of(state, Effect.of("nobody.handles.this")))
+                .on("error", (state, message) -> Step.of(concat(state, "error:" + message.string("reason", ""))))
+                .effect("broken", (effect, _) -> {
+                    throw new IllegalStateException("effect failed");
+                });
+
+        Check.equal("a throwing update is reported as a message",
+                List.of("error:no"), app.dispatch(Message.of("boom")));
+        Check.equal("a throwing handler is reported too",
+                List.of("error:no", "error:effect failed"), app.dispatch(Message.of("ask")));
+        Check.equal("an effect nobody handles is reported, not swallowed",
+                List.of("error:no", "error:effect failed", "error:no handler for effect: nobody.handles.this"),
+                app.dispatch(Message.of("astray")));
+
+        var broken = Application.<Integer>of(0).on("error", (state, message) -> {
+            throw new IllegalStateException("still no");
+        });
+        Check.equal("an error about an error does not loop", 0, broken.dispatch(Message.of("error")));
+    }
+
+    /// The effects of one step run together, and the step is over only when all
+    /// of them are.
+    private static void concurrent() {
+        var running = new AtomicInteger();
+        var peak = new AtomicInteger();
+        var app = Application.<Integer>of(0)
+                .on("start", (state, message) -> new Step<>(state, List.of(Effect.of("slow"), Effect.of("slow"), Effect.of("slow"))))
+                .on("done", (state, message) -> Step.of(state + 1))
+                .effect("slow", (effect, emit) -> {
+                    peak.accumulateAndGet(running.incrementAndGet(), Math::max);
+                    Thread.sleep(50);
+                    running.decrementAndGet();
+                    emit.emit(Message.of("done"));
+                });
+        Check.equal("every effect reported back", 3, app.dispatch(Message.of("start")));
+        Check.that("effects of a step run at the same time", peak.get() > 1);
+    }
+
+    private static void composes() {
+        Check.equal("two handlers for one message both run", 2,
+                Application.<Integer>of(0)
+                        .on("add", (state, message) -> Step.of(state + 1))
+                        .on("add", (state, message) -> Step.of(state + 1))
+                        .dispatch(Message.of("add")));
+
+        var counter = Application.<Integer>of(0)
+                .on("add", (state, message) -> Step.of(state + 1, Effect.of("count.log")))
+                .effect("count.log", (effect, _) -> {});
+
+        var host = Application.of(Json.Object.of().with("count", 0))
+                .include(counter,
+                        whole -> (int) ((Json.Num) whole.get("count")).value(),
+                        (whole, count) -> whole.with("count", count));
+
+        Check.equal("an included application updates its part of the state",
+                "{\"count\":2}",
+                host.dispatch(Message.of("add"), Message.of("add")).text());
+    }
+
+    private static List<String> concat(List<String> state, String line) {
+        var next = new ArrayList<>(state);
+        next.add(line);
+        return next;
+    }
+}

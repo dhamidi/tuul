@@ -1,0 +1,14 @@
+# Build output — everything here is reproducible from src/ and test/.
+build/
+
+# vendor/ is deliberately *not* ignored: the directory is the dependency
+# manifest, so a fresh clone builds without touching the network.
+
+# Editors and OS noise.
+.DS_Store
+.idea/
+.vscode/
+*.swp
+
+# Stray compiles outside build/.
+*.class

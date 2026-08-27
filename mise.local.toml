@@ -1,0 +1,33 @@
+# How tuul builds tuul. Toolchain lives in mise.toml.
+#
+# Structured concurrency is still a preview API on this JDK, so both javac and
+# java need --enable-preview. That is the price of one modern JDK.
+
+[tasks.build]
+description = "Compile src/ into build/classes"
+run = '''
+set -euo pipefail
+release=$(javac --version | cut -d' ' -f2 | cut -d. -f1)
+mkdir -p build/classes
+javac --enable-preview --release "$release" -nowarn -d build/classes $(find src -name '*.java')
+'''
+
+[tasks.test]
+description = "Compile and run everything under test/"
+depends = ["build"]
+run = '''
+set -euo pipefail
+release=$(javac --version | cut -d' ' -f2 | cut -d. -f1)
+mkdir -p build/test
+javac --enable-preview --release "$release" -nowarn -cp build/classes -d build/test $(find test -name '*.java')
+java --enable-preview -cp build/classes:build/test run
+'''
+
+[tasks.tuul]
+description = "Run the cli, e.g. mise run tuul -- docs json.Json"
+depends = ["build"]
+run = 'java --enable-preview -cp build/classes main'
+
+[tasks.clean]
+description = "Remove build output"
+run = 'rm -rf build'
