@@ -5,6 +5,8 @@ import harness.Check;
 void main() throws Exception {
     json.JsonTest.run();
     application.ApplicationTest.run();
+    peg.PegTest.run();
+    argparse.ArgparseTest.run();
     symbols.SymbolsTest.run();
     project.ProjectTest.run();
     sqlite3.SqliteTest.run();
