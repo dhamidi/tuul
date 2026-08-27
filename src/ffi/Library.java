@@ -4,6 +4,7 @@ import java.io.File;
 import java.lang.foreign.Arena;
 import java.lang.foreign.FunctionDescriptor;
 import java.lang.foreign.Linker;
+import java.lang.foreign.MemoryLayout;
 import java.lang.foreign.SymbolLookup;
 import java.lang.invoke.MethodHandle;
 import java.nio.file.Files;
@@ -51,6 +52,24 @@ public final class Library {
         var symbol = lookup.find(function)
                 .orElseThrow(() -> new UnsatisfiedLinkError(name + " has no function named " + function));
         return LINKER.downcallHandle(symbol, descriptor);
+    }
+
+    /// The same handle, or null when this build of the library does not export
+    /// the function — which is the normal case for a binding generated against
+    /// a header with more in it than the build has.
+    public MethodHandle optional(String function, FunctionDescriptor descriptor) {
+        return lookup.find(function).map(symbol -> LINKER.downcallHandle(symbol, descriptor)).orElse(null);
+    }
+
+    /// A call site for a variadic function. C decides nothing here: the caller
+    /// names the layouts of the arguments it is about to pass.
+    public MethodHandle variadic(String function, FunctionDescriptor fixed, MemoryLayout... variadic) {
+        var symbol = lookup.find(function)
+                .orElseThrow(() -> new UnsatisfiedLinkError(name + " has no function named " + function));
+        return LINKER.downcallHandle(
+                symbol,
+                fixed.appendArgumentLayouts(variadic),
+                Linker.Option.firstVariadicArg(fixed.argumentLayouts().size()));
     }
 
     public boolean has(String function) {

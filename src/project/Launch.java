@@ -35,6 +35,21 @@ public final class Launch {
         return process.waitFor();
     }
 
+    /// Runs a command and captures only what it writes to stdout — for the
+    /// programs whose output is data rather than conversation. Anything they
+    /// say on stderr goes to the console, where a complaint belongs.
+    public static int capture(List<String> command, Path directory, Writer out) throws IOException, InterruptedException {
+        var process = new ProcessBuilder(command)
+                .directory(directory.toFile())
+                .redirectError(ProcessBuilder.Redirect.INHERIT)
+                .start();
+        try (var output = new InputStreamReader(process.getInputStream(), StandardCharsets.UTF_8)) {
+            var buffer = new char[8192];
+            for (var read = output.read(buffer); read >= 0; read = output.read(buffer)) out.write(buffer, 0, read);
+        }
+        return process.waitFor();
+    }
+
     /// A command line for the JVM tuul is running on. Native access is enabled
     /// because a project is expected to bind to its own C, and a warning on
     /// every run is not a thing anyone should have to read.

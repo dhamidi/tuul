@@ -1,4 +1,4 @@
-package sqlite;
+package sqlite3;
 
 /// Something SQLite refused to do, in its own words.
 public final class SqliteException extends RuntimeException {

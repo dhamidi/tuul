@@ -59,7 +59,7 @@ public final class Native {
         var command = new ArrayList<>(List.of(compiler(), "cc", "-shared", "-fPIC", "-O2", "-o", library.toString()));
         if (compiler().equals("cc")) command.remove(1);
         sources.forEach(source -> command.add(source.toString()));
-        command.addAll(flags(layout, module, sources));
+        command.addAll(flags(sources.getFirst().getParent()));
 
         var output = new StringWriter();
         var status = Launch.run(command, layout.root(), output);
@@ -70,7 +70,7 @@ public final class Native {
 
     /// `zig cc` where zig is on the path, and the system compiler where it is
     /// not — a project should still build on a machine that has only cc.
-    private static String compiler() {
+    static String compiler() {
         var path = System.getenv("PATH");
         if (path == null) return "cc";
         for (var directory : path.split(":")) {
@@ -79,8 +79,8 @@ public final class Native {
         return "cc";
     }
 
-    private static List<String> flags(Layout layout, String module, List<Path> sources) throws IOException {
-        var directory = sources.getFirst().getParent();
+    /// The arguments beside the sources, if there are any.
+    static List<String> flags(Path directory) throws IOException {
         var file = directory.resolve(FLAGS);
         if (!Files.isRegularFile(file)) return List.of();
         return Files.readAllLines(file).stream()
@@ -98,16 +98,19 @@ public final class Native {
         for (var source : sources) {
             if (Files.getLastModifiedTime(source).toMillis() > built) return true;
         }
-        var headers = sources.getFirst().getParent();
-        if (!Files.isDirectory(headers)) return false;
-        try (var tree = Files.walk(headers)) {
+        var directory = sources.getFirst().getParent();
+        if (!Files.isDirectory(directory)) return false;
+        if (newer(directory.resolve(FLAGS), built)) return true;
+        try (var tree = Files.walk(directory)) {
             return tree.filter(path -> path.toString().endsWith(".h")).anyMatch(header -> newer(header, built));
         }
     }
 
+    /// A missing file is not newer than anything; a changed one is.
+
     private static boolean newer(Path path, long than) {
         try {
-            return Files.getLastModifiedTime(path).toMillis() > than;
+            return Files.isRegularFile(path) && Files.getLastModifiedTime(path).toMillis() > than;
         } catch (IOException e) {
             return true;
         }

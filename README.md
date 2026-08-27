@@ -19,10 +19,10 @@ It borrows:
 > parser and serializer), `application` (the Elm Architecture runtime from
 > [ARCHITECTURE.md](./ARCHITECTURE.md)), `symbols` (javac compiles a source
 > tree in memory; the JDK's class file parser reads the symbols back out),
-> `project` (scaffold, build, launch), `ffi` (shared libraries and downcall
-> handles) and `sqlite` (a binding to the SQLite amalgamation vendored in
-> `native/sqlite3`, built by `tuul build` and called through
-> `java.lang.foreign`).
+> `project` (scaffold, build, launch), `ffi` (shared libraries, downcall
+> handles, and a C header reader) and `sqlite3` (the whole SQLite C API —
+> 296 functions and 474 constants — generated from the amalgamation vendored
+> in `native/sqlite3` by `tuul bind`, with a small typed layer over it).
 >
 > `tuul docs` answers for your code, for the jars in `vendor/`, and for the
 > JDK itself, with doc comments and their `@param`/`@return`/`@throws` tags

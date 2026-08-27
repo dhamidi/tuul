@@ -1,4 +1,4 @@
-package sqlite;
+package sqlite3;
 
 import static java.lang.foreign.ValueLayout.ADDRESS;
 
@@ -7,6 +7,10 @@ import java.lang.foreign.MemorySegment;
 import java.nio.file.Path;
 
 /// A SQLite database, bound straight to the amalgamation in `native/sqlite3`.
+///
+/// This is the comfortable way in. [Api] is the whole C API underneath it,
+/// generated from `sqlite3.h`, and anything this class does not cover can be
+/// done there with the same handle.
 ///
 /// ```
 /// try (var database = Database.memory()) {
@@ -30,12 +34,13 @@ public final class Database implements AutoCloseable {
     private Database(String name) {
         this.name = name;
         var out = arena.allocate(ADDRESS);
-        var status = Sqlite.open(arena.allocateFrom(name), out, Sqlite.OPEN_READWRITE | Sqlite.OPEN_CREATE);
+        var status = Api.sqlite3_open_v2(
+                arena.allocateFrom(name), out, Api.SQLITE_OPEN_READWRITE | Api.SQLITE_OPEN_CREATE, MemorySegment.NULL);
         handle = out.get(ADDRESS, 0);
-        if (status == Sqlite.OK) return;
+        if (status == Api.SQLITE_OK) return;
 
-        var reason = handle.equals(MemorySegment.NULL) ? "out of memory" : Sqlite.message(handle);
-        Sqlite.close(handle);
+        var reason = handle.equals(MemorySegment.NULL) ? "out of memory" : message();
+        Api.sqlite3_close_v2(handle);
         arena.close();
         throw new SqliteException("cannot open " + name + ": " + reason, status);
     }
@@ -52,7 +57,7 @@ public final class Database implements AutoCloseable {
     /// The version of SQLite that is actually loaded, which is the only version
     /// worth reporting.
     public static String version() {
-        return Sqlite.version();
+        return Values.string(Api.sqlite3_libversion());
     }
 
     /// Runs a statement and answers with the number of rows it changed. Rows it
@@ -73,11 +78,11 @@ public final class Database implements AutoCloseable {
     }
 
     public long changes() {
-        return Sqlite.changes(handle);
+        return Api.sqlite3_changes(handle);
     }
 
     public long lastId() {
-        return Sqlite.lastId(handle);
+        return Api.sqlite3_last_insert_rowid(handle);
     }
 
     public String name() {
@@ -88,15 +93,17 @@ public final class Database implements AutoCloseable {
     public void close() {
         if (!open) return;
         open = false;
-        Sqlite.close(handle);
+        Api.sqlite3_close_v2(handle);
         arena.close();
     }
 
-    MemorySegment handle() {
+    /// The `sqlite3*` this object holds, for the calls [Api] has and this
+    /// class does not.
+    public MemorySegment handle() {
         return handle;
     }
 
     String message() {
-        return Sqlite.message(handle);
+        return Values.string(Api.sqlite3_errmsg(handle));
     }
 }

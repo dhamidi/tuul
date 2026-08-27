@@ -35,9 +35,24 @@ int run(List<String> args, Writer out, Writer err) throws IOException {
         case "run" -> manage(started(rest), out, err);
         case "test" -> manage(Message.of("project.test"), out, err);
         case "self-test" -> manage(Message.of("project.selftest"), out, err);
+        case "bind" -> manage(bound(rest), out, err);
         case "help", "-h", "--help" -> usage(out);
         default -> ask(Message.error("unknown command: " + args.getFirst()), out, err);
     };
+}
+
+/// `tuul bind <module> [--package <name>] [--class <name>]` — generate a Java
+/// binding for a native module from its header.
+Message bound(List<String> args) {
+    var message = Message.of("project.bind");
+    for (var i = 0; i < args.size(); i++) {
+        var arg = args.get(i);
+        if (arg.equals("--package") && i + 1 < args.size()) message = message.with("package", args.get(++i));
+        else if (arg.equals("--class") && i + 1 < args.size()) message = message.with("class", args.get(++i));
+        else if (arg.startsWith("-")) return Message.error("unknown option: " + arg);
+        else message = message.with("module", arg);
+    }
+    return message;
 }
 
 /// `tuul run [entrypoint] -- <arguments>` — everything after `--` belongs to
@@ -106,6 +121,7 @@ int usage(Writer out) throws IOException {
               tuul run [entry] -- <args>     run an entrypoint, arguments and all
               tuul test                      compile and run test/
               tuul docs <symbol> [options]   describe a type from the project, vendor/ or the JDK
+              tuul bind <module>             generate a Java binding for a native module
               tuul self-test                 build a project in a temporary directory and exercise tuul on it
               tuul message                   run one JSON message read from stdin
               tuul help                      this

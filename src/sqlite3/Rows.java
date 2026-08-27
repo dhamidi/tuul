@@ -1,4 +1,4 @@
-package sqlite;
+package sqlite3;
 
 import static java.lang.foreign.ValueLayout.ADDRESS;
 import static java.lang.foreign.ValueLayout.JAVA_BYTE;
@@ -24,9 +24,9 @@ public final class Rows implements AutoCloseable {
     Rows(Database database, String sql, Object... parameters) {
         this.database = database;
         var out = arena.allocate(ADDRESS);
-        var status = Sqlite.prepare(database.handle(), arena.allocateFrom(sql), out);
+        var status = Api.sqlite3_prepare_v2(database.handle(), arena.allocateFrom(sql), -1, out, MemorySegment.NULL);
         statement = out.get(ADDRESS, 0);
-        if (status != Sqlite.OK) {
+        if (status != Api.SQLITE_OK) {
             var reason = database.message();
             arena.close();
             throw new SqliteException(reason + ": " + sql, status);
@@ -36,18 +36,24 @@ public final class Rows implements AutoCloseable {
 
     /// Moves to the next row, and answers whether there is one.
     public boolean next() {
-        var status = Sqlite.step(statement);
-        if (status == Sqlite.ROW) return true;
-        if (status == Sqlite.DONE) return false;
+        var status = Api.sqlite3_step(statement);
+        if (status == Api.SQLITE_ROW) return true;
+        if (status == Api.SQLITE_DONE) return false;
         throw new SqliteException(database.message(), status);
     }
 
+    /// The `sqlite3_stmt*` this cursor holds, for the calls [Api] has and this
+    /// class does not.
+    public MemorySegment statement() {
+        return statement;
+    }
+
     public int columns() {
-        return Sqlite.columns(statement);
+        return Api.sqlite3_column_count(statement);
     }
 
     public String name(int column) {
-        return Sqlite.columnName(statement, column);
+        return Values.string(Api.sqlite3_column_name(statement, column));
     }
 
     /// The index of a named column, so a query can be read by name without the
@@ -60,7 +66,7 @@ public final class Rows implements AutoCloseable {
     }
 
     public Type type(int column) {
-        return Type.of(Sqlite.columnType(statement, column));
+        return Type.of(Api.sqlite3_column_type(statement, column));
     }
 
     public boolean isNull(int column) {
@@ -68,19 +74,19 @@ public final class Rows implements AutoCloseable {
     }
 
     public String text(int column) {
-        return Sqlite.columnText(statement, column);
+        return Values.string(Api.sqlite3_column_text(statement, column), Api.sqlite3_column_bytes(statement, column));
     }
 
     public long integer(int column) {
-        return Sqlite.columnInteger(statement, column);
+        return Api.sqlite3_column_int64(statement, column);
     }
 
     public double real(int column) {
-        return Sqlite.columnReal(statement, column);
+        return Api.sqlite3_column_double(statement, column);
     }
 
     public byte[] blob(int column) {
-        return Sqlite.columnBlob(statement, column);
+        return Values.bytes(Api.sqlite3_column_blob(statement, column), Api.sqlite3_column_bytes(statement, column));
     }
 
     public String text(String column) {
@@ -115,7 +121,7 @@ public final class Rows implements AutoCloseable {
     public void close() {
         if (!open) return;
         open = false;
-        Sqlite.finish(statement);
+        Api.sqlite3_finalize(statement);
         arena.close();
     }
 
@@ -128,15 +134,17 @@ public final class Rows implements AutoCloseable {
     /// Binds one parameter, taking the SQLite type from the Java one.
     private void bind(int parameter, Object value) {
         var status = switch (value) {
-            case null -> Sqlite.bindNull(statement, parameter);
-            case String text -> Sqlite.bindText(statement, parameter, arena.allocateFrom(text), -1);
-            case byte[] bytes -> Sqlite.bindBlob(statement, parameter, arena.allocateFrom(JAVA_BYTE, bytes), bytes.length);
-            case Boolean flag -> Sqlite.bindInteger(statement, parameter, flag ? 1 : 0);
-            case Float number -> Sqlite.bindReal(statement, parameter, number);
-            case Double number -> Sqlite.bindReal(statement, parameter, number);
-            case Number number -> Sqlite.bindInteger(statement, parameter, number.longValue());
+            case null -> Api.sqlite3_bind_null(statement, parameter);
+            case String text -> Api.sqlite3_bind_text(
+                    statement, parameter, arena.allocateFrom(text), -1, Values.TRANSIENT);
+            case byte[] bytes -> Api.sqlite3_bind_blob(
+                    statement, parameter, arena.allocateFrom(JAVA_BYTE, bytes), bytes.length, Values.TRANSIENT);
+            case Boolean flag -> Api.sqlite3_bind_int64(statement, parameter, flag ? 1 : 0);
+            case Float number -> Api.sqlite3_bind_double(statement, parameter, number);
+            case Double number -> Api.sqlite3_bind_double(statement, parameter, number);
+            case Number number -> Api.sqlite3_bind_int64(statement, parameter, number.longValue());
             default -> throw new SqliteException("cannot bind a " + value.getClass().getName(), -1);
         };
-        if (status != Sqlite.OK) throw new SqliteException(database.message(), status);
+        if (status != Api.SQLITE_OK) throw new SqliteException(database.message(), status);
     }
 }

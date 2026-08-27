@@ -32,6 +32,8 @@ public final class App {
                 .on("project.run", App::run)
                 .on("project.test", App::test)
                 .on("project.selftest", App::selftest)
+                .on("project.bind", App::bind)
+                .on("project.bound", App::bound)
                 .on("project.created", App::created)
                 .on("project.native.built", App::compiled)
                 .on("project.built", App::built)
@@ -44,6 +46,7 @@ public final class App {
                 .effect("project.launch", (effect, emit) -> launch(effect, emit, out))
                 .effect("project.launch.tests", (effect, emit) -> launchTests(effect, emit, out))
                 .effect("project.selftest", App::selfTest)
+                .effect("project.bind", App::generate)
                 .effect("project.report", (effect, _) -> write(effect, out))
                 .effect("project.problem", (effect, _) -> write(effect, err));
     }
@@ -107,6 +110,27 @@ public final class App {
 
     private static Step<State> exited(State state, Message message) {
         return Step.of(state.exited((int) number(message, "status")));
+    }
+
+    private static Step<State> bind(State state, Message message) {
+        var module = message.string("module", "");
+        if (module.isEmpty()) return Step.of(state.failed(), problem("tuul bind needs the name of a native module"));
+        return Step.of(state, Effect.of("project.bind")
+                .with("directory", where(state))
+                .with("module", module)
+                .with("package", message.string("package", module))
+                .with("class", message.string("class", "Api")));
+    }
+
+    private static Step<State> bound(State state, Message message) {
+        var skipped = message.list("skipped");
+        var text = new StringBuilder("bound " + (long) number(message, "functions") + " functions and "
+                + (long) number(message, "constants") + " constants from "
+                + message.string("header", "") + "\n  " + message.string("output", ""));
+        for (var declaration : skipped) {
+            if (declaration instanceof Json.Str(var written)) text.append("\n  skipped ").append(written);
+        }
+        return Step.of(state, report(text.toString()));
     }
 
     private static Step<State> selftest(State state, Message message) {
@@ -191,6 +215,17 @@ public final class App {
     private static void start(List<String> command, Layout layout, Effect.Emitter emit, Writer out) throws Exception {
         var status = Launch.run(command, layout.root(), out);
         emit.emit(Message.of("project.exited").with("status", Json.of(status)));
+    }
+
+    private static void generate(Effect effect, Effect.Emitter emit) throws Exception {
+        var layout = new Layout(Path.of(effect.string("directory", ".")));
+        var result = Bind.generate(layout, effect.string("module", ""), effect.string("package", ""), effect.string("class", "Api"));
+        emit.emit(Message.of("project.bound")
+                .with("header", result.header().toString())
+                .with("output", result.output().toString())
+                .with("functions", Json.of(result.functions()))
+                .with("constants", Json.of(result.constants()))
+                .with("skipped", Json.Array.strings(result.skipped())));
     }
 
     private static void selfTest(Effect effect, Effect.Emitter emit) throws Exception {

@@ -1,4 +1,4 @@
-package sqlite;
+package sqlite3;
 
 /// What SQLite says a value in a column actually is. A column has no type of
 /// its own worth trusting — a value does.
