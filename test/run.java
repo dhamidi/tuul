@@ -9,6 +9,7 @@ void main() throws Exception {
     argparse.ArgparseTest.run();
     symbols.SymbolsTest.run();
     symbols.StoreTest.run();
+    ffi.PlatformTest.run();
     project.ProjectTest.run();
     sqlite3.SqliteTest.run();
     sqlite3.ApiTest.run();

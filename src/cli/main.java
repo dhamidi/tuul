@@ -61,7 +61,8 @@ Command tuul() {
                     .optional("entrypoint", "which entrypoint (default: cli)")
                     .passthrough("arguments", "what to pass to the application"))
             .command(Command.named("test", "compile and run test/"))
-            .command(Command.named("install", "vendor tuul into this project, libraries and all"))
+            .command(Command.named("install", "vendor tuul into this project, libraries and all")
+                    .flag("source", "vendor the C to compile instead of prebuilt libraries"))
             .command(docs)
             .command(Command.named("bind", "generate a Java binding for a native module")
                     .value("package", "the package to write it into (default: the module)")
@@ -86,11 +87,18 @@ int dispatch(Parsed.Values parsed, Writer out, Writer err) throws IOException {
         case "self-test" -> manage(Message.of("project.selftest", values), out, err);
         case "install" -> manage(Message.of("project.install", values), out, err);
         case "docs" -> ask(docs(values), out, err);
-        case "message" -> ask(stdin(), out, err);
+        case "message" -> deliver(stdin(), out, err);
         case "help" -> help("tuul", tuul(), out);
         case "tuul" -> values.flag("version") ? announce(out) : help(parsed.path(), parsed.command(), out);
         default -> help(parsed.path(), parsed.command(), out);
     };
+}
+
+/// A message read from stdin goes to whichever application handles its type,
+/// so `tuul message` reaches all of tuul rather than the half of it `docs`
+/// happens to be.
+int deliver(Message message, Writer out, Writer err) {
+    return message.type().startsWith("project.") ? manage(message, out, err) : ask(message, out, err);
 }
 
 /// `tuul docs invoicing.Invoice --methods --json`. The sections are one field

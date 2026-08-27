@@ -8,6 +8,7 @@ import java.nio.charset.StandardCharsets;
 import java.nio.file.Path;
 import java.util.ArrayList;
 import java.util.List;
+import java.util.Map;
 import java.util.stream.Collectors;
 
 /// Runs a program in a JVM of its own and streams what it says.
@@ -21,10 +22,16 @@ public final class Launch {
     /// Streams the process output into `out` as it arrives and returns its exit
     /// status.
     public static int run(List<String> command, Path directory, Writer out) throws IOException, InterruptedException {
-        var process = new ProcessBuilder(command)
-                .directory(directory.toFile())
-                .redirectErrorStream(true)
-                .start();
+        return run(command, directory, out, Map.of());
+    }
+
+    /// The same, with part of the environment replaced — for proving that
+    /// something is not being used by taking it away.
+    public static int run(List<String> command, Path directory, Writer out, Map<String, String> environment)
+            throws IOException, InterruptedException {
+        var builder = new ProcessBuilder(command).directory(directory.toFile()).redirectErrorStream(true);
+        builder.environment().putAll(environment);
+        var process = builder.start();
         try (var output = new InputStreamReader(process.getInputStream(), StandardCharsets.UTF_8)) {
             var buffer = new char[4096];
             for (var read = output.read(buffer); read >= 0; read = output.read(buffer)) {

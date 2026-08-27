@@ -56,8 +56,18 @@ public final class Library {
         var file = System.mapLibraryName(name);
         var built = directories().stream().map(directory -> directory.resolve(file)).filter(Files::isRegularFile).findFirst();
         if (built.isPresent()) return new Library(name, SymbolLookup.libraryLookup(built.get(), Arena.global()));
-        throw new UnsatisfiedLinkError(
-                "no " + file + " in " + directories() + " — run tuul build to compile the native modules");
+        throw new UnsatisfiedLinkError("no " + file + " in " + directories() + " — " + advice());
+    }
+
+    /// What to do about it, which depends on whether a library for this machine
+    /// was ever built. A platform tuul ships is one `tuul build` away; a
+    /// platform it does not ship has to be compiled where it is going to run.
+    private static String advice() {
+        var host = Platform.host();
+        return host.shipped()
+                ? "run tuul build to compile the native modules"
+                : "there is no prebuilt library for " + host.directory()
+                        + " — install with tuul install --source and run tuul build to compile it here";
     }
 
     /// Opens a library the operating system provides, by asking it. For the ones
@@ -116,28 +126,30 @@ public final class Library {
 
     /// Where the running code keeps its own libraries. A classes directory has
     /// them in its sibling `native` — `build/classes` and `build/native` — and a
-    /// jar has them beside it, or in a `native` directory beside it, which is
-    /// where an installed tuul would put the one it ships.
+    /// jar has them beside it, or under a `native` directory beside it, which is
+    /// where an installed tuul and a vendored one both put what they ship.
+    ///
+    /// Each of those is looked at twice: once as it is, for a library built for
+    /// this machine and nothing else, and once under this machine's platform
+    /// directory, for a dependency carrying a library for every machine its
+    /// project might be checked out on.
     private static List<Path> beside() {
         try {
             var code = Path.of(Library.class.getProtectionDomain().getCodeSource().getLocation().toURI())
                     .toAbsolutePath()
                     .normalize();
-            if (Files.isDirectory(code)) return List.of(code.resolveSibling("native"));
-            var directory = code.getParent();
-            return List.of(directory, directory.resolve("native"));
+            var natives = Files.isDirectory(code)
+                    ? List.of(code.resolveSibling("native"))
+                    : List.of(code.getParent(), code.getParent().resolve("native"));
+            var directories = new ArrayList<Path>();
+            var platform = Platform.host().directory();
+            for (var directory : natives) {
+                directories.add(directory);
+                directories.add(directory.resolve(platform));
+            }
+            return List.copyOf(directories);
         } catch (URISyntaxException | RuntimeException e) {
             return List.of();
-        }
-    }
-
-    private static SymbolLookup system(String name, String file) {
-        try {
-            return SymbolLookup.libraryLookup(file, Arena.global());
-        } catch (IllegalArgumentException e) {
-            throw new UnsatisfiedLinkError(
-                    "no native library named " + name + ": looked for " + file + " in "
-                            + directories() + " and in the system library path — run tuul build");
         }
     }
 }

@@ -14,8 +14,9 @@ It borrows:
   (`tuul run <task>`), not its config format.
 
 > **Status:** parts of this README are still the target, not a changelog.
-> What runs today is `tuul new`, `tuul build`, `tuul run`, `tuul test`,
-> `tuul docs` and `tuul self-test`, over six libraries: `json` (streaming
+> What runs today is `tuul new`, `tuul install`, `tuul build`, `tuul run`,
+> `tuul test`, `tuul docs`, `tuul bind` and `tuul self-test`, over six
+> libraries: `json` (streaming
 > parser and serializer), `application` (the Elm Architecture runtime from
 > [ARCHITECTURE.md](./ARCHITECTURE.md)), `symbols` (javac compiles a source
 > tree in memory; the JDK's class file parser reads the symbols back out),
@@ -34,11 +35,19 @@ It borrows:
 > `tuul add`, `dev`, `console`, `generate`, `deploy` and `doctor` do not
 > exist.
 >
+> `tuul install` vendors tuul into a project the way anything else gets
+> there — a jar, a sources jar, and a compiled SQLite for each of the six
+> platforms tuul ships — so an application can be written on `application`,
+> `argparse`, `json` and `sqlite3` without a C compiler anywhere near the
+> machine. `tuul install --source` vendors the amalgamation instead, for a
+> platform with no prebuilt library.
+>
 > `tuul self-test` is the end-to-end proof: it scaffolds a project in a
-> temporary directory, drives the real command line against it, and keeps the
-> directory when an assertion fails. Until `tuul` installs itself:
+> temporary directory, installs tuul into it, drives the real command line
+> against it — with nothing on the PATH, so nothing can quietly compile — and
+> keeps the directory when an assertion fails. Until `tuul` ships as a binary:
 > `mise run build`, `mise run test`, `mise run self-test`,
-> `mise run tuul -- docs <symbol>`.
+> `mise run natives`, `mise run tuul -- docs <symbol>`.
 
 ## Why
 

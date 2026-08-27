@@ -6,6 +6,7 @@ import application.Message;
 import application.Step;
 import java.io.IOException;
 import java.io.Writer;
+import java.nio.file.Files;
 import java.nio.file.Path;
 import java.util.ArrayList;
 import java.util.List;
@@ -35,6 +36,8 @@ public final class App {
                 .on("project.selftest", App::selftest)
                 .on("project.install", App::install)
                 .on("project.installed", App::installed)
+                .on("project.natives", App::natives)
+                .on("project.distributed", App::distributed)
                 .on("project.bind", App::bind)
                 .on("project.bound", App::bound)
                 .on("project.created", App::created)
@@ -50,7 +53,8 @@ public final class App {
                 .effect("project.launch.tests", (effect, emit) -> launchTests(effect, emit, out))
                 .effect("project.selftest", App::selfTest)
                 .effect("project.bind", App::generate)
-                .effect("project.install", App::vendor)
+                .effect("project.install", (effect, emit) -> vendor(effect, emit, out))
+                .effect("project.natives", (effect, emit) -> distribute(effect, emit, out))
                 .effect("project.report", (effect, _) -> write(effect, out))
                 .effect("project.problem", (effect, _) -> write(effect, err));
     }
@@ -117,13 +121,31 @@ public final class App {
     }
 
     private static Step<State> install(State state, Message message) {
-        return Step.of(state, Effect.of("project.install").with("directory", where(state)));
+        return Step.of(state, Effect.of("project.install")
+                .with("directory", where(state))
+                .with("source", message.flag("source")));
+    }
+
+    /// Cross-building the libraries tuul ships. It is a step of a release
+    /// rather than a command anybody runs at work, so it arrives as a message
+    /// and `mise run natives` is what sends it.
+    private static Step<State> natives(State state, Message message) {
+        return Step.of(state, Effect.of("project.natives").with("directory", where(state)));
+    }
+
+    private static Step<State> distributed(State state, Message message) {
+        var built = message.list("built").size();
+        var current = message.list("current").size();
+        return Step.of(state, report("cross-built " + built + " platform(s), " + current + " already current"));
     }
 
     private static Step<State> installed(State state, Message message) {
-        var native_ = message.flag("native") ? "\n  " + message.string("directory", "") + "/native — built by tuul build" : "";
-        return Step.of(state, report("installed " + message.string("version", "") + " into "
-                + message.string("directory", "") + native_
+        var directory = message.string("directory", "");
+        var platforms = message.list("platforms").size();
+        var native_ = platforms == 0
+                ? "\n  " + directory + "/native — C, compiled by this project's tuul build"
+                : "\n  " + directory + "/native — SQLite for " + platforms + " platforms, no compiler needed";
+        return Step.of(state, report("installed " + message.string("version", "") + " into " + directory + native_
                 + "\n  its libraries are now on this project's classpath"));
     }
 
@@ -242,15 +264,30 @@ public final class App {
         emit.emit(Message.of("project.exited").with("status", Json.of(status)));
     }
 
-    private static void vendor(Effect effect, Effect.Emitter emit) throws Exception {
+    private static void vendor(Effect effect, Effect.Emitter emit, Writer out) throws Exception {
         var layout = new Layout(Path.of(effect.string("directory", ".")));
-        var result = Install.into(layout);
+        var result = Install.into(layout, effect.flag("source"), out);
         emit.emit(Message.of("project.installed")
                 .with("directory", result.directory().toString())
                 .with("version", result.version())
                 .with("classes", Json.of(result.classes()))
                 .with("sources", Json.of(result.sources()))
-                .with("native", result.natives()));
+                .with("platforms", Json.Array.strings(result.platforms())));
+    }
+
+    private static void distribute(Effect effect, Effect.Emitter emit, Writer out) throws Exception {
+        var home = Home.find();
+        var built = new ArrayList<String>();
+        var current = new ArrayList<String>();
+        for (var module : Files.list(home.natives()).filter(Files::isDirectory).sorted().toList()) {
+            var result = Natives.distribute(module, home.distribution(), out);
+            if (!result.ok()) throw new IOException(String.join("\n", result.problems()));
+            built.addAll(result.built());
+            current.addAll(result.current());
+        }
+        emit.emit(Message.of("project.distributed")
+                .with("built", Json.Array.strings(built))
+                .with("current", Json.Array.strings(current)));
     }
 
     private static void generate(Effect effect, Effect.Emitter emit) throws Exception {

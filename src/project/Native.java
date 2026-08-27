@@ -79,7 +79,8 @@ public final class Native {
         return "cc";
     }
 
-    /// The arguments beside the sources, if there are any.
+    /// The arguments beside the sources, if there are any. Shared with
+    /// [Natives], so a cross-build compiles with the flags the module names.
     static List<String> flags(Path directory) throws IOException {
         var file = directory.resolve(FLAGS);
         if (!Files.isRegularFile(file)) return List.of();
@@ -92,7 +93,7 @@ public final class Native {
     /// Nothing is recompiled unless something changed: the amalgamation takes
     /// ten seconds, and a build that costs that every time is a build nobody
     /// runs.
-    private static boolean stale(Path library, List<Path> sources) throws IOException {
+    static boolean stale(Path library, List<Path> sources) throws IOException {
         if (!Files.isRegularFile(library)) return true;
         var built = Files.getLastModifiedTime(library).toMillis();
         for (var source : sources) {

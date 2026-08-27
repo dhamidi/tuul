@@ -9,6 +9,8 @@ import java.nio.file.Path;
 import java.util.ArrayList;
 import java.util.Comparator;
 import java.util.List;
+import java.util.Map;
+import ffi.Platform;
 import json.Json;
 import project.Launch;
 import tuul.Version;
@@ -123,29 +125,39 @@ public final class SelfTest {
                 exists(project, "vendor/tuul/tuul-" + Version.NUMBER + ".jar")
                         && exists(project, "vendor/tuul/tuul-" + Version.NUMBER + "-sources.jar"),
                 listing(project.resolve("vendor")));
-        check(checks, "and the C that sqlite3 binds",
-                exists(project, "vendor/tuul/native/sqlite3/sqlite3.c"),
+        check(checks, "and a SQLite for this machine",
+                exists(project, "vendor/tuul/native/" + Platform.host().directory() + "/"
+                        + Platform.host().library("sqlite3")),
                 listing(project.resolve("vendor")));
+        check(checks, "and for the machines this project will be cloned onto",
+                Platform.SHIPPED.stream().allMatch(platform ->
+                        exists(project, "vendor/tuul/native/" + platform.directory() + "/" + platform.library("sqlite3"))),
+                listing(project.resolve("vendor/tuul/native")));
+        check(checks, "and no C, since nothing here has to compile any",
+                !Files.isDirectory(project.resolve("vendor/tuul/native/sqlite3")),
+                listing(project.resolve("vendor/tuul/native")));
 
         Files.writeString(project.resolve("src/demo/Notes.java"), NOTES);
         Files.writeString(project.resolve("src/cli/main.java"), ENTRYPOINT);
         Files.writeString(project.resolve("test/run.java"), RUNNER);
 
-        var built = tuul(project, "build");
-        check(checks, "a project using tuul's libraries builds", built.status() == 0, built.output());
-        check(checks, "compiling the vendored C into its own build",
-                exists(project, "build/native/" + System.mapLibraryName("sqlite3")),
+        var built = without(project, "build");
+        check(checks, "a project using tuul's libraries builds with no compiler on the PATH",
+                built.status() == 0, built.output());
+        check(checks, "without compiling SQLite, which arrived compiled",
+                !built.output().contains("compiling native module sqlite3")
+                        && !exists(project, "build/native/" + Platform.host().library("sqlite3")),
                 built.output());
 
-        var ran = tuul(project, "run", "--", "the first note");
+        var ran = without(project, "run", "--", "the first note");
         check(checks, "and runs on argparse, application and sqlite3 together",
                 ran.status() == 0 && ran.output().contains("notes: 1"),
                 ran.output());
-        check(checks, "against the SQLite tuul vendored, not the one the machine happened to have",
+        check(checks, "on the SQLite that was vendored, not one the machine happened to have",
                 ran.output().contains("sqlite " + version(project)),
                 ran.output());
 
-        var tested = tuul(project, "test");
+        var tested = without(project, "test");
         check(checks, "its tests run against them too",
                 tested.status() == 0 && tested.output().contains("all tests passed"),
                 tested.output());
@@ -229,6 +241,7 @@ public final class SelfTest {
             import java.io.OutputStreamWriter;
             import java.nio.file.Path;
             import java.util.List;
+import java.util.Map;
 
             void main(String[] args) throws Exception {
                 var out = new OutputStreamWriter(System.out);
@@ -274,6 +287,16 @@ public final class SelfTest {
     private static Ran tuul(Path directory, String... arguments) throws IOException, InterruptedException {
         var out = new StringWriter();
         var status = Launch.run(command(List.of(arguments)), directory, out);
+        return new Ran(status, out.toString());
+    }
+
+    /// tuul with nothing on its PATH, so there is no compiler for it to find.
+    /// Java is started by its absolute path and javac is in the process
+    /// already, so everything except compiling C still works — which is the
+    /// point: a project that vendored a library must not need one.
+    private static Ran without(Path directory, String... arguments) throws IOException, InterruptedException {
+        var out = new StringWriter();
+        var status = Launch.run(command(List.of(arguments)), directory, out, Map.of("PATH", ""));
         return new Ran(status, out.toString());
     }
 

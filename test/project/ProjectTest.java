@@ -2,6 +2,7 @@ package project;
 
 import ffi.Library;
 import application.Message;
+import ffi.Platform;
 import harness.Check;
 import java.io.IOException;
 import java.io.StringWriter;
@@ -14,8 +15,10 @@ import java.nio.file.Files;
 import java.nio.file.Path;
 import java.util.LinkedHashMap;
 import java.util.List;
+import java.util.Map;
 import java.util.jar.JarEntry;
 import java.util.jar.JarFile;
+import java.util.jar.JarOutputStream;
 import java.util.jar.JarOutputStream;
 
 public final class ProjectTest {
@@ -36,6 +39,7 @@ public final class ProjectTest {
         refuses(layout, project);
         vendored(layout, project);
         installs(layout);
+        carries(project);
     }
 
     private static void scaffolds(Path project) throws IOException {
@@ -188,16 +192,22 @@ public final class ProjectTest {
     }
 
     /// tuul putting itself into a project is tuul producing an ordinary
-    /// dependency: two jars and the C, in a directory `vendor/` already
-    /// understands.
-    private static void installs(Layout layout) throws IOException {
-        var installed = Install.into(layout);
+    /// dependency: two jars and a compiled SQLite for every platform, in a
+    /// directory `vendor/` already understands.
+    private static void installs(Layout layout) throws IOException, InterruptedException {
+        var installed = Install.into(layout, false, new StringWriter());
         var jar = installed.directory().resolve(Version.artifact() + ".jar");
         Check.that("it writes a jar named for the version", Files.isRegularFile(jar));
         Check.that("and a sources jar beside it",
                 Files.isRegularFile(installed.directory().resolve(Version.artifact() + "-sources.jar")));
-        Check.that("and the C that sqlite3 binds, so the project can build it",
-                Files.isRegularFile(installed.directory().resolve("native/sqlite3/sqlite3.c")));
+        Check.equal("it vendors a library for every platform tuul ships, because vendor/ is committed",
+                Platform.SHIPPED.stream().map(Platform::directory).toList(),
+                installed.platforms());
+        Check.that("and each one is the library that platform loads",
+                Platform.SHIPPED.stream().allMatch(platform -> Files.isRegularFile(
+                        installed.directory().resolve("native/" + platform.directory() + "/" + platform.library("sqlite3")))));
+        Check.that("no C among them: nothing here has to compile anything",
+                !Files.exists(installed.directory().resolve("native/sqlite3")));
         Check.that("it says how much it packed", installed.classes() > 100 && installed.sources() > 30);
 
         var entries = entries(jar);
@@ -207,11 +217,55 @@ public final class ProjectTest {
         Check.that("and the manifest says which tuul this is",
                 new String(read(jar, "META-INF/MANIFEST.MF")).contains("Implementation-Version: " + Version.NUMBER));
 
-        Install.into(layout);
+        Install.into(layout, false, new StringWriter());
         try (var again = Files.list(installed.directory())) {
             Check.equal("installing twice replaces the artifact rather than stacking a second copy of every class",
                     2,
                     (int) again.filter(path -> path.getFileName().toString().endsWith(".jar")).count());
+        }
+
+        var sourced = Install.into(layout, true, new StringWriter());
+        Check.that("--source vendors the C instead, for a platform with no library",
+                Files.isRegularFile(sourced.directory().resolve("native/sqlite3/sqlite3.c")));
+        Check.equal("and says it vendored no libraries", List.of(), sourced.platforms());
+        Check.that("the libraries are gone, since the two are alternatives rather than additions",
+                Platform.SHIPPED.stream().noneMatch(platform ->
+                        Files.exists(sourced.directory().resolve("native/" + platform.directory()))));
+    }
+
+    /// How a distribution carries its libraries: inside the jar, so an
+    /// installed tuul is one file that can still install itself. The fallback
+    /// is a `native` directory beside the jar, which is what an unpacked
+    /// install looks like.
+    private static void carries(Path project) throws IOException {
+        var packed = project.resolve("dist");
+        Files.createDirectories(packed);
+        var platform = Platform.SHIPPED.getFirst();
+
+        var inside = packed.resolve(Version.artifact() + ".jar");
+        jar(inside, Map.of("native/" + platform.directory() + "/" + platform.library("sqlite3"), "not really a library".getBytes()));
+        try (var libraries = Home.at(inside).libraries()) {
+            Check.that("a jar carrying libraries answers with the ones inside it",
+                    Files.isRegularFile(libraries.root().resolve(platform.directory()).resolve(platform.library("sqlite3"))));
+        }
+
+        var beside = packed.resolve("beside").resolve(Version.artifact() + ".jar");
+        Files.createDirectories(beside.getParent().resolve("native").resolve(platform.directory()));
+        jar(beside, Map.of("json/Json.class", "not really a class".getBytes()));
+        Files.writeString(beside.getParent().resolve("native").resolve(platform.directory()).resolve(platform.library("sqlite3")), "x");
+        try (var libraries = Home.at(beside).libraries()) {
+            Check.that("a jar with none inside falls back to the directory beside it",
+                    Files.isDirectory(libraries.root().resolve(platform.directory())));
+        }
+    }
+
+    private static void jar(Path path, Map<String, byte[]> entries) throws IOException {
+        try (var out = new JarOutputStream(Files.newOutputStream(path))) {
+            for (var entry : entries.entrySet()) {
+                out.putNextEntry(new JarEntry(entry.getKey()));
+                out.write(entry.getValue());
+                out.closeEntry();
+            }
         }
     }
 

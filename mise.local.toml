@@ -24,6 +24,14 @@ javac --release "$release" -nowarn -cp build/classes -d build/test $(find test -
 java --enable-native-access=ALL-UNNAMED -cp build/classes:build/test run
 '''
 
+[tasks.natives]
+description = "Cross-build the native modules for every platform tuul ships"
+depends = ["build"]
+run = '''
+set -euo pipefail
+echo '{"type":"project.natives"}' | java --enable-native-access=ALL-UNNAMED -cp build/classes main message
+'''
+
 [tasks.self-test]
 description = "Scaffold a project in a temporary directory and exercise tuul on it"
 depends = ["build"]
