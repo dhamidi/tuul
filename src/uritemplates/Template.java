@@ -99,11 +99,13 @@ public final class Template {
     /// This is an addition to the RFC, which specifies expansion only, and it
     /// is offered exactly where it is honest: the operators whose values are
     /// encoded so thoroughly that the separators cannot appear inside them —
-    /// `{var}`, `{.var}` and `{/var}` — with no modifiers.
+    /// `{var}` and `{/var}` — with no modifiers.
     ///
-    /// `{+var}` and `{#var}` let reserved characters through, so a value may
-    /// contain the very characters that would end it and there is no one right
-    /// answer. `{?var}` and its kin describe a query, whose parameters may
+    /// `{.var}` looks path-shaped but is not: `.` is unreserved and passes
+    /// through unencoded, so `X.foo.bar` cannot be split back apart with any
+    /// confidence. `{+var}` and `{#var}` let reserved characters through, so a
+    /// value may contain the very characters that would end it and there is no
+    /// one right answer. `{?var}` and its kin describe a query, whose parameters may
     /// arrive in any order, so recognising one positionally would be wrong more
     /// often than right. A prefix modifier throws the rest of the value away,
     /// so nothing can bring it back. A template using any of those never

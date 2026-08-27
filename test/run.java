@@ -12,6 +12,7 @@ void main() throws Exception {
     ffi.PlatformTest.run();
     uritemplates.TemplatesTest.run();
     eventstream.EventStreamTest.run();
+    web.dispatch.DispatchTest.run();
     project.ProjectTest.run();
     sqlite3.SqliteTest.run();
     sqlite3.ApiTest.run();
