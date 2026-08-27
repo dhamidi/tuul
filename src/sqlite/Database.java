@@ -1,0 +1,102 @@
+package sqlite;
+
+import static java.lang.foreign.ValueLayout.ADDRESS;
+
+import java.lang.foreign.Arena;
+import java.lang.foreign.MemorySegment;
+import java.nio.file.Path;
+
+/// A SQLite database, bound straight to the amalgamation in `native/sqlite3`.
+///
+/// ```
+/// try (var database = Database.memory()) {
+///     database.execute("create table notes (id integer primary key, body text)");
+///     database.execute("insert into notes (body) values (?)", "the first note");
+///     try (var rows = database.query("select id, body from notes")) {
+///         while (rows.next()) System.out.println(rows.integer(0) + " " + rows.text(1));
+///     }
+/// }
+/// ```
+///
+/// Rows are read as they come. Nothing collects a result set into a list on the
+/// way past, so a query over a million rows costs one row of memory.
+public final class Database implements AutoCloseable {
+
+    private final Arena arena = Arena.ofShared();
+    private final MemorySegment handle;
+    private final String name;
+    private boolean open = true;
+
+    private Database(String name) {
+        this.name = name;
+        var out = arena.allocate(ADDRESS);
+        var status = Sqlite.open(arena.allocateFrom(name), out, Sqlite.OPEN_READWRITE | Sqlite.OPEN_CREATE);
+        handle = out.get(ADDRESS, 0);
+        if (status == Sqlite.OK) return;
+
+        var reason = handle.equals(MemorySegment.NULL) ? "out of memory" : Sqlite.message(handle);
+        Sqlite.close(handle);
+        arena.close();
+        throw new SqliteException("cannot open " + name + ": " + reason, status);
+    }
+
+    public static Database open(Path file) {
+        return new Database(file.toString());
+    }
+
+    /// A database that lives and dies with this object.
+    public static Database memory() {
+        return new Database(":memory:");
+    }
+
+    /// The version of SQLite that is actually loaded, which is the only version
+    /// worth reporting.
+    public static String version() {
+        return Sqlite.version();
+    }
+
+    /// Runs a statement and answers with the number of rows it changed. Rows it
+    /// produces, if any, are stepped past.
+    public long execute(String sql, Object... parameters) {
+        try (var rows = query(sql, parameters)) {
+            while (rows.next()) {
+                // a statement is allowed to return rows even when nobody asked
+            }
+        }
+        return changes();
+    }
+
+    /// Prepares a query and hands back a cursor over its rows. Close it — a
+    /// try-with-resources is the whole lifecycle.
+    public Rows query(String sql, Object... parameters) {
+        return new Rows(this, sql, parameters);
+    }
+
+    public long changes() {
+        return Sqlite.changes(handle);
+    }
+
+    public long lastId() {
+        return Sqlite.lastId(handle);
+    }
+
+    public String name() {
+        return name;
+    }
+
+    @Override
+    public void close() {
+        if (!open) return;
+        open = false;
+        Sqlite.close(handle);
+        arena.close();
+    }
+
+    MemorySegment handle() {
+        return handle;
+    }
+
+    String message() {
+        return Sqlite.message(handle);
+    }
+}

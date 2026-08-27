@@ -35,10 +35,13 @@ public final class Launch {
         return process.waitFor();
     }
 
-    /// A command line for the JVM tuul is running on.
+    /// A command line for the JVM tuul is running on. Native access is enabled
+    /// because a project is expected to bind to its own C, and a warning on
+    /// every run is not a thing anyone should have to read.
     public static List<String> java(List<String> options, List<Path> classpath, String main, List<String> arguments) {
         var command = new ArrayList<String>();
         command.add(Path.of(System.getProperty("java.home"), "bin", "java").toString());
+        command.add("--enable-native-access=ALL-UNNAMED");
         command.addAll(options);
         command.add("-classpath");
         command.add(classpath.stream().map(path -> path.toAbsolutePath().toString()).collect(Collectors.joining(File.pathSeparator)));

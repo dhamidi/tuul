@@ -15,20 +15,24 @@ It borrows:
 
 > **Status:** parts of this README are still the target, not a changelog.
 > What runs today is `tuul new`, `tuul build`, `tuul run`, `tuul test`,
-> `tuul docs` and `tuul self-test`, over four libraries: `json` (streaming
+> `tuul docs` and `tuul self-test`, over six libraries: `json` (streaming
 > parser and serializer), `application` (the Elm Architecture runtime from
 > [ARCHITECTURE.md](./ARCHITECTURE.md)), `symbols` (javac compiles a source
-> tree in memory; the JDK's class file parser reads the symbols back out) and
-> `project` (scaffold, build, launch).
+> tree in memory; the JDK's class file parser reads the symbols back out),
+> `project` (scaffold, build, launch), `ffi` (shared libraries and downcall
+> handles) and `sqlite` (a binding to the SQLite amalgamation vendored in
+> `native/sqlite3`, built by `tuul build` and called through
+> `java.lang.foreign`).
 >
 > `tuul docs` answers for your code, for the jars in `vendor/`, and for the
 > JDK itself, with doc comments and their `@param`/`@return`/`@throws` tags
 > read from the matching source — a `-sources.jar` for a dependency,
 > `lib/src.zip` for the JDK. `tuul run [entry] -- <args>` runs an entrypoint;
 > running a file from `tasks/` is not implemented yet. `tuul new` scaffolds
-> one library, one entrypoint and a test rather than the full reference
-> project described below, and `tuul add`, `dev`, `console`, `generate`,
-> `deploy` and `doctor` do not exist.
+> the library, the entrypoint, the native module and the FFI wrapper
+> described below, but no vendored dependencies and no `tasks/`, and
+> `tuul add`, `dev`, `console`, `generate`, `deploy` and `doctor` do not
+> exist.
 >
 > `tuul self-test` is the end-to-end proof: it scaffolds a project in a
 > temporary directory, drives the real command line against it, and keeps the

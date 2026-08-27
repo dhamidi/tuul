@@ -10,7 +10,7 @@ public record State(Path directory, Action action, String entrypoint, List<Strin
     /// What a build is *for* — the same compile serves all three, and the
     /// answer decides what happens once it succeeds.
     public enum Action {
-        NONE, BUILD, RUN, TEST
+        NONE, NATIVE, BUILD, RUN, TEST
     }
 
     public static State of(Path directory) {

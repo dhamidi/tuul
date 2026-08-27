@@ -10,6 +10,7 @@ set -euo pipefail
 release=$(javac --version | cut -d' ' -f2 | cut -d. -f1)
 mkdir -p build/classes
 javac --enable-preview --release "$release" -nowarn -d build/classes $(find src -name '*.java')
+java --enable-preview --enable-native-access=ALL-UNNAMED -cp build/classes main build --native
 '''
 
 [tasks.test]
@@ -20,18 +21,18 @@ set -euo pipefail
 release=$(javac --version | cut -d' ' -f2 | cut -d. -f1)
 mkdir -p build/test
 javac --enable-preview --release "$release" -nowarn -cp build/classes -d build/test $(find test -name '*.java')
-java --enable-preview -cp build/classes:build/test run
+java --enable-preview --enable-native-access=ALL-UNNAMED -cp build/classes:build/test run
 '''
 
 [tasks.self-test]
 description = "Scaffold a project in a temporary directory and exercise tuul on it"
 depends = ["build"]
-run = 'java --enable-preview -cp build/classes main self-test'
+run = 'java --enable-preview --enable-native-access=ALL-UNNAMED -cp build/classes main self-test'
 
 [tasks.tuul]
 description = "Run the cli, e.g. mise run tuul -- docs json.Json"
 depends = ["build"]
-run = 'java --enable-preview -cp build/classes main'
+run = 'java --enable-preview --enable-native-access=ALL-UNNAMED -cp build/classes main'
 
 [tasks.clean]
 description = "Remove build output"

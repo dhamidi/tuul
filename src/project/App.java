@@ -33,11 +33,13 @@ public final class App {
                 .on("project.test", App::test)
                 .on("project.selftest", App::selftest)
                 .on("project.created", App::created)
+                .on("project.native.built", App::compiled)
                 .on("project.built", App::built)
                 .on("project.exited", App::exited)
                 .on("selftest.done", App::finished)
                 .on("error", App::failed)
                 .effect("project.scaffold", App::scaffold)
+                .effect("project.native", (effect, emit) -> buildNative(effect, emit, out))
                 .effect("project.compile", App::compile)
                 .effect("project.launch", (effect, emit) -> launch(effect, emit, out))
                 .effect("project.launch.tests", (effect, emit) -> launchTests(effect, emit, out))
@@ -60,8 +62,11 @@ public final class App {
                 + "\n  cd " + directory + " && tuul run"));
     }
 
+    /// Every build starts with the native modules: they are what the Java is
+    /// compiled and run against, so nothing else can go first.
     private static Step<State> build(State state, Message message) {
-        return Step.of(state.doing(State.Action.BUILD), compile(state, false));
+        var action = message.flag("native") ? State.Action.NATIVE : State.Action.BUILD;
+        return Step.of(state.doing(action), native_(state));
     }
 
     private static Step<State> run(State state, Message message) {
@@ -69,11 +74,20 @@ public final class App {
         for (var argument : message.list("arguments")) {
             if (argument instanceof Json.Str(var text)) arguments.add(text);
         }
-        return Step.of(state.running(message.string("entrypoint", ""), arguments), compile(state, false));
+        return Step.of(state.running(message.string("entrypoint", ""), arguments), native_(state));
     }
 
     private static Step<State> test(State state, Message message) {
-        return Step.of(state.doing(State.Action.TEST), compile(state, false));
+        return Step.of(state.doing(State.Action.TEST), native_(state));
+    }
+
+    private static Step<State> compiled(State state, Message message) {
+        if (state.action() != State.Action.NATIVE) return Step.of(state, compile(state, false));
+        var built = message.list("built").size();
+        var current = message.list("current").size();
+        return Step.of(state, report(built == 0 && current == 0
+                ? "no native modules"
+                : "built " + built + " native module(s), " + current + " already current"));
     }
 
     /// One compile, three meanings: report it, run the application, or go on to
@@ -87,7 +101,7 @@ public final class App {
                     .with("entrypoint", state.entrypoint())
                     .with("arguments", Json.Array.strings(state.arguments())));
             case TEST -> Step.of(state, compile(state, true));
-            case NONE -> Step.of(state);
+            case NATIVE, NONE -> Step.of(state);
         };
     }
 
@@ -130,6 +144,18 @@ public final class App {
         emit.emit(Message.of("project.created")
                 .with("directory", directory.toString())
                 .with("library", library));
+    }
+
+    private static void buildNative(Effect effect, Effect.Emitter emit, Writer out) throws Exception {
+        var layout = new Layout(Path.of(effect.string("directory", ".")));
+        var result = Native.build(layout, out);
+        if (!result.ok()) {
+            emit.emit(Message.error(String.join("\n", result.problems())));
+            return;
+        }
+        emit.emit(Message.of("project.native.built")
+                .with("built", Json.Array.strings(result.built()))
+                .with("current", Json.Array.strings(result.current())));
     }
 
     private static void compile(Effect effect, Effect.Emitter emit) throws IOException {
@@ -186,6 +212,10 @@ public final class App {
         var text = effect.string("text", "");
         out.write(text.endsWith("\n") ? text : text + "\n");
         out.flush();
+    }
+
+    private static Effect native_(State state) {
+        return Effect.of("project.native").with("directory", where(state));
     }
 
     private static Effect compile(State state, boolean tests) {

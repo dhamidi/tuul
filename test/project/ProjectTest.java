@@ -1,8 +1,12 @@
 package project;
 
+import ffi.Library;
 import harness.Check;
 import java.io.IOException;
 import java.io.StringWriter;
+import java.lang.foreign.FunctionDescriptor;
+import java.lang.foreign.ValueLayout;
+import java.lang.invoke.MethodHandle;
 import java.nio.file.Files;
 import java.nio.file.Path;
 import java.util.List;
@@ -19,6 +23,7 @@ public final class ProjectTest {
         scaffolds(project);
         var layout = new Layout(project);
         reads(layout);
+        compiles(layout, project);
         builds(layout);
         launches(layout);
         refuses(layout, project);
@@ -40,7 +45,7 @@ public final class ProjectTest {
     private static void reads(Layout layout) throws IOException {
         Check.equal("entrypoints are the directories with a main.java", List.of("cli"), layout.entrypoints());
         Check.equal("everything else is a library",
-                List.of("helloworld"),
+                List.of("greet", "helloworld"),
                 layout.libraries().stream().map(path -> path.getFileName().toString()).toList());
         Check.equal("cli is the entrypoint to run when none is named", "cli", layout.entrypoint(""));
         Check.equal("and a named one is taken as given", "cli", layout.entrypoint("cli"));
@@ -73,6 +78,42 @@ public final class ProjectTest {
                 Launch.run(Launch.java(List.of(), List.of(layout.classes(), layout.tests()), "run", List.of()),
                         layout.root(), tests));
         Check.that("and they say so", tests.toString().contains("all tests passed"));
+    }
+
+    /// The native pipeline end to end: C on disk, a shared library out of the
+    /// compiler, and a Java call into it.
+    private static void compiles(Layout layout, Path project) throws IOException, InterruptedException {
+        Files.createDirectories(layout.nativeRoot());
+        var source = layout.nativeRoot().resolve("answer.c");
+        Files.writeString(source, "int answer(void) { return 42; }\n");
+
+        var built = Native.build(layout, new StringWriter());
+        Check.that("the native modules compile: " + built.problems(), built.ok());
+        Check.equal("a loose .c file is a library named after it", List.of("answer", "hello"), built.built());
+        Check.that("and lands in build/native", Files.isRegularFile(layout.library("answer")));
+
+        var again = Native.build(layout, new StringWriter());
+        Check.equal("nothing is recompiled when nothing changed", List.of(), again.built());
+        Check.equal("it is reported as current instead", List.of("answer", "hello"), again.current());
+
+        var answer = Library.open(layout.library("answer"))
+                .function("answer", FunctionDescriptor.of(ValueLayout.JAVA_INT));
+        Check.equal("and Java can call it", 42, call(answer));
+
+        Files.writeString(source, "int answer(void) { oops }\n");
+        var broken = Native.build(layout, new StringWriter());
+        Check.that("a broken module fails the build", !broken.ok());
+        Check.that("in the compiler's words", String.join("", broken.problems()).contains("answer"));
+        Check.that("and leaves no half-built library behind", !Files.isRegularFile(layout.library("answer")));
+        Files.delete(source);
+    }
+
+    private static int call(MethodHandle function) {
+        try {
+            return (int) function.invokeExact();
+        } catch (Throwable e) {
+            throw new RuntimeException(e);
+        }
     }
 
     private static void refuses(Layout layout, Path project) throws IOException {

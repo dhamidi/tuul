@@ -1,0 +1,6 @@
+# How the sqlite3 amalgamation is compiled. One argument per line.
+-DSQLITE_THREADSAFE=1
+-DSQLITE_ENABLE_FTS5
+-DSQLITE_ENABLE_RTREE
+-DSQLITE_DQS=0
+-DSQLITE_OMIT_DEPRECATED

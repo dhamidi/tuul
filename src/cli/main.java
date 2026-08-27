@@ -31,7 +31,7 @@ int run(List<String> args, Writer out, Writer err) throws IOException {
         case "docs" -> ask(docs(rest), out, err);
         case "message" -> ask(stdin(), out, err);
         case "new" -> manage(Message.of("project.new").with("name", rest.isEmpty() ? "" : rest.getFirst()), out, err);
-        case "build" -> manage(Message.of("project.build"), out, err);
+        case "build" -> manage(Message.of("project.build").with("native", rest.contains("--native")), out, err);
         case "run" -> manage(started(rest), out, err);
         case "test" -> manage(Message.of("project.test"), out, err);
         case "self-test" -> manage(Message.of("project.selftest"), out, err);
@@ -102,7 +102,7 @@ int usage(Writer out) throws IOException {
 
             usage:
               tuul new <name>                scaffold a project
-              tuul build                     compile src/ into build/
+              tuul build [--native]          compile native/ and src/ into build/
               tuul run [entry] -- <args>     run an entrypoint, arguments and all
               tuul test                      compile and run test/
               tuul docs <symbol> [options]   describe a type from the project, vendor/ or the JDK

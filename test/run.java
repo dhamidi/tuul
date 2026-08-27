@@ -7,5 +7,6 @@ void main() throws Exception {
     application.ApplicationTest.run();
     symbols.SymbolsTest.run();
     project.ProjectTest.run();
+    sqlite.SqliteTest.run();
     System.exit(Check.report());
 }

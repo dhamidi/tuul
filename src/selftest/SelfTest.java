@@ -59,6 +59,9 @@ public final class SelfTest {
         check(checks, "it compiles the library", exists(project, "build/classes/demo/Greeting.class"), built.output());
         check(checks, "it compiles the entrypoint apart from it", exists(project, "build/entry/cli/main.class"), built.output());
         check(checks, "it says what it did", built.output().contains("compiled"), built.output());
+        check(checks, "it compiles the native module first",
+                exists(project, "build/native/" + System.mapLibraryName("hello")),
+                built.output());
     }
 
     private static void runs(Path project, List<Report.Check> checks) throws IOException, InterruptedException {
@@ -70,6 +73,9 @@ public final class SelfTest {
 
         var bare = tuul(project, "run");
         check(checks, "and runs without arguments too", bare.output().contains("Hello, world!"), bare.output());
+        check(checks, "every greeting came back out of C through a callback",
+                ran.output().lines().count() == 2 && bare.output().lines().count() == 1,
+                ran.output() + bare.output());
     }
 
     private static void tests(Path project, List<Report.Check> checks) throws IOException, InterruptedException {
@@ -88,6 +94,11 @@ public final class SelfTest {
                 described.string("doc", "").startsWith("Greets whoever is named."),
                 docs.output());
         check(checks, "and the block tags under it", tags(described).contains("@param name who to greet"), docs.output());
+
+        var wrapper = tuul(project, "docs", "greet.Greeter", "--methods");
+        check(checks, "including the code that binds to C",
+                wrapper.output().contains("boolean greet(String name, Consumer<String> onGreeting)"),
+                wrapper.output());
 
         var jdk = tuul(project, "docs", "java.lang.String", "--implements");
         check(checks, "it answers for the JDK too", jdk.output().contains("CharSequence"), jdk.output());
