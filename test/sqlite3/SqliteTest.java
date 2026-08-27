@@ -18,6 +18,58 @@ public final class SqliteTest {
         streams();
         refuses();
         persists();
+        prepares();
+        transacts();
+    }
+
+    /// A statement prepared once and run many times, which is what a bulk write
+    /// is made of.
+    private static void prepares() {
+        try (var database = Database.memory()) {
+            database.execute("create table notes (id integer primary key, body text, weight real)");
+            try (var insert = Statement.of(database, "insert into notes (body, weight) values (?, ?)")) {
+                Check.equal("a run answers with the row it made", 1L, insert.run("first", 1.0));
+                Check.equal("and again, without preparing again", 2L, insert.run("second", 2.0));
+                insert.run(null, 3.0);
+            }
+            Check.equal("every run landed", 3L, count(database, "select count(*) from notes"));
+            Check.equal("bindings are cleared between runs, so a null stays null",
+                    1L, count(database, "select count(*) from notes where body is null"));
+
+            try (var insert = Statement.of(database, "insert into notes (body) values (?)")) {
+                Check.throwing("a statement that fails says so", () -> insert.run(List.of()));
+                Check.equal("and is still usable afterwards", 4L, insert.run("fourth"));
+            }
+            Check.throwing("bad SQL is refused when it is prepared, not when it is run",
+                    () -> Statement.of(database, "insert into nowhere values (?)"));
+        }
+    }
+
+    /// Bulk writing belongs in a transaction — and a transaction that fails
+    /// leaves nothing behind.
+    private static void transacts() {
+        try (var database = Database.memory()) {
+            database.execute("create table notes (id integer primary key)");
+            database.transaction(() -> {
+                for (var id = 1; id <= 100; id++) database.execute("insert into notes values (?)", id);
+            });
+            Check.equal("everything in a transaction lands", 100L, count(database, "select count(*) from notes"));
+
+            Check.throwing("a transaction that throws passes the failure on", () -> database.transaction(() -> {
+                database.execute("insert into notes values (101)");
+                throw new IllegalStateException("thought better of it");
+            }));
+            Check.equal("and takes its changes back with it", 100L, count(database, "select count(*) from notes"));
+
+            database.script("""
+                    create table one (n integer);
+                    create table two (n integer);
+                    insert into one values (1);
+                    """);
+            Check.equal("a script runs every statement in it", 1L, count(database, "select count(*) from one"));
+            Check.equal("including the ones that make tables", 0L, count(database, "select count(*) from two"));
+            Check.throwing("and stops at the first that fails", () -> database.script("select 1; select nope;"));
+        }
     }
 
     private static void version() {

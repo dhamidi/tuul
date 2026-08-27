@@ -100,6 +100,10 @@ public final class SelfTest {
                 wrapper.output().contains("boolean greet(String name, Consumer<String> onGreeting)"),
                 wrapper.output());
 
+        var search = tuul(project, "docs", "--search", "greets whoever");
+        check(checks, "it searches what it has indexed",
+                search.output().contains("demo.Greeting"), search.output());
+
         var jdk = tuul(project, "docs", "java.lang.String", "--implements");
         check(checks, "it answers for the JDK too", jdk.output().contains("CharSequence"), jdk.output());
 

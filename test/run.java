@@ -8,6 +8,7 @@ void main() throws Exception {
     peg.PegTest.run();
     argparse.ArgparseTest.run();
     symbols.SymbolsTest.run();
+    symbols.StoreTest.run();
     project.ProjectTest.run();
     sqlite3.SqliteTest.run();
     sqlite3.ApiTest.run();

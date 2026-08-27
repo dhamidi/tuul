@@ -17,13 +17,23 @@ public final class SymbolsTest {
     private SymbolsTest() {}
 
     public static void run() throws IOException {
-        var index = Index.of(List.of(sources()));
-        project(index);
-        platform(index);
-        javadoc(index);
-        platformJavadoc(index);
+        try (var index = Index.of(List.of(sources()), List.of(), kept())) {
+            project(index);
+            platform(index);
+            javadoc(index);
+            platformJavadoc(index);
+            rendering(index);
+        }
         vendored();
-        rendering(index);
+        remembers();
+    }
+
+    /// An index of its own for every test, in a directory that goes away with
+    /// it — the one in `build/` belongs to the project, not to the tests.
+    private static Path kept() throws IOException {
+        var directory = Files.createTempDirectory("tuul-index");
+        directory.toFile().deleteOnExit();
+        return directory.resolve("index.db");
     }
 
     private static void project(Index index) {
@@ -117,7 +127,7 @@ public final class SymbolsTest {
         var source = source(project);
         var vendor = vendor(project);
 
-        var index = Index.of(List.of(source), List.of(vendor));
+        var index = Index.of(List.of(source), List.of(vendor), kept());
         Check.that("project sources compile against vendored jars", index.lookup("using.Uses").isPresent());
 
         var greeter = index.lookup("greeting.Greeter").orElseThrow();
@@ -141,6 +151,53 @@ public final class SymbolsTest {
 
         Check.that("the project still wins over a dependency of the same name",
                 index.lookup("using.Uses").orElseThrow().name().equals("using.Uses"));
+        index.close();
+    }
+
+    /// What the index is for: the second answer costs nothing, and a source
+    /// tree that has moved on says so.
+    private static void remembers() throws IOException {
+        var kept = kept();
+        var root = sources();
+        var file = root.resolve("invoicing/Invoice.java");
+        var written = Files.readString(file);
+        var when = Files.getLastModifiedTime(file);
+
+        try (var index = Index.of(List.of(root), List.of(), kept)) {
+            Check.equal("a first lookup indexes the project",
+                    "An invoice for a fixed amount, identified by id. Invoices are compared by amount.",
+                    index.lookup("invoicing.Invoice").orElseThrow().doc());
+            Check.that("and every type in it, not only the one asked for",
+                    index.names().containsAll(List.of("invoicing.Invoice", "invoicing.Invoice$Kind")));
+        }
+
+        // The stamp is the path, the size and the modification time of every
+        // source. Break the file without changing any of those and the index
+        // must still answer — which it can only do without asking javac,
+        // because javac would refuse this.
+        var broken = "/*".repeat(written.length() / 2) + (written.length() % 2 == 1 ? " " : "");
+        Files.writeString(file, broken);
+        Files.setLastModifiedTime(file, when);
+        Check.equal("the sources are the same size as before", written.length(), broken.length());
+
+        try (var index = Index.of(List.of(root), List.of(), kept)) {
+            Check.equal("an unchanged stamp answers from the index, without compiling anything",
+                    "invoicing.Invoice", index.lookup("invoicing.Invoice").orElseThrow().name());
+            Check.that("even for a name that is not there, which is the answer that used to cost a compile",
+                    index.lookup("invoicing.Nothing").isEmpty());
+        }
+
+        Files.writeString(file, written + "\n// a comment, and a new size\n");
+        try (var index = Index.of(List.of(root), List.of(), kept)) {
+            Check.that("a source that has changed is compiled again",
+                    index.lookup("invoicing.Invoice").isPresent());
+        }
+
+        Files.delete(file);
+        try (var index = Index.of(List.of(root), List.of(), kept)) {
+            Check.that("and a source that is gone takes its symbols with it",
+                    index.lookup("invoicing.Invoice").isEmpty());
+        }
     }
 
     private static Path source(Path project) throws IOException {

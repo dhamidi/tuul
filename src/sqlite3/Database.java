@@ -77,6 +77,38 @@ public final class Database implements AutoCloseable {
         return new Rows(this, sql, parameters);
     }
 
+    /// Runs several statements at once — a schema, a set of pragmas — the way
+    /// `sqlite3_exec` does, because splitting SQL on semicolons is a parser
+    /// nobody should write twice. Nothing it produces is read.
+    public void script(String sql) {
+        try (var arena = Arena.ofConfined()) {
+            var message = arena.allocate(ADDRESS);
+            var status = Api.sqlite3_exec(
+                    handle, arena.allocateFrom(sql), MemorySegment.NULL, MemorySegment.NULL, message);
+            if (status == Api.SQLITE_OK) return;
+            var reason = Values.string(message.get(ADDRESS, 0));
+            Api.sqlite3_free(message.get(ADDRESS, 0));
+            throw new SqliteException(reason, status);
+        }
+    }
+
+    /// Runs the work in one transaction: all of it or none of it.
+    ///
+    /// Bulk writing belongs in here. SQLite makes its changes durable at the
+    /// end of a transaction, so a thousand statements outside one are a
+    /// thousand trips to the disk. Transactions do not nest — this is the
+    /// outermost one or it is a mistake.
+    public void transaction(Runnable work) {
+        execute("begin immediate");
+        try {
+            work.run();
+        } catch (RuntimeException | Error e) {
+            execute("rollback");
+            throw e;
+        }
+        execute("commit");
+    }
+
     public long changes() {
         return Api.sqlite3_changes(handle);
     }

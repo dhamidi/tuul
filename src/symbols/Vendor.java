@@ -57,6 +57,23 @@ public final class Vendor {
         return binaries;
     }
 
+    /// What the vendored jars looked like when they were last read: every jar's
+    /// path, size and modification time. A dependency that has been replaced
+    /// says so here.
+    public String stamp() {
+        var stamp = new StringBuilder();
+        for (var jar : binaries) {
+            stamp.append(jar).append(':');
+            try {
+                stamp.append(Files.size(jar)).append(':').append(Files.getLastModifiedTime(jar).toMillis());
+            } catch (IOException gone) {
+                stamp.append("gone");
+            }
+            stamp.append('\n');
+        }
+        return stamp.toString();
+    }
+
     public Optional<Origin> lookup(String binaryName, String sourceFile) {
         var classFile = binaryName.replace('.', '/') + ".class";
         for (var jar : binaries) {

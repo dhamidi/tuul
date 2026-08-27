@@ -131,6 +131,17 @@ public final class Docs {
         return text.isEmpty() ? head : head + " " + text;
     }
 
+    /// What a search found: the symbol, and the first thing it says about
+    /// itself. A list of names with no summaries is a list nobody can choose
+    /// from.
+    public static void matches(List<Json> matches, Writer out) throws IOException {
+        for (var match : matches) {
+            if (!(match instanceof Json.Object found)) continue;
+            out.write(found.string("symbol", "") + "\n");
+            wrap(summary(found.string("doc", "")), "      ", out);
+        }
+    }
+
     /// The first sentence, the way javadoc means it.
     private static String summary(String doc) {
         if (doc.isEmpty()) return doc;

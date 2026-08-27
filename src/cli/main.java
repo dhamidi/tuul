@@ -44,6 +44,7 @@ Command tuul() {
     var docs = Command.named("docs", "describe a type from the project, vendor/ or the JDK")
             .flag("json", "print the description as JSON")
             .flag("all", "include non-public members")
+            .value("search", "search names and documentation instead of naming a symbol")
             .repeated("source-path", "where to look for sources (default: src)")
             .repeated("vendor", "where to look for jars (default: vendor)")
             .optional("symbol", "the type to describe");
@@ -97,6 +98,7 @@ Message docs(Json.Object values) {
     }
     return Message.of("docs.query")
             .with("symbol", values.string("symbol", ""))
+            .with("search", values.string("search", ""))
             .with("json", values.flag("json"))
             .with("all", values.flag("all"))
             .with("sections", Json.Array.of(sections))

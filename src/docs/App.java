@@ -23,15 +23,21 @@ import symbols.Index;
 /// writers are bound here, at the edge, and nowhere else.
 public final class App {
 
+    /// How many matches a search answers with. Enough to choose from, few
+    /// enough to read.
+    private static final int MATCHES = 20;
+
     private App() {}
 
     public static Application<State> of(State initial, Writer out, Writer err) {
         return Application.of(initial)
                 .on("docs.query", App::query)
                 .on("docs.result", App::result)
+                .on("docs.found", App::found)
                 .on("docs.missing", App::missing)
                 .on("error", App::failed)
                 .effect("symbols.lookup", App::look)
+                .effect("symbols.search", App::search)
                 .effect("docs.print", (effect, _) -> print(effect, out))
                 .effect("docs.report", (effect, _) -> report(effect, err));
     }
@@ -43,8 +49,10 @@ public final class App {
                 message.flag("json"),
                 sections(message.list("sections")),
                 message.flag("all"));
-        return Step.of(asking, Effect.of("symbols.lookup")
+        var search = message.string("search", "");
+        return Step.of(asking, Effect.of(search.isEmpty() ? "symbols.lookup" : "symbols.search")
                 .with("symbol", message.string("symbol", ""))
+                .with("search", search)
                 .with("sourcePath", directories(asking.sourcePath()))
                 .with("vendorPath", directories(asking.vendorPath()))
                 .with("all", asking.all()));
@@ -55,6 +63,15 @@ public final class App {
                 .with("symbol", message.body().without("type"))
                 .with("json", state.json())
                 .with("sections", Json.Array.strings(List.copyOf(state.sections()))));
+    }
+
+    /// A search answers with a list rather than a symbol, so it prints as one.
+    private static Step<State> found(State state, Message message) {
+        var matches = message.list("matches");
+        if (matches.isEmpty()) return Step.of(state.failed(), report("nothing matches " + message.string("search", "")));
+        return Step.of(state, Effect.of("docs.print")
+                .with("matches", Json.Array.of(matches))
+                .with("json", state.json()));
     }
 
     private static Step<State> missing(State state, Message message) {
@@ -69,19 +86,45 @@ public final class App {
         return Effect.of("docs.report").with("line", line);
     }
 
+    /// Searching needs the project indexed, so this is where a first search
+    /// pays for one — and every search after it does not.
+    private static void search(Effect effect, Effect.Emitter emit) throws IOException {
+        var wanted = effect.string("search", "");
+        try (var index = Index.of(paths(effect.list("sourcePath")), paths(effect.list("vendorPath")))) {
+            var found = index.search(wanted, MATCHES).stream()
+                    .map(match -> (Json) Json.Object.of()
+                            .with("symbol", match.symbol())
+                            .with("kind", match.kind())
+                            .with("doc", match.doc()))
+                    .toList();
+            emit.emit(Message.of("docs.found").with("search", wanted).with("matches", Json.Array.of(found)));
+        }
+    }
+
     private static void look(Effect effect, Effect.Emitter emit) throws IOException {
         var symbol = effect.string("symbol", "");
         if (symbol.isEmpty()) {
             emit.emit(Message.error("no symbol given"));
             return;
         }
-        emit.emit(Index.of(paths(effect.list("sourcePath")), paths(effect.list("vendorPath")))
-                .lookup(symbol)
-                .map(type -> Message.of("docs.result", Docs.describe(type, effect.flag("all"))))
-                .orElseGet(() -> Message.of("docs.missing").with("symbol", symbol)));
+        try (var index = Index.of(paths(effect.list("sourcePath")), paths(effect.list("vendorPath")))) {
+            emit.emit(index.lookup(symbol)
+                    .map(type -> Message.of("docs.result", Docs.describe(type, effect.flag("all"))))
+                    .orElseGet(() -> Message.of("docs.missing").with("symbol", symbol)));
+        }
     }
 
     private static void print(Effect effect, Writer out) throws IOException {
+        if (effect.get("matches") instanceof Json.Array(var matches)) {
+            if (effect.flag("json")) {
+                Json.Object.of().with("matches", Json.Array.of(matches)).write(out);
+                out.write("\n");
+            } else {
+                Docs.matches(matches, out);
+            }
+            out.flush();
+            return;
+        }
         if (!(effect.get("symbol") instanceof Json.Object description)) return;
         var sections = sections(effect.list("sections"));
         if (!effect.flag("json")) {

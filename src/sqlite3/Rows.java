@@ -1,7 +1,6 @@
 package sqlite3;
 
 import static java.lang.foreign.ValueLayout.ADDRESS;
-import static java.lang.foreign.ValueLayout.JAVA_BYTE;
 
 import java.lang.foreign.Arena;
 import java.lang.foreign.MemorySegment;
@@ -131,20 +130,8 @@ public final class Rows implements AutoCloseable {
         return index;
     }
 
-    /// Binds one parameter, taking the SQLite type from the Java one.
     private void bind(int parameter, Object value) {
-        var status = switch (value) {
-            case null -> Api.sqlite3_bind_null(statement, parameter);
-            case String text -> Api.sqlite3_bind_text(
-                    statement, parameter, arena.allocateFrom(text), -1, Values.TRANSIENT);
-            case byte[] bytes -> Api.sqlite3_bind_blob(
-                    statement, parameter, arena.allocateFrom(JAVA_BYTE, bytes), bytes.length, Values.TRANSIENT);
-            case Boolean flag -> Api.sqlite3_bind_int64(statement, parameter, flag ? 1 : 0);
-            case Float number -> Api.sqlite3_bind_double(statement, parameter, number);
-            case Double number -> Api.sqlite3_bind_double(statement, parameter, number);
-            case Number number -> Api.sqlite3_bind_int64(statement, parameter, number.longValue());
-            default -> throw new SqliteException("cannot bind a " + value.getClass().getName(), -1);
-        };
+        var status = Values.bind(statement, arena, database, parameter, value);
         if (status != Api.SQLITE_OK) throw new SqliteException(database.message(), status);
     }
 }
