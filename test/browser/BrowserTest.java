@@ -24,6 +24,7 @@ public final class BrowserTest {
         try (var index = Index.of(List.of(sources), List.of(), index(sources));
              var browser = Browser.of(index, null)) {
             updates(browser);
+            results(browser);
             negotiates(browser);
             missing(browser);
             journey(browser);
@@ -51,6 +52,41 @@ public final class BrowserTest {
                 application.Message.of(Routes.SEARCH, params(Map.of("q", "json"))));
         Check.equal("a search that was typed asks the index once", 1, typed.effects().size());
         Check.equal("and keeps the question, so the box still holds it", "json", typed.state().query());
+    }
+
+    /// What a search result is for: being clicked. Each of these was a way the
+    /// results looked right and led nowhere.
+    private static void results(Browser browser) {
+        var found = Memory.handle(browser.handler(), Memory.get("/search?q=write")).text();
+
+        Check.that("a result link leaves the frame it is in, rather than asking a page for one",
+                found.contains("data-turbo-frame=\"_top\""));
+        Check.that("a member links to its type's page and the place on it",
+                found.contains("href=\"/symbols/json.Json#write\""));
+
+        var page = Memory.handle(browser.handler(), Memory.get("/symbols/json.Json"));
+        Check.equal("which is a page that exists", 200, page.status());
+        Check.that("and that place is on it", page.text().contains("<li id=\"write\""));
+        Check.that("an overload gets an id of its own, because two cannot share one",
+                page.text().contains("<li id=\"write-2\""));
+        Check.that("a type in a signature is a link, so a return type can be followed",
+                page.text().contains("href=\"/symbols/java.io.Writer\""));
+
+        Check.equal("overloads are one result, since they are one place",
+                1, found.split("href=\"/symbols/json.Json#write\"", -1).length - 1);
+        Check.that("a private member is not offered at all",
+                !Memory.handle(browser.handler(), Memory.get("/search?q=hidden")).text().contains("#hidden"));
+
+        var frame = Memory.handle(browser.handler(),
+                Memory.request("GET", "/search?q=write", Headers.of("Turbo-Frame", Views.RESULTS), ""));
+        Check.that("a frame request is answered with the frame", frame.text().startsWith("<turbo-frame"));
+        Check.that("and not with a document Turbo would throw away", !frame.text().contains("<html"));
+        Check.that("while a request that is not one still gets the whole page", found.contains("<html"));
+
+        var punctuation = Memory.handle(browser.handler(), Memory.get("/search?q=..."));
+        Check.equal("a query with no words in it is answered, not failed", 200, punctuation.status());
+        Check.that("and says nothing matched rather than showing a database error",
+                !punctuation.text().contains("fts5"));
     }
 
     /// The same URL answers a person and an agent differently, which is the
@@ -155,6 +191,14 @@ public final class BrowserTest {
                     /// @param out where it goes
                     /// @return what was written
                     String write(java.io.Writer out);
+
+                    /// Writes this value somewhere, indented.
+                    String write(java.io.Writer out, boolean pretty);
+
+                    /// What nobody outside can see.
+                    private String hidden() {
+                        return "";
+                    }
                 }
                 """);
         Files.writeString(sources.resolve("JsonWriter.java"), """

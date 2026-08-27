@@ -135,6 +135,12 @@ public final class Symbols {
         };
     }
 
+    /// Searches the index, and answers each symbol once.
+    ///
+    /// Three overloads of `of` are three members and one place: a result names
+    /// a symbol and links to where it is written, and the index knows nothing
+    /// about parameters, so three rows would render as the same line three
+    /// times pointing at the same anchor.
     public static Effect.Handler searching(Index index, int limit) {
         return (effect, emit) -> {
             var query = effect.string("query", "");
@@ -142,7 +148,9 @@ public final class Symbols {
                 emit.emit(Message.of(MATCHED).with("matches", Json.Array.of(List.of())));
                 return;
             }
+            var seen = new java.util.LinkedHashSet<String>();
             var matches = index.search(query, limit).stream()
+                    .filter(match -> seen.add(match.symbol()))
                     .map(match -> (Json) Json.Object.of()
                             .with("symbol", match.symbol())
                             .with("kind", match.kind())

@@ -101,9 +101,27 @@ public final class Turbo {
         return Html.element("turbo-stream", Attribute.of("action", Action.REFRESH.attribute()));
     }
 
+    /// The frame that means the whole page. A link inside a frame drives that
+    /// frame by default, so a link meant to navigate has to say so.
+    public static final String TOP = "_top";
+
     /// Which frame a link or a form should drive, rather than the one it is in.
     public static Attribute targetFrame(String id) {
         return Attributes.data("turbo-frame", id);
+    }
+
+    /// What a frame navigation should do to the browser's history: `advance`
+    /// pushes an entry, `replace` swaps the current one. Without it a frame
+    /// updates silently, and the URL goes on describing the page somebody saw
+    /// before they did anything.
+    public static Attribute action(String action) {
+        return Attributes.data("turbo-action", action);
+    }
+
+    /// The usual one: this frame update was a navigation, so it belongs in the
+    /// history and in the address bar.
+    public static Attribute advance() {
+        return action("advance");
     }
 
     /// The method a link should use — Turbo turns a link into a form to do it.

@@ -115,6 +115,11 @@ final class Store implements AutoCloseable {
     /// query. Every run of word characters becomes a quoted token and the
     /// tokens are ANDed, which is what the typist meant and cannot fail
     /// whatever they type.
+    ///
+    /// A query with no word characters in it at all — `...`, `-`, `()` — asks
+    /// for nothing, and is answered with nothing. It is not an error: search
+    /// runs as somebody types, so the first keystroke of `.Json` would
+    /// otherwise show them a database complaining.
     static String query(String typed) {
         var tokens = new ArrayList<String>();
         for (var token : typed.split("[^\\p{IsAlphabetic}\\p{IsDigit}_]+")) {
@@ -123,10 +128,33 @@ final class Store implements AutoCloseable {
         return String.join(" ", tokens);
     }
 
+    /// Ranked so that the thing somebody named comes first.
+    ///
+    /// bm25 alone answers `sqlite3.Database` with nineteen of its own members
+    /// before the type itself, because each member's row mentions the name too
+    /// and is shorter. So the ordering is stated rather than inherited: what
+    /// was typed exactly, then a type called that whatever its package, then
+    /// the other types, then members, and bm25 within each.
+    ///
+    /// The second of those is why `json` finds `json.Json` rather than five of
+    /// its nested types: somebody typing a bare name means the thing with that
+    /// name, and a package is not something they should have to remember.
     List<Index.Match> search(String text, int limit) {
+        var match = query(text);
+        if (match.isBlank()) return List.of();
+
         var found = new ArrayList<Index.Match>();
-        try (var rows = database.query(
-                "select symbol, kind, doc from search where search match ? order by rank limit ?", query(text), limit)) {
+        try (var rows = database.query("""
+                select symbol, kind, doc from search
+                where search match ?
+                order by case
+                    when lower(replace(symbol, '$', '.')) = lower(?) then 0
+                    when member is null and lower(replace(symbol, '$', '.')) like '%.' || lower(?) then 1
+                    when member is null then 2
+                    else 3
+                end, rank
+                limit ?
+                """, match, text.strip(), text.strip(), limit)) {
             while (rows.next()) {
                 found.add(new Index.Match(rows.text(0).replace('$', '.'), rows.text(1), rows.text(2)));
             }

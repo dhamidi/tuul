@@ -34,6 +34,12 @@ public final class Views {
     /// updating.
     public static final String RESULTS = "results";
 
+    /// A qualified type name, which is what can be linked: dotted, and ending
+    /// in a segment that begins with a capital. `java.lang.String` is one and
+    /// the parameter name after it is not.
+    private static final java.util.regex.Pattern QUALIFIED =
+            java.util.regex.Pattern.compile("[a-zA-Z_$][\\w$]*(?:\\.[a-zA-Z_$][\\w$]*)*\\.[A-Z][\\w$]*");
+
     private Views() {}
 
     /// A whole page. The import map and the module that starts Turbo and
@@ -47,6 +53,7 @@ public final class Views {
                                 meta(charset("utf-8")),
                                 meta(name("viewport"), content("width=device-width, initial-scale=1")),
                                 title(text(title + " — tuul")),
+                                link(rel("icon"), type("image/svg+xml"), href(assets.url("favicon.svg"))),
                                 link(rel("stylesheet"), href(assets.url("browser.css"))),
                                 Html.deferred(out -> modules.write(assets, out)),
                                 script(BOOT, type("module"))),
@@ -65,12 +72,18 @@ public final class Views {
     /// It targets the results frame and asks Stimulus to
     /// submit it as somebody types — the debounce is the controller's, because
     /// a keystroke is not a question worth asking the index.
+    ///
+    /// The search advances the history, so a search has a URL: it can be
+    /// shared, reloaded, and undone with Back. A frame that updates without
+    /// saying so leaves the address bar describing the page somebody saw before
+    /// they typed anything.
     private static Html search(Submission submission) {
         return Forms.html(submission,
                 classes("search"),
                 Stimulus.controller("search"),
                 Stimulus.action(Stimulus.on("input", "search", "ask")),
                 Turbo.targetFrame(RESULTS),
+                Turbo.advance(),
                 button(type("submit"), text("Search")));
     }
 
@@ -89,11 +102,15 @@ public final class Views {
                 ol(classes("matches"), Html.each(found.matches(), match -> match(routes, match))));
     }
 
+    /// One result. The link leaves the frame it is in: a result is a
+    /// navigation, and a link inside a Turbo Frame drives that frame by
+    /// default — which would ask a symbol page for a frame it does not have and
+    /// replace the results with `Content missing`.
     private static Html match(Router routes, Json match) {
         if (!(match instanceof Json.Object entry)) return Html.nothing();
         var symbol = entry.string("symbol", "");
         return li(Microdata.scope(), Microdata.type("/Symbol"),
-                a(href(symbolPath(routes, symbol)),
+                a(href(symbolHref(routes, symbol)), Turbo.targetFrame(Turbo.TOP),
                         code(Microdata.of("name"), text(symbol))),
                 span(classes("kind"), Microdata.of("kind"), text(kind(entry.string("kind", "")))),
                 documentation(entry.string("doc", "")));
@@ -165,19 +182,48 @@ public final class Views {
                 text(" " + (tag.string("name", "") + " " + tag.string("text", "")).strip()))));
     }
 
+    /// The members, each with an id, so that a search result for one can link
+    /// to the place it is written. Overloads share a name and an id has to be
+    /// unique, so the second `of` is `of-2` and a link to `#of` lands on the
+    /// first — which is what somebody following a result meant.
     private static Html members(Router routes, String heading, Json.Object description, String key) {
         var members = objects(description, key);
         if (members.isEmpty()) return Html.nothing();
-        return section(classes("members"),
-                h2(text(heading)),
-                ul(Html.each(members, member -> member(routes, member))));
+        var taken = new java.util.HashMap<String, Integer>();
+        var written = new ArrayList<Html>();
+        for (var member : members) {
+            var name = member.string("name", "");
+            var seen = taken.merge(name, 1, Integer::sum);
+            written.add(member(routes, member, seen == 1 ? anchor(name) : anchor(name) + "-" + seen));
+        }
+        return section(classes("members"), h2(text(heading)), ul(Html.fragment(written)));
     }
 
-    private static Html member(Router routes, Json.Object member) {
-        return li(Microdata.scope(), Microdata.type("/Member"),
-                code(classes("signature"), Microdata.of("signature"), text(member.string("signature", ""))),
+    private static Html member(Router routes, Json.Object member, String anchor) {
+        return li(id(anchor), Microdata.scope(), Microdata.type("/Member"),
+                code(classes("signature"), Microdata.of("signature"),
+                        signature(routes, member.string("signature", ""))),
                 documentation(member.string("doc", "")),
                 tags(member));
+    }
+
+    /// A signature with every type in it a link.
+    ///
+    /// Following a return type to its own page is how somebody reads an API,
+    /// and it is the difference between a page that documents a type and one
+    /// that lets you explore from it. A qualified name is one this browser can
+    /// show; a parameter name has no dots and stays as it is written.
+    private static Html signature(Router routes, String signature) {
+        var parts = new ArrayList<Html>();
+        var names = QUALIFIED.matcher(signature);
+        var written = 0;
+        while (names.find()) {
+            if (names.start() > written) parts.add(text(signature.substring(written, names.start())));
+            parts.add(a(href(symbolPath(routes, names.group())), text(names.group())));
+            written = names.end();
+        }
+        if (written < signature.length()) parts.add(text(signature.substring(written)));
+        return Html.fragment(parts);
     }
 
     /// The index files a kind as the enum spells it. A page is read by a
@@ -188,6 +234,22 @@ public final class Views {
 
     private static String symbolPath(Router routes, String symbol) {
         return routes.path(Routes.SYMBOL, Map.of("name", symbol));
+    }
+
+    /// Where a search result goes. A member is not a page — it is a place on
+    /// its type's page — so `json.Json#of` is the `json.Json` page and the
+    /// anchor `of`, which is the only URL that exists for it.
+    private static String symbolHref(Router routes, String symbol) {
+        var member = symbol.indexOf('#');
+        if (member < 0) return symbolPath(routes, symbol);
+        return symbolPath(routes, symbol.substring(0, member)) + "#" + anchor(symbol.substring(member + 1));
+    }
+
+    /// The id a member is given on its type's page. Overloads share a name, so
+    /// the later ones are numbered — an id has to be unique, and the plain name
+    /// lands on the first, which is what a link to `#of` should do.
+    private static String anchor(String member) {
+        return member;
     }
 
     private static List<String> one(Json.Object description, String key) {

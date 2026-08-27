@@ -21,7 +21,9 @@ final class Schema {
     /// `tuul` as four bytes, so `file` and a hex dump both give it away.
     static final int APPLICATION = 0x7475756c;
 
-    static final int VERSION = 1;
+    /// Bumped when the shape below changes in a way that would make an older
+    /// file answer differently — version 2 stopped indexing private members.
+    static final int VERSION = 2;
 
     /// The whole format. Types, the members they declare, the parameters those
     /// take, the tags on either, and the origin each type was learned from.
@@ -110,6 +112,12 @@ final class Schema {
     /// A member's row is owned by its *type*, not by itself, so forgetting a
     /// type forgets everything written about it in one statement, and the two
     /// tables' ids can never be mistaken for one another.
+    ///
+    /// Only members somebody could read are searchable. Everything a type
+    /// declares is *stored*, because `tuul docs --all` asks for it, but a
+    /// private field offered by search is a result that leads nowhere: the page
+    /// does not show it and cannot, so search and `docs` would disagree about
+    /// what exists.
     private static final String SEARCH = """
             create virtual table search using fts5 (
                 symbol,
@@ -125,7 +133,8 @@ final class Schema {
                 values (new.name, new.doc, new.kind, new.id, null);
             end;
 
-            create trigger member_indexed after insert on member begin
+            create trigger member_indexed after insert on member
+            when new.modifiers like '%public%' or new.modifiers like '%protected%' begin
                 insert into search (symbol, doc, kind, owner, member)
                 select type.name || '#' || new.name, new.doc, new.kind, new.type, new.id
                 from type where type.id = new.type;

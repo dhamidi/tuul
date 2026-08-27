@@ -125,9 +125,10 @@ public final class Browser implements AutoCloseable {
     }
 
     /// The front page and the search results are the same page: a search with
-    /// nothing typed is the front page. Answering a full page either way is
-    /// what lets Turbo take the frame out of it and lets somebody without
-    /// JavaScript use the form anyway.
+    /// nothing typed is the front page. A request that did not come from a
+    /// frame is answered with the whole page, which is what lets somebody
+    /// without JavaScript use the form, and what makes a search URL something
+    /// that can be shared and reloaded.
     private Page<Found> searching() {
         return Page.of(Found::nothing)
                 .on(Routes.HOME, Symbols::searched)
@@ -136,9 +137,21 @@ public final class Browser implements AutoCloseable {
                 .on("error", Symbols::unsearched)
                 .effect(Symbols.SEARCH, Symbols.searching(index, MATCHES))
                 .render((found, request, response) -> render(
-                        Views.page(routes, assets, modules, title(found), Search.asking(routes, found.query()),
-                                Views.results(routes, found)),
+                        frame(request)
+                                ? Views.results(routes, found)
+                                : Views.page(routes, assets, modules, title(found),
+                                        Search.asking(routes, found.query()), Views.results(routes, found)),
                         Status.OK, response));
+    }
+
+    /// Whether Turbo asked for a frame rather than a page.
+    ///
+    /// It says so in a header, and answering a whole document to a frame
+    /// request means sending the head, the import map, the boot script and the
+    /// bar on every keystroke for Turbo to throw all of it away — six thousand
+    /// bytes where fifteen hundred would do.
+    private static boolean frame(Request request) {
+        return request.headers().has("Turbo-Frame");
     }
 
     private Page<Symbol> showing() {

@@ -104,6 +104,21 @@ public final class StoreTest {
                     store.search("kubernetes", 5).isEmpty());
             Check.equal("a limit is a limit", 1, store.search("invoice", 1).size());
 
+            Check.equal("a type named exactly comes before its own members",
+                    "invoicing.Invoice", store.search("invoicing.Invoice", 5).getFirst().symbol());
+            Check.equal("and a bare name finds the type called that, not a member mentioning it",
+                    "invoicing.Invoice", store.search("Invoice", 5).getFirst().symbol());
+
+            Check.that("a private member is not offered by search, since no page will show it",
+                    store.search("what is owed", 5).isEmpty());
+            Check.that("though it is still stored, because tuul docs --all asks for it",
+                    store.type(origin.id(), "invoicing.Invoice").orElseThrow().fields().stream()
+                            .anyMatch(field -> field.name().equals("amount")));
+
+            Check.that("a query with no words in it finds nothing rather than failing",
+                    store.search("...", 5).isEmpty() && store.search("-", 5).isEmpty()
+                            && store.search("()", 5).isEmpty());
+
             store.origin("project", "sources", "two");
             Check.that("and forgetting a type forgets it from the search as well",
                     store.search("fixed amount", 5).isEmpty());

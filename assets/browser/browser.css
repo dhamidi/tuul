@@ -73,7 +73,10 @@ h2 { font-size: 1rem; text-transform: uppercase; letter-spacing: 0.06em; color: 
 .kind { color: var(--accent); font-weight: 500; }
 .modifiers, .inherits { color: var(--muted); margin: 0.15rem 0; }
 .inherits .label { color: var(--muted); }
-.doc { margin: 0.5rem 0; }
+/* Doc comments arrive with their line structure intact — Javadoc keeps the
+   newlines on purpose — so a paragraph break stays a break and an example in a
+   comment stays on its own lines rather than running into the prose. */
+.doc { margin: 0.5rem 0; white-space: pre-wrap; }
 .hint, .problem { color: var(--muted); }
 
 .matches { list-style: none; padding: 0; margin: 0; }
