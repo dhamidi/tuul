@@ -8,10 +8,12 @@ import java.nio.file.Files;
 import java.nio.file.Path;
 import java.nio.file.StandardCopyOption;
 import java.util.ArrayList;
+import java.util.Collections;
 import java.util.Comparator;
 import java.util.List;
 import java.util.jar.Attributes;
 import java.util.jar.JarEntry;
+import java.util.jar.JarFile;
 import java.util.jar.JarOutputStream;
 import java.util.jar.Manifest;
 import tuul.Version;
@@ -58,7 +60,7 @@ public final class Install {
         var classes = 0;
         var written = 0;
         if (home.packaged()) {
-            Files.copy(home.classes(), jar);
+            classes = repack(home.classes(), jar);
             Files.copy(home.sources(), sources);
         } else {
             classes = pack(home.classes(), jar, ".class");
@@ -147,6 +149,36 @@ public final class Install {
     }
 
     /// Everything under `root` with this extension, minus the entrypoints.
+    /// Copies a distribution jar into a project without what the project
+    /// cannot use.
+    ///
+    /// A distribution carries the prebuilt libraries and the web assets inside
+    /// itself, because that is how an installed tuul has them to hand out. A
+    /// project is handed them beside the jar, so carrying them inside it as
+    /// well is five megabytes of every project that nothing will ever read.
+    private static int repack(Path distribution, Path jar) throws IOException {
+        var written = 0;
+        try (var from = new JarFile(distribution.toFile());
+                var out = new JarOutputStream(Files.newOutputStream(jar), from.getManifest())) {
+            for (var entry : Collections.list(from.entries())) {
+                if (entry.isDirectory() || shipped(entry.getName())) continue;
+                if (entry.getName().startsWith("META-INF/")) continue;
+                out.putNextEntry(new JarEntry(entry.getName()));
+                try (var bytes = from.getInputStream(entry)) {
+                    bytes.transferTo(out);
+                }
+                out.closeEntry();
+                written++;
+            }
+        }
+        return written;
+    }
+
+    /// What a distribution carries for handing out rather than for running.
+    private static boolean shipped(String entry) {
+        return entry.startsWith(Home.NATIVE + "/") || entry.startsWith(Home.ASSETS + "/");
+    }
+
     private static int pack(Path root, Path jar, String extension) throws IOException {
         var manifest = new Manifest();
         var attributes = manifest.getMainAttributes();
