@@ -73,7 +73,7 @@ public final class Assets {
     /// still replace either by putting a file of that name in its own load path.
     public static Assets standard(List<Path> loadPaths) {
         var all = new ArrayList<>(loadPaths);
-        all.add(Hotwired.path());
+        all.addAll(Hotwired.shipped());
         return of(all);
     }
 

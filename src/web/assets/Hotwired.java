@@ -1,5 +1,6 @@
 package web.assets;
 
+import java.io.IOException;
 import java.net.URISyntaxException;
 import java.nio.file.Files;
 import java.nio.file.Path;
@@ -44,6 +45,25 @@ public final class Hotwired {
     public static Path path() {
         var candidates = candidates();
         return candidates.stream().filter(Files::isDirectory).findFirst().orElse(candidates.getLast());
+    }
+
+    /// Every directory of vendored assets that travels with tuul: Turbo and
+    /// Stimulus, the cable's Stimulus controller, and whatever ships later.
+    ///
+    /// They are enumerated rather than named, so a package that ships assets
+    /// does not have to be known here — `web.assets` would otherwise have to
+    /// import `web.cable` to put its one file on the load path, which is
+    /// backwards.
+    public static List<Path> shipped() {
+        var here = path();
+        var root = here.getParent();
+        if (root == null || !Files.isDirectory(root)) return List.of(here);
+        try (var directories = Files.list(root)) {
+            var found = directories.filter(Files::isDirectory).sorted().toList();
+            return found.isEmpty() ? List.of(here) : found;
+        } catch (IOException e) {
+            return List.of(here);
+        }
     }
 
     private static List<Path> candidates() {
