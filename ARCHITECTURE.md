@@ -40,6 +40,15 @@ file name, serve it immutable, rewrite the references inside stylesheets, and
 pin ES modules in an import map. No bundler, no transpiler, no build step that
 has to be installed.
 
+`web` is server-agnostic. It defines the operations the rest of it needs — a
+request, a response being written, a handler, a handler wrapping a handler — as
+interfaces, and binding a server to them is implementing those interfaces and
+nothing else. `jdk.httpserver` is one implementation and an in-memory one used
+by the tests is another; neither is special. This is Go's `net/http` shape, for
+Go's reason: a handler that takes an interface can be tested without a socket,
+deployed on another server without being rewritten, and wrapped by middleware
+that knows nothing about either.
+
 `jdk.httpserver` is HTTP/1.1 only, has no WebSocket, and routes by longest
 prefix. That is a fair trade for a framework we control end to end, and it puts
 two obligations on `web`: set the request and response timeouts, since a server
