@@ -12,6 +12,7 @@ void main() throws Exception {
     ffi.PlatformTest.run();
     uritemplates.TemplatesTest.run();
     eventstream.EventStreamTest.run();
+    web.WebTest.run();
     web.ui.UiTest.run();
     web.assets.AssetsTest.run();
     web.dispatch.DispatchTest.run();
