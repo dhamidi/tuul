@@ -4,6 +4,7 @@ import harness.Check;
 
 void main() throws Exception {
     json.JsonTest.run();
+    jsonrpc2.Jsonrpc2Test.run();
     markdown.MarkdownTest.run();
     application.ApplicationTest.run();
     peg.PegTest.run();
