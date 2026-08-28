@@ -90,7 +90,8 @@ public final class ViewsTest {
         Check.that("naming it, so a spec can ask which one", page.contains("itemprop=\"name\""));
         Check.that("saying what kind of thing it is", page.contains("itemprop=\"kind\""));
         Check.that("and what it says about itself", page.contains("itemprop=\"doc\""));
-        Check.that("with the modifiers it was declared with", page.contains("public final"));
+        Check.that("with the modifiers it was declared with",
+                page.contains(">public<") && page.contains(">final<"));
 
         Check.that("a supertype is a link, since following one is why this page exists",
                 page.contains("href=\"/symbols/java.io.Writer\""));

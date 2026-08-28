@@ -127,16 +127,31 @@ public final class Ui {
         }
     }
 
-    /// Code, inline: a name, a signature, a value.
+    /// Code: a name, a signature, a value. `block` makes it a block of code
+    /// rather than a word inside a sentence — a modifier rather than a
+    /// component of its own, because the difference is how it sits on the page
+    /// and not what it is.
     public record Mono(Props props, Node[] content) implements Component {
 
         public Mono {
-            props.only();
+            props.only("block");
         }
 
         @Override
         public Html render() {
-            return Html.element("code", Component.rooted("ui-mono", content));
+            if (!props.flag("block")) return Html.element("code", Component.rooted("ui-mono", content));
+
+            // The caller's attributes belong on the block and its children
+            // inside the code element, so a `pre` carrying microdata still
+            // holds nothing but code.
+            var outside = new java.util.ArrayList<Node>();
+            var inside = new java.util.ArrayList<Node>();
+            for (var node : Component.rooted("ui-mono ui-mono--block", content)) {
+                if (node instanceof Attribute) outside.add(node);
+                else inside.add(node);
+            }
+            outside.add(Html.element("code", inside.toArray(new Node[0])));
+            return Html.element("pre", outside.toArray(new Node[0]));
         }
     }
 
@@ -179,14 +194,15 @@ public final class Ui {
     public record Items(Props props, Node[] content) implements Component {
 
         public Items {
-            props.only("ordered", "divided");
+            props.only("ordered", "divided", "columns");
         }
 
         @Override
         public Html render() {
             var divided = props.flag("divided") ? " ui-items--divided" : "";
+            var columns = props.flag("columns") ? " ui-items--columns" : "";
             return Html.element(props.flag("ordered") ? "ol" : "ul",
-                    Component.rooted("ui-items" + divided, content));
+                    Component.rooted("ui-items" + divided + columns, content));
         }
     }
 
@@ -279,6 +295,29 @@ public final class Ui {
         }
     }
 
+    // -------------------------------------------------------------- controls
+
+    /// A button. `submit` is what a form needs and what says, by being there,
+    /// that there is something to submit — a text box alone is a blank
+    /// rectangle that a reader has to guess at.
+    ///
+    /// The fifteenth component, and the first that is a control rather than a
+    /// way of saying something. A design system without a button is a design
+    /// system for reading only.
+    public record Button(Props props, Node[] content) implements Component {
+
+        public Button {
+            props.only("submit");
+        }
+
+        @Override
+        public Html render() {
+            var kind = props.flag("submit") ? "submit" : "button";
+            return Html.element("button",
+                    Component.rooted("ui-button", prepend(Attributes.type(kind), content)));
+        }
+    }
+
     // -------------------------------------------------------------- feedback
 
     /// Something the reader needs to know: an explanation, a warning, a
@@ -345,6 +384,14 @@ public final class Ui {
 
     public static Html mono(Node... content) {
         return new Mono(Props.NONE, content);
+    }
+
+    public static Html mono(Props props, Node... content) {
+        return new Mono(props, content);
+    }
+
+    public static Html button(Props props, Node... content) {
+        return new Button(props, content);
     }
 
     public static Html anchor(Props props, Node... content) {

@@ -8,6 +8,11 @@
 
 * { box-sizing: border-box; }
 
+/* The column everything sits in. The bar and the content share it, or the page
+   reads as two designs stacked — at 2000px the bar's contents started 560px
+   from where the content below them did. */
+:root { --page: 52rem; }
+
 body {
   margin: 0;
   background: var(--ui-paper);
@@ -16,7 +21,7 @@ body {
 }
 
 .bar {
-  padding: var(--ui-space-3) var(--ui-space-6);
+  padding: var(--ui-space-3) 0;
   border-bottom: 1px solid var(--ui-rule);
   position: sticky;
   top: 0;
@@ -24,19 +29,63 @@ body {
   z-index: 1;
 }
 
+.bar > .ui-group {
+  max-width: var(--page);
+  margin: 0 auto;
+  padding: 0 var(--ui-space-6);
+}
+
 .brand { font-weight: 600; letter-spacing: 0.02em; color: var(--ui-ink); }
 
-main { max-width: 52rem; margin: 0 auto; padding: var(--ui-space-6); }
+main { max-width: var(--page); margin: 0 auto; padding: var(--ui-space-6); }
+
+/* The way past the bar and the breadcrumb for somebody using a keyboard. It is
+   the first thing focusable and invisible until it is focused, which is the
+   only arrangement that helps the people who need it without taxing everyone
+   else. On a page of sixty members, tabbing through a class comment's links to
+   reach the first one is a minute of somebody's life. */
+.skip {
+  position: absolute;
+  left: var(--ui-space-2);
+  top: -3rem;
+  z-index: 2;
+  padding: var(--ui-space-2) var(--ui-space-3);
+  background: var(--ui-surface);
+  border: 1px solid var(--ui-edge);
+  border-radius: var(--ui-radius);
+  transition: top 0.1s;
+}
+.skip:focus {
+  top: var(--ui-space-2);
+  outline: 2px solid var(--ui-link);
+  outline-offset: 2px;
+}
 
 /* The search form comes from web.forms, so it is styled by what it is rather
    than by a class this application chose. */
 .search { display: flex; gap: var(--ui-space-2); align-items: center; flex: 1; }
-.search .field { flex: 1; max-width: 32rem; }
-.search label, .search .field-hint { display: none; }
+.search .field { flex: 1; max-width: 32rem; display: flex; gap: var(--ui-space-2); align-items: center; }
+/* The label and the hint are said to a screen reader and not to the eye. They
+   were `display: none`, which says them to neither: the control announced
+   itself as an unnamed box, and its aria-describedby pointed at nothing a
+   browser would read. */
+.search label, .search .field-hint {
+  position: absolute;
+  width: 1px;
+  height: 1px;
+  margin: -1px;
+  padding: 0;
+  overflow: hidden;
+  clip-path: inset(50%);
+  white-space: nowrap;
+  border: 0;
+}
 .search input {
   width: 100%;
   padding: var(--ui-space-1) var(--ui-space-2);
-  border: 1px solid var(--ui-rule);
+  /* A control's boundary, not a divider: 3:1, where the rule is 1.6:1 and was
+     1.28:1 — a field nobody could see the edge of. */
+  border: 1px solid var(--ui-edge);
   border-radius: var(--ui-radius);
   background: var(--ui-paper);
   color: var(--ui-ink);

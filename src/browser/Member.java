@@ -65,9 +65,10 @@ public record Member(Router routes, Props props, Json.Object member) implements 
         return Html.fragment(parts);
     }
 
+    /// The same rendering the rest of the browser uses, so a code example in a
+    /// member's comment looks like one in a type's.
     private Html documentation(String doc) {
-        return doc.isBlank() ? Html.nothing() : Ui.prose(Props.of("tone", "muted").on("wrap"),
-                Microdata.of("doc"), text(doc));
+        return Views.documentation(doc);
     }
 
     private Html tags() {
@@ -76,10 +77,17 @@ public record Member(Router routes, Props props, Json.Object member) implements 
             if (tag instanceof Json.Object entry) tags.add(entry);
         }
         if (tags.isEmpty()) return Html.nothing();
-        return Ui.items(Html.each(List.copyOf(tags), tag -> Ui.item(
-                Ui.group(Props.of("gap", "sm", "align", "baseline"),
-                        Ui.badge(Props.of("tone", "plain"), text("@" + tag.string("tag", ""))),
-                        Ui.prose(Props.of("tone", "muted"),
-                                text((tag.string("name", "") + " " + tag.string("text", "")).strip()))))));
+        return Ui.items(Html.each(List.copyOf(tags), Member::tag));
+    }
+
+    /// One tag. What it names is set apart from what it says about it: they
+    /// shared a weight and a face, so `@param original A String` read as one
+    /// run of words with no boundary in it.
+    static Html tag(Json.Object tag) {
+        var named = tag.string("name", "");
+        return Ui.item(Ui.group(Props.of("gap", "sm", "align", "baseline"),
+                Ui.badge(Props.of("tone", "plain"), text("@" + tag.string("tag", ""))),
+                named.isEmpty() ? Html.nothing() : Ui.mono(text(named)),
+                Ui.prose(Props.of("tone", "muted"), text(tag.string("text", "")))));
     }
 }

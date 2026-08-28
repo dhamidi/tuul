@@ -5,6 +5,7 @@ import static web.ui.Tags.*;
 
 import browser.Symbols.Found;
 import browser.Symbols.Symbol;
+import java.text.BreakIterator;
 import java.util.ArrayList;
 import java.util.HashMap;
 import java.util.List;
@@ -46,6 +47,10 @@ public final class Views {
     /// page's link and the conventional path cannot point at different files.
     public static final String ICON = "favicon.svg";
 
+    /// How much of a comment a result shows before it stops being a row in a
+    /// list and starts being a paragraph.
+    private static final int SUMMARY = 160;
+
     /// A qualified type name, which is what can be linked: dotted, and ending
     /// in a segment that begins with a capital. `java.lang.String` is one and
     /// the parameter name after it is not.
@@ -53,6 +58,13 @@ public final class Views {
             Pattern.compile("[a-zA-Z_$][\\w$]*(?:\\.[a-zA-Z_$][\\w$]*)*\\.[A-Z][\\w$]*");
 
     private Views() {}
+
+    private static Node[] prepend(Node first, Node[] rest) {
+        var nodes = new ArrayList<Node>();
+        nodes.add(first);
+        nodes.addAll(List.of(rest));
+        return nodes.toArray(new Node[0]);
+    }
 
     /// A whole page. The import map and the module that starts Turbo and
     /// Stimulus are here rather than in each page, since a page that forgot
@@ -72,12 +84,13 @@ public final class Views {
                         script(BOOT, type("module"))),
                 body(
                         Cable.source(routes.path(Routes.UPDATES)),
+                        a(classes("skip"), href("#content"), text("Skip to content")),
                         header(classes("bar"),
                                 Ui.group(Props.of("gap", "lg"),
                                         Ui.anchor(Props.of("href", routes.path(Routes.HOME)), classes("brand"),
                                                 text("tuul")),
                                         search(search))),
-                        main(content)));
+                        main(prepend(id("content"), content))));
     }
 
     /// The search form, which lives in the bar on every page — one form, so
@@ -98,7 +111,8 @@ public final class Views {
                 Stimulus.controller("search"),
                 Stimulus.action(Stimulus.on("input", "search", "ask")),
                 Turbo.targetFrame(RESULTS),
-                Turbo.advance());
+                Turbo.advance(),
+                Ui.button(Props.of().on("submit"), text("Search")));
     }
 
     /// The results, always inside their frame: Turbo takes the frame out of
@@ -106,6 +120,20 @@ public final class Views {
     /// it was typed or asked for directly.
     public static Html results(Router routes, Found found) {
         return Turbo.frame(RESULTS, panel(routes, found));
+    }
+
+    /// The results as a whole page rather than as a panel.
+    ///
+    /// A page needs a first-level heading — it is how anything reading rather
+    /// than looking finds out what it has arrived at, and this page's is the
+    /// only one that would say nothing new to somebody who can see it, since
+    /// the search box above it says the same. So it is said once, to the
+    /// readers who need it.
+    public static Html searching(Router routes, Found found) {
+        return Ui.stack(Props.of("gap", "sm"),
+                Ui.heading(Props.of("level", "1"), classes("ui-hidden"),
+                        text(found.asked() ? "Results for " + found.query() : "Search the index")),
+                results(routes, found));
     }
 
     private static Html panel(Router routes, Found found) {
@@ -129,7 +157,40 @@ public final class Views {
                                 Ui.mono(Microdata.of("name"), text(symbol))),
                         Ui.badge(Props.of("tone", "muted"), Microdata.of("kind"),
                                 text(kind(entry.string("kind", ""))))),
-                documentation(entry.string("doc", "")));
+                summary(entry.string("doc", "")));
+    }
+
+    /// The first sentence of what a symbol says about itself.
+    ///
+    /// A result list is scanned, and a row is scannable when it is the same
+    /// shape as the row above it. One entry dumping a whole multi-paragraph
+    /// class comment made rows run from 41 to 191 pixels, which defeats the
+    /// scan the list exists for. The page it links to has the rest.
+    private static Html summary(String doc) {
+        if (doc.isBlank()) return Html.nothing();
+        var first = shorten(doc);
+        if (first.isBlank()) return Html.nothing();
+        return Ui.prose(Props.of("tone", "muted"), Microdata.of("doc"), text(first));
+    }
+
+    /// The first sentence of the first paragraph, and no more than a line of
+    /// it.
+    ///
+    /// The paragraph comes first because a comment's opening sentence is
+    /// followed as often as not by an example, and a sentence boundary after
+    /// `Router.of()` is not one a sentence breaker will find. The length cap is
+    /// the backstop for a comment written as one long sentence — a row that is
+    /// four times its neighbour is not a row in a list.
+    private static String shorten(String doc) {
+        var paragraph = doc.strip().split("\n\\s*\n", 2)[0];
+        var flat = paragraph.replace('\n', ' ').replaceAll("\\s+", " ").strip();
+        var sentences = BreakIterator.getSentenceInstance(Locale.ROOT);
+        sentences.setText(flat);
+        var end = sentences.next();
+        var first = end == BreakIterator.DONE ? flat : flat.substring(0, end).strip();
+        if (first.length() <= SUMMARY) return first;
+        var cut = first.lastIndexOf(' ', SUMMARY);
+        return first.substring(0, cut < 40 ? SUMMARY : cut).strip() + "…";
     }
 
     /// A failure the reader can see, described as a resource rather than left
@@ -148,26 +209,98 @@ public final class Views {
     /// One symbol: where it sits, what it is, what it says about itself, and
     /// what it declares.
     public static Html symbol(Router routes, Symbol state) {
-        if (!state.problem().isEmpty()) {
-            return section(Ui.stack(Ui.heading(Props.of("level", "1"), text(state.name())),
-                    problem(state.problem())));
-        }
+        if (!state.problem().isEmpty()) return missing(routes, state);
 
         var description = state.description();
         var qualified = description.string("class", "");
+        if (holder(description.string("kind", ""))) return holding(routes, description, qualified);
         return Ui.stack(Props.of("gap", "lg"), Microdata.scope(), Microdata.type("/Symbol"),
                 where(routes, qualified),
                 Ui.stack(Props.of("gap", "sm"),
                         Ui.group(Props.of("gap", "sm", "align", "baseline"),
                                 Ui.heading(Props.of("level", "1"),
                                         Ui.mono(Microdata.of("name"), text(qualified))),
-                                Ui.badge(Microdata.of("kind"), text(description.string("kind", "class")))),
-                        modifiers(description),
+                                Ui.badge(Microdata.of("kind"), text(description.string("kind", "class"))),
+                                modifiers(description)),
                         documentation(description.string("doc", ""))),
                 relations(routes, description),
                 tags(description),
                 members(routes, "Constructors and methods", description, "methods"),
                 members(routes, "Fields", description, "fields"));
+    }
+
+    /// A symbol nobody has. It is still a page of this browser — the trail, the
+    /// name in the face every other page names a symbol in — and it offers
+    /// somewhere to go, because a dead end that only says "no" makes the reader
+    /// reach for the back button and lose their place.
+    private static Html missing(Router routes, Symbol state) {
+        var name = state.name();
+        var dot = name.lastIndexOf('.');
+        var onward = new ArrayList<Node>();
+        onward.add(Ui.anchor(Props.of("href", routes.path(Routes.HOME)), text("Search from the beginning")));
+        if (dot > 0) {
+            onward.add(Ui.anchor(Props.of("href", symbolPath(routes, name.substring(0, dot))),
+                    text("Look in " + name.substring(0, dot))));
+        }
+        return Ui.stack(Props.of("gap", "lg"),
+                where(routes, name),
+                Ui.stack(Props.of("gap", "sm"),
+                        Ui.heading(Props.of("level", "1"), Ui.mono(text(name))),
+                        problem(state.problem())),
+                Ui.group(Props.of("gap", "md"), onward.toArray(new Node[0])));
+    }
+
+    /// A package or a module is a container, not a declaration: it has no
+    /// members, and what it holds is the whole of what a reader came for.
+    private static boolean holder(String kind) {
+        return kind.equals("package") || kind.equals("module");
+    }
+
+    /// What a package or a module holds, as a column of short names.
+    ///
+    /// It was one run-on paragraph of comma-separated fully-qualified names —
+    /// 134 of them for `java.util`, each repeating `java.util.`, wrapping over
+    /// thirty lines. Nobody can find `HashMap` by reading prose. The eye runs
+    /// down a column, so the names are a column; the prefix is the page you are
+    /// already on, so it goes; and packages are listed apart from types because
+    /// going deeper and stopping here are different questions.
+    private static Html holding(Router routes, Json.Object description, String qualified) {
+        var packages = new ArrayList<String>();
+        var types = new ArrayList<String>();
+        for (var held : strings(description, "nested")) {
+            (nested(held) ? types : packages).add(held);
+        }
+        return Ui.stack(Props.of("gap", "lg"), Microdata.scope(), Microdata.type("/Symbol"),
+                where(routes, qualified),
+                Ui.stack(Props.of("gap", "sm"),
+                        Ui.group(Props.of("gap", "sm", "align", "baseline"),
+                                Ui.heading(Props.of("level", "1"),
+                                        Ui.mono(Microdata.of("name"), text(qualified))),
+                                Ui.badge(Microdata.of("kind"), text(description.string("kind", "package")))),
+                        documentation(description.string("doc", ""))),
+                contents(routes, "Packages", qualified, packages),
+                contents(routes, "Types", qualified, types));
+    }
+
+    /// A name held by a package is a type when its last segment is capitalised,
+    /// and a package when it is not. That is a convention rather than a rule,
+    /// but it is the convention every Java package on disk follows, and the
+    /// alternative is asking the index about each of a hundred names.
+    private static boolean nested(String qualified) {
+        var last = qualified.substring(qualified.lastIndexOf('.') + 1);
+        return !last.isEmpty() && Character.isUpperCase(last.charAt(0));
+    }
+
+    private static Html contents(Router routes, String heading, String within, List<String> held) {
+        if (held.isEmpty()) return Html.nothing();
+        var prefix = within + ".";
+        return Ui.stack(Props.of("gap", "sm"),
+                Ui.heading(Props.of("level", "2"), text(heading)),
+                Ui.items(Props.of().on("columns"),
+                        Html.each(held, name -> Ui.item(
+                                Ui.mono(Microdata.of("contains"),
+                                        Ui.anchor(Props.of("href", symbolPath(routes, name)),
+                                                text(name.startsWith(prefix) ? name.substring(prefix.length()) : name)))))));
     }
 
     /// The package a type is in, as a trail. It is the only hierarchy this page
@@ -182,15 +315,73 @@ public final class Views {
                 Ui.crumb(Props.of(), text(qualified.substring(dot + 1))));
     }
 
+    /// How a type was declared, beside what it is rather than under it. A bare
+    /// `public final` on a line of its own reads as a sentence somebody forgot
+    /// to finish; next to the kind it reads as what it is, which is two more
+    /// facts of the same sort.
     private static Html modifiers(Json.Object description) {
         var modifiers = strings(description, "modifiers");
         if (modifiers.isEmpty()) return Html.nothing();
-        return Ui.prose(Props.of("tone", "muted"), text(String.join(" ", modifiers)));
+        return Html.each(modifiers, modifier -> Ui.badge(Props.of("tone", "muted"), text(modifier)));
     }
 
-    private static Html documentation(String doc) {
+    /// A doc comment, with the code in it rendered as code.
+    ///
+    /// The flattener keeps the line structure a comment was written with, so an
+    /// example inside one arrives indented — and indentation was the only thing
+    /// saying it was code, because it was set in the prose face at prose size.
+    /// A run of indented lines becomes a block; everything else stays prose.
+    static Html documentation(String doc) {
         if (doc.isBlank()) return Html.nothing();
-        return Ui.prose(Props.of("tone", "muted").on("wrap"), Microdata.of("doc"), text(doc));
+        var parts = new ArrayList<Html>();
+        var prose = new StringBuilder();
+        var code = new StringBuilder();
+        for (var line : doc.split("\n", -1)) {
+            var indented = line.startsWith("    ") || line.startsWith("\t");
+            if (indented || (!code.isEmpty() && line.isBlank())) {
+                flush(parts, prose, false);
+                code.append(line).append('\n');
+                continue;
+            }
+            flush(parts, code, true);
+            prose.append(line).append('\n');
+        }
+        flush(parts, prose, false);
+        flush(parts, code, true);
+        if (parts.isEmpty()) return Html.nothing();
+
+        // The property is on the whole comment rather than on each piece of it:
+        // a comment is one thing a symbol says, whether it came out as one
+        // paragraph or as three paragraphs around an example.
+        return Html.element("div", Microdata.of("doc"), Html.fragment(parts));
+    }
+
+    private static void flush(List<Html> parts, StringBuilder held, boolean asCode) {
+        var content = asCode ? strip(held.toString()) : held.toString().strip();
+        held.setLength(0);
+        if (content.isBlank()) return;
+        parts.add(asCode
+                ? Ui.mono(Props.of().on("block"), text(content))
+                : Ui.prose(Props.of("tone", "muted").on("wrap"), text(content)));
+    }
+
+    /// Code keeps its shape but not the indentation that marked it as code, so
+    /// a four-space example does not sit four spaces in twice.
+    private static String strip(String code) {
+        var lines = code.strip().isEmpty() ? new String[0] : code.split("\n", -1);
+        var common = Integer.MAX_VALUE;
+        for (var line : lines) {
+            if (line.isBlank()) continue;
+            var spaces = 0;
+            while (spaces < line.length() && line.charAt(spaces) == ' ') spaces++;
+            common = Math.min(common, spaces);
+        }
+        if (common == Integer.MAX_VALUE || common == 0) return code.stripTrailing();
+        var out = new StringBuilder();
+        for (var line : lines) {
+            out.append(line.length() >= common ? line.substring(common) : line).append('\n');
+        }
+        return out.toString().stripTrailing();
     }
 
     /// What a type extends, implements, permits and declares — one list of
@@ -234,11 +425,7 @@ public final class Views {
     private static Html tags(Json.Object description) {
         var tags = objects(description, "tags");
         if (tags.isEmpty()) return Html.nothing();
-        return Ui.items(Html.each(tags, tag -> Ui.item(
-                Ui.group(Props.of("gap", "sm", "align", "baseline"),
-                        Ui.badge(Props.of("tone", "plain"), text("@" + tag.string("tag", ""))),
-                        Ui.prose(Props.of("tone", "muted"),
-                                text((tag.string("name", "") + " " + tag.string("text", "")).strip()))))));
+        return Ui.items(Html.each(tags, Member::tag));
     }
 
     /// The members, each with an id, so that a search result for one can link

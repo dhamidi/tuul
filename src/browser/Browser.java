@@ -141,7 +141,7 @@ public final class Browser implements AutoCloseable {
                         frame(request)
                                 ? Views.results(routes, found)
                                 : Views.page(routes, assets, modules, title(found),
-                                        Search.asking(routes, found.query()), Views.results(routes, found)),
+                                        Search.asking(routes, found.query()), Views.searching(routes, found)),
                         Status.OK, response));
     }
 
@@ -193,7 +193,7 @@ public final class Browser implements AutoCloseable {
 
     private void missing(Request request, Response response) throws IOException {
         render(Views.page(routes, assets, modules, "Not found", Search.blank(routes),
-                Views.results(routes, Found.nothing().failed("There is nothing at " + request.path() + "."))),
+                Views.searching(routes, Found.nothing().failed("There is nothing at " + request.path() + "."))),
                 Status.NOT_FOUND, response);
     }
 

@@ -15,17 +15,28 @@
   --ui-space-6: 1.5rem;
   --ui-space-8: 2rem;
 
-  /* Type, likewise. */
-  --ui-text-sm: 0.85rem;
+  /* Type, on one ratio — 1.2 — so the steps relate to each other. Four sizes
+     that merely differ are not a scale, and a heading a step below its own
+     content is not a heading. */
+  --ui-text-sm: 0.833rem;
   --ui-text-base: 1rem;
-  --ui-text-lg: 1.15rem;
-  --ui-text-xl: 1.4rem;
+  --ui-text-lg: 1.2rem;
+  --ui-text-xl: 1.44rem;
+
+  /* How wide prose is allowed to get. A column can be wide enough for a
+     signature and still too wide to read a sentence in, so the measure is a
+     count of characters rather than a share of the page. */
+  --ui-measure: 70ch;
 
   --ui-ink: #1a1a1a;
   --ui-paper: #fdfdfc;
   --ui-surface: #ffffff;
   --ui-muted: #6b6b66;
-  --ui-rule: #e2e2dd;
+  /* A rule separates; an edge encloses something you can operate. They are two
+     jobs and were one token, which is how the search box ended up with a
+     border at 1.28:1 — invisible, where a control's boundary needs 3:1. */
+  --ui-rule: #c9c9c3;
+  --ui-edge: #8f8f8a;
   --ui-link: #1b5e9c;
   --ui-accent: #7a3e00;
   --ui-warn: #8a5a00;
@@ -44,7 +55,8 @@
     --ui-paper: #17171a;
     --ui-surface: #1d1d21;
     --ui-muted: #9a9a94;
-    --ui-rule: #2e2e33;
+    --ui-rule: #3f3f45;
+    --ui-edge: #6b6b72;
     --ui-link: #79b8f3;
     --ui-accent: #e0a76a;
     --ui-warn: #d8a866;
@@ -55,8 +67,11 @@
 
 /* Layout ------------------------------------------------------------------ */
 
-.ui-stack { display: flex; flex-direction: column; }
-.ui-group { display: flex; flex-wrap: wrap; }
+/* A flex child will not shrink below its content unless it is allowed to, so
+   one long signature stretched the whole column past the edge of a phone. */
+.ui-stack { display: flex; flex-direction: column; min-width: 0; }
+.ui-stack > *, .ui-group > * { min-width: 0; }
+.ui-group { display: flex; flex-wrap: wrap; min-width: 0; }
 .ui-group--grow > * { flex: 1; }
 
 .ui-gap-none { gap: var(--ui-space-0); }
@@ -84,21 +99,40 @@
 
 .ui-heading { margin: 0; font-weight: 600; line-height: 1.25; }
 .ui-heading--1 { font-size: var(--ui-text-xl); }
+/* A section heading is bigger and darker than what it introduces. It was
+   smaller and dimmer, which reads as a caption on the thing above it rather
+   than a title for the sixty things below — and on a page that long the rule
+   under it is the only landmark a scrolling reader gets. */
 .ui-heading--2 {
-  font-size: var(--ui-text-sm);
-  text-transform: uppercase;
-  letter-spacing: 0.06em;
-  color: var(--ui-muted);
+  font-size: var(--ui-text-lg);
+  padding-bottom: var(--ui-space-2);
+  border-bottom: 1px solid var(--ui-rule);
 }
-.ui-heading--3 { font-size: var(--ui-text-lg); }
+.ui-heading--3 { font-size: var(--ui-text-base); }
 
-.ui-prose { margin: 0; }
+/* Prose here is documentation, so a "word" in it can be
+   `str.splitWithDelimiters(regex, n)` — long, unbreakable by the ordinary
+   rules, and wide enough on a phone to push the whole page sideways. */
+.ui-prose { margin: 0; max-width: var(--ui-measure); overflow-wrap: anywhere; }
 .ui-tone-muted { color: var(--ui-muted); }
 /* Doc comments arrive with their line structure intact, so an example in one
    stays on its own lines instead of running into the prose around it. */
-.ui-prose--pre { white-space: pre-wrap; }
+.ui-prose--pre { white-space: pre-wrap; overflow-wrap: anywhere; }
 
-.ui-mono { font-family: var(--ui-mono); font-size: 0.92em; }
+.ui-mono { font-family: var(--ui-mono); font-size: 0.92em; overflow-wrap: anywhere; }
+/* A block of code, as against a name inside a sentence. Code that arrives in a
+   doc comment is code, and rendering it in the prose face leaves indentation as
+   the only clue. */
+.ui-mono--block {
+  display: block;
+  white-space: pre;
+  overflow-x: auto;
+  padding: var(--ui-space-2) var(--ui-space-3);
+  margin: var(--ui-space-2) 0;
+  background: var(--ui-wash);
+  border-radius: var(--ui-radius);
+  max-width: 100%;
+}
 
 .ui-link { color: var(--ui-link); text-decoration: none; }
 .ui-link:hover { text-decoration: underline; }
@@ -114,6 +148,9 @@
 
 .ui-badge {
   font-size: var(--ui-text-sm);
+  /* A badge names one thing, so it does not break across lines and leave its
+     own text stranded on the next one. */
+  white-space: nowrap;
   font-weight: 500;
   padding: 0.05em 0.45em;
   border-radius: var(--ui-radius);
@@ -122,13 +159,32 @@
 .ui-badge--muted { color: var(--ui-muted); background: var(--ui-wash); }
 .ui-badge--plain { color: var(--ui-muted); }
 
-.ui-items { list-style: none; padding: 0; margin: 0; }
-.ui-item { padding: var(--ui-space-2) 0; }
+.ui-items { list-style: none; padding: 0; margin: 0; min-width: 0; }
+.ui-item { padding: var(--ui-space-2) 0; min-width: 0; }
+/* Members were closer to each other than one member's own paragraphs were to
+   each other, which groups the page the wrong way round. The space between two
+   entries has to beat the space inside one. */
+.ui-items--divided > .ui-item { padding: var(--ui-space-4) 0; }
 .ui-items--divided > .ui-item + .ui-item { border-top: 1px solid var(--ui-rule); }
+/* A long list of short names is read by running an eye down a column, which a
+   run-on paragraph does not allow. */
+.ui-items--columns {
+  /* Wide enough that a name like IllegalFormatCodePointException fits on one
+     line: a column list is read by its names, and a name broken across two
+     lines is a name somebody has to reassemble. */
+  columns: 17rem auto;
+  column-gap: var(--ui-space-6);
+}
+.ui-items--columns > .ui-item {
+  padding: 0;
+  break-inside: avoid;
+}
 
-.ui-facts { margin: 0; display: grid; grid-template-columns: auto 1fr; gap: 0 var(--ui-space-2); }
+.ui-facts { margin: 0; display: grid; grid-template-columns: auto minmax(0, 1fr); gap: 0 var(--ui-space-2); }
 .ui-fact-label { color: var(--ui-muted); }
-.ui-fact-value { margin: 0; }
+/* A grid cell will not shrink below its content unless it is told it may, which
+   is what pushed a long signature past the edge of a narrow screen. */
+.ui-fact-value { margin: 0; min-width: 0; overflow-wrap: anywhere; }
 
 .ui-crumbs {
   list-style: none;
@@ -143,6 +199,38 @@
 .ui-crumb + .ui-crumb::before { content: "›"; margin-right: var(--ui-space-1); }
 
 .ui-blank { color: var(--ui-muted); padding: var(--ui-space-4) 0; }
+
+/* Controls ---------------------------------------------------------------- */
+
+/* A button, which a form needs and which says by existing that there is
+   something to submit. */
+.ui-button {
+  font: inherit;
+  font-size: var(--ui-text-sm);
+  padding: var(--ui-space-1) var(--ui-space-3);
+  border: 1px solid var(--ui-edge);
+  border-radius: var(--ui-radius);
+  background: var(--ui-wash);
+  color: var(--ui-ink);
+  cursor: pointer;
+}
+.ui-button:hover { border-color: var(--ui-ink); }
+.ui-button:focus-visible { outline: 2px solid var(--ui-link); outline-offset: 2px; }
+
+/* Said to a screen reader and not to the eye. `display: none` would say it to
+   neither, which is how a labelled control ends up announcing itself as
+   nothing at all. */
+.ui-hidden {
+  position: absolute;
+  width: 1px;
+  height: 1px;
+  margin: -1px;
+  padding: 0;
+  overflow: hidden;
+  clip-path: inset(50%);
+  white-space: nowrap;
+  border: 0;
+}
 
 /* Feedback ---------------------------------------------------------------- */
 
