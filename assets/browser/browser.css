@@ -95,3 +95,42 @@ main { max-width: var(--page); margin: 0 auto; padding: var(--ui-space-6); }
 
 /* A frame is a box that holds a panel, not a phrase in a sentence. */
 turbo-frame { display: block; }
+
+/* The two panes.
+ *
+ * One column below the threshold, where the sidebar is a drawer rather than a
+ * pane; two above it, where the tree is worth the width it costs. The bar sits
+ * in the same grid as the content so the page reads as one design rather than
+ * a header stacked on something else. */
+.shell {
+  max-width: 78rem;
+  margin: 0 auto;
+  padding: 0 var(--ui-space-4);
+}
+
+.panes {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr);
+  gap: var(--ui-space-6);
+  align-items: start;
+}
+
+@media (min-width: 60rem) {
+  .panes { grid-template-columns: 18rem minmax(0, 1fr); }
+}
+
+/* A branch of the tree. `details` is the disclosure the browser already has —
+   it opens without JavaScript, remembers nothing it should not, and is what a
+   reader's keyboard already knows how to work. */
+.branch-name {
+  cursor: pointer;
+  font-size: var(--ui-text-sm);
+  font-weight: 600;
+  letter-spacing: 0.02em;
+  color: var(--ui-muted);
+  padding: var(--ui-space-1) 0;
+}
+.branch-name:focus-visible { outline: 2px solid var(--ui-link); outline-offset: 2px; }
+.branch .ui-items { padding-left: var(--ui-space-2); }
+.branch .ui-item { padding: 1px 0; }
+.branch .ui-mono { font-size: 0.85rem; }

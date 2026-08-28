@@ -13,12 +13,14 @@ import java.util.Locale;
 import java.util.Map;
 import java.util.regex.Pattern;
 import json.Json;
+import symbols.Index;
 import web.assets.Assets;
 import web.assets.Importmap;
 import web.cable.Cable;
 import web.dispatch.Router;
 import web.forms.Forms;
 import web.forms.Submission;
+import web.ui.Attribute;
 import web.ui.Html;
 import web.ui.Microdata;
 import web.ui.Node;
@@ -43,6 +45,19 @@ public final class Views {
     /// updating.
     public static final String RESULTS = "results";
 
+    /// The frame the content pane is. A link in the tree drives it, so a click
+    /// in the sidebar costs the page rather than the page and the tree — and
+    /// every page therefore has to *be* one, or a tree link would ask for a
+    /// frame that is not in the answer and blank the pane.
+    public static final String CONTENT = "content";
+
+    /// Where the skip link lands. Deliberately not [#CONTENT]: the frame owns
+    /// that id, and two elements sharing one is invalid HTML that fails
+    /// silently and expensively — Turbo looks its target frame up by id, finds
+    /// whichever element comes first, and a link that meant to swap a frame
+    /// quietly reloads the page instead.
+    public static final String MAIN = "main";
+
     /// The icon, by its logical name — the one place it is spelled, so the
     /// page's link and the conventional path cannot point at different files.
     public static final String ICON = "favicon.svg";
@@ -59,6 +74,17 @@ public final class Views {
 
     private Views() {}
 
+    /// The children of a page, as markup. A page is given nodes and the frame
+    /// that holds them takes markup, and an attribute among them would be an
+    /// attribute of the frame rather than of the page.
+    private static Html[] htmls(Node[] content) {
+        var found = new ArrayList<Html>();
+        for (var node : content) {
+            if (node instanceof Html child) found.add(child);
+        }
+        return found.toArray(new Html[0]);
+    }
+
     private static Node[] prepend(Node first, Node[] rest) {
         var nodes = new ArrayList<Node>();
         nodes.add(first);
@@ -70,7 +96,7 @@ public final class Views {
     /// Stimulus are here rather than in each page, since a page that forgot
     /// them would be a page that quietly stopped being interactive.
     public static Html page(Router routes, Assets assets, Importmap modules, String heading, Submission search,
-                            Node... content) {
+                            List<Index.Root> roots, Node... content) {
         return document(
                 lang("en"),
                 head(
@@ -84,13 +110,75 @@ public final class Views {
                         script(BOOT, type("module"))),
                 body(
                         Cable.source(routes.path(Routes.UPDATES)),
-                        a(classes("skip"), href("#content"), text("Skip to content")),
-                        header(classes("bar"),
-                                Ui.group(Props.of("gap", "lg"),
-                                        Ui.anchor(Props.of("href", routes.path(Routes.HOME)), classes("brand"),
-                                                text("tuul")),
-                                        search(search))),
-                        main(prepend(id("content"), content))));
+                        a(classes("skip"), href("#" + MAIN), text("Skip to content")),
+                        Html.element("div", classes("shell"), Stimulus.controller(Ui.CONTROLLER),
+                                header(classes("bar"),
+                                        Ui.group(Props.of("gap", "lg"),
+                                                Ui.opener(Props.of("href", routes.path(Routes.TREE)),
+                                                        text("Browse")),
+                                                Ui.anchor(Props.of("href", routes.path(Routes.HOME)),
+                                                        classes("brand"), text("tuul")),
+                                                search(search))),
+                                Html.element("div", classes("panes"),
+                                        Ui.sidebar(Props.of("label", "What there is"), tree(routes, roots)),
+                                        main(id(MAIN),
+                                                framed(Html.fragment(htmls(content))))))));
+    }
+
+    /// What there is, as a tree: the three places symbols come from, each
+    /// holding the packages or modules a reader can go into.
+    ///
+    /// It goes one level deep and no further. A tree that expanded a package
+    /// into its types would be the whole index in a panel — `java.base` alone
+    /// is fifty-eight packages — and the page a link leads to already lists
+    /// what it holds. The tree is how a reader gets somewhere; the breadcrumb
+    /// on the page is where they are. Keeping those apart is what lets a tree
+    /// link swap only the content pane without the tree going stale about a
+    /// position it never claimed to know.
+    ///
+    /// The project is open and the rest are closed, because a reader of a
+    /// project came for the project, and ninety JDK modules unfolded is a wall.
+    public static Html tree(Router routes, List<Index.Root> roots) {
+        if (roots.isEmpty()) return Html.nothing();
+        return Ui.stack(Props.of("gap", "sm"),
+                Html.each(roots, root -> Html.element("details",
+                        root.name().equals(Index.PROJECT) ? flag("open") : Html.nothing(),
+                        classes("branch"),
+                        Html.element("summary", classes("branch-name"), text(root.label())),
+                        Ui.items(Html.each(root.contents(), name -> Ui.item(
+                                Ui.anchor(Props.of("href", symbolPath(routes, name), "frame", CONTENT),
+                                        Turbo.advance(), Ui.mono(text(name)))))))));
+    }
+
+    /// The same tree as a page of its own, for the opener to point at where
+    /// there is no room for a pane and no JavaScript to open one.
+    public static Html browsing(Router routes, List<Index.Root> roots) {
+        return Ui.stack(Props.of("gap", "lg"),
+                Ui.heading(Props.of("level", "1"), text("What there is")),
+                tree(routes, roots));
+    }
+
+    /// The content pane on its own, for a request that asked for the frame
+    /// rather than the page.
+    public static Html pane(Html content) {
+        return framed(content);
+    }
+
+    /// The content pane.
+    ///
+    /// It carries no `target`, and that is deliberate: `target="_top"` on a
+    /// frame does not only redirect the links written inside it, it promotes
+    /// *any* navigation of the frame to a page navigation — including the tree
+    /// links that exist to swap it. A frame that cannot be swapped is not a
+    /// frame.
+    ///
+    /// Which leaves the other half of the rule to the links: a link written
+    /// inside the pane says `_top` for itself, because it is a navigation and
+    /// not a pane swap. Saying it at each site rather than once on the frame is
+    /// the price of a frame that can still be swapped, and it is the same thing
+    /// the result links have always said.
+    private static Html framed(Html inside) {
+        return Turbo.frame(CONTENT, inside);
     }
 
     /// The search form, which lives in the bar on every page — one form, so
@@ -237,9 +325,10 @@ public final class Views {
         var name = state.name();
         var dot = name.lastIndexOf('.');
         var onward = new ArrayList<Node>();
-        onward.add(Ui.anchor(Props.of("href", routes.path(Routes.HOME)), text("Search from the beginning")));
+        onward.add(Ui.anchor(Props.of("href", routes.path(Routes.HOME), "frame", Turbo.TOP),
+                text("Search from the beginning")));
         if (dot > 0) {
-            onward.add(Ui.anchor(Props.of("href", symbolPath(routes, name.substring(0, dot))),
+            onward.add(Ui.anchor(Props.of("href", symbolPath(routes, name.substring(0, dot)), "frame", Turbo.TOP),
                     text("Look in " + name.substring(0, dot))));
         }
         return Ui.stack(Props.of("gap", "lg"),
@@ -299,7 +388,7 @@ public final class Views {
                 Ui.items(Props.of().on("columns"),
                         Html.each(held, name -> Ui.item(
                                 Ui.mono(Microdata.of("contains"),
-                                        Ui.anchor(Props.of("href", symbolPath(routes, name)),
+                                        Ui.anchor(Props.of("href", symbolPath(routes, name), "frame", Turbo.TOP),
                                                 text(name.startsWith(prefix) ? name.substring(prefix.length()) : name)))))));
     }
 
@@ -310,7 +399,7 @@ public final class Views {
         var dot = qualified.lastIndexOf('.');
         if (dot < 0) return Html.nothing();
         return Ui.breadcrumbs(
-                Ui.crumb(Props.of("href", routes.path(Routes.HOME)), text("tuul")),
+                Ui.crumb(Props.of("href", routes.path(Routes.HOME), "frame", Turbo.TOP), text("tuul")),
                 Ui.crumb(Props.of(), text(qualified.substring(0, dot))),
                 Ui.crumb(Props.of(), text(qualified.substring(dot + 1))));
     }
@@ -418,7 +507,7 @@ public final class Views {
         var rest = type.substring(base.length());
         if (!base.contains(".")) return Ui.mono(Microdata.of(property), text(type));
         return Ui.mono(Microdata.of(property),
-                Ui.anchor(Props.of("href", symbolPath(routes, base)), text(base)),
+                Ui.anchor(Props.of("href", symbolPath(routes, base), "frame", Turbo.TOP), text(base)),
                 text(rest));
     }
 
@@ -513,10 +602,12 @@ public final class Views {
             import "@hotwired/turbo";
             import { Application } from "@hotwired/stimulus";
             import CableStream from "@tuul/cable-stream";
+            import Sidebar from "@tuul/ui-sidebar";
             import Search from "@tuul/browser-search";
 
             const stimulus = Application.start();
             stimulus.register("cable-stream", CableStream);
+            stimulus.register("ui-sidebar", Sidebar);
             stimulus.register("search", Search);
             """;
 }

@@ -34,6 +34,7 @@ public final class App {
                 .on("docs.query", App::query)
                 .on("docs.result", App::result)
                 .on("docs.found", App::found)
+                .on("docs.roots", App::rooted)
                 .on("docs.missing", App::missing)
                 .on("error", App::failed)
                 .effect("symbols.lookup", App::look)
@@ -74,12 +75,39 @@ public final class App {
                 .with("json", state.json()));
     }
 
+    /// Nobody named anything, so the answer is what there is to name.
+    ///
+    /// `tuul docs` was an error — *no symbol given* — which is a strange thing
+    /// to say to somebody who has not been told what the symbols are. The
+    /// question with no name is the first one a reader has.
+    private static Step<State> rooted(State state, Message message) {
+        return Step.of(state, Effect.of("docs.print")
+                .with("roots", message.body().without("type"))
+                .with("json", state.json()));
+    }
+
     private static Step<State> missing(State state, Message message) {
         return Step.of(state.failed(), report("unknown symbol: " + message.string("symbol", "")));
     }
 
     private static Step<State> failed(State state, Message message) {
         return Step.of(state.failed(), report("error: " + message.string("reason", "unknown")));
+    }
+
+    /// Back from the message it travelled in. A root is JSON on the way here
+    /// like everything else, and [Docs] prints the records rather than the
+    /// object, because the same records are what a caller in Java would hold.
+    private static List<Index.Root> roots(Json.Object listing) {
+        var roots = new ArrayList<Index.Root>();
+        for (var value : listing.list("roots")) {
+            if (!(value instanceof Json.Object root)) continue;
+            var contents = new ArrayList<String>();
+            for (var name : root.list("contains")) {
+                if (name instanceof Json.Str(var text)) contents.add(text);
+            }
+            roots.add(new Index.Root(root.string("root", ""), root.string("label", ""), List.copyOf(contents)));
+        }
+        return List.copyOf(roots);
     }
 
     private static Effect report(String line) {
@@ -104,7 +132,9 @@ public final class App {
     private static void look(Effect effect, Effect.Emitter emit) throws IOException {
         var symbol = effect.string("symbol", "");
         if (symbol.isEmpty()) {
-            emit.emit(Message.error("no symbol given"));
+            try (var index = Index.of(paths(effect.list("sourcePath")), paths(effect.list("vendorPath")))) {
+                emit.emit(Message.of("docs.roots", Docs.describe(index.roots())));
+            }
             return;
         }
         try (var index = Index.of(paths(effect.list("sourcePath")), paths(effect.list("vendorPath")))) {
@@ -115,6 +145,16 @@ public final class App {
     }
 
     private static void print(Effect effect, Writer out) throws IOException {
+        if (effect.get("roots") instanceof Json.Object listing) {
+            if (effect.flag("json")) {
+                listing.write(out);
+                out.write("\n");
+            } else {
+                Docs.roots(roots(listing), out);
+            }
+            out.flush();
+            return;
+        }
         if (effect.get("matches") instanceof Json.Array(var matches)) {
             if (effect.flag("json")) {
                 Json.Object.of().with("matches", Json.Array.of(matches)).write(out);

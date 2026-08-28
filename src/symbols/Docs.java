@@ -3,6 +3,7 @@ package symbols;
 import java.io.IOException;
 import java.io.Writer;
 import java.text.BreakIterator;
+import java.util.ArrayList;
 import java.util.List;
 import java.util.Locale;
 import java.util.Set;
@@ -192,6 +193,36 @@ public final class Docs {
             out.write(found.string("symbol", "") + "\n");
             wrap(summary(found.string("doc", "")), "      ", out);
         }
+    }
+
+    /// What there is, before anything has been named: each root and what it
+    /// holds, one name per line.
+    ///
+    /// Unshortened, because a listing is a set of names to look up and
+    /// `java.util.concurrent` shortened to `concurrent` names nothing anybody
+    /// can ask about. That is the same reason a package page lists what it
+    /// holds in full.
+    public static void roots(List<Index.Root> roots, Writer out) throws IOException {
+        var first = true;
+        for (var root : roots) {
+            if (!first) out.write("\n");
+            first = false;
+            out.write(root.label() + "\n");
+            for (var name : root.contents()) out.write("  " + name + "\n");
+        }
+    }
+
+    /// The same listing as a message, which is what the browser renders and
+    /// `--json` prints.
+    public static Json.Object describe(List<Index.Root> roots) {
+        var described = new ArrayList<Json>();
+        for (var root : roots) {
+            described.add(Json.Object.of()
+                    .with("root", root.name())
+                    .with("label", root.label())
+                    .with("contains", Json.Array.strings(root.contents())));
+        }
+        return Json.Object.of().with("roots", Json.Array.of(described));
     }
 
     /// The first sentence, the way javadoc means it.

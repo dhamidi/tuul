@@ -23,6 +23,7 @@ import web.cable.Cable;
 import web.cable.Topics;
 import web.controllers.Negotiate;
 import web.dispatch.Router;
+import web.forms.Submission;
 import web.ui.Html;
 import web.serve.Http;
 import web.ui.Turbo;
@@ -78,6 +79,7 @@ public final class Browser implements AutoCloseable {
         return new Browser(index, Routes.of(), Assets.standard(List.of()),
                 Importmap.standard()
                         .pin(Cable.MODULE, Cable.FILE)
+                        .pin(web.ui.Ui.MODULE, web.ui.Ui.FILE)
                         .pin("@tuul/browser-search", "search.js"),
                 cable, watching);
     }
@@ -119,6 +121,7 @@ public final class Browser implements AutoCloseable {
                 .on(Routes.HOME, searching())
                 .on(Routes.SEARCH, searching())
                 .on(Routes.SYMBOL, showing())
+                .on(Routes.TREE, this::browsing)
                 .on(Routes.UPDATES, cable.stream(Topics.fixed(INDEX)))
                 .on(Routes.ASSET, this::asset)
                 .on(Routes.FAVICON, this::favicon)
@@ -138,21 +141,22 @@ public final class Browser implements AutoCloseable {
                 .on("error", Symbols::unsearched)
                 .effect(Symbols.SEARCH, Symbols.searching(index, MATCHES))
                 .render((found, request, response) -> render(
-                        frame(request)
+                        Views.RESULTS.equals(frame(request))
                                 ? Views.results(routes, found)
-                                : Views.page(routes, assets, modules, title(found),
-                                        Search.asking(routes, found.query()), Views.searching(routes, found)),
+                                : shell(request, title(found), Search.asking(routes, found.query()),
+                                        Views.searching(routes, found)),
                         Status.OK, response));
     }
 
-    /// Whether Turbo asked for a frame rather than a page.
+    /// Which frame Turbo asked for, or nothing if it asked for a page.
     ///
     /// It says so in a header, and answering a whole document to a frame
-    /// request means sending the head, the import map, the boot script and the
-    /// bar on every keystroke for Turbo to throw all of it away — six thousand
-    /// bytes where fifteen hundred would do.
-    private static boolean frame(Request request) {
-        return request.headers().has("Turbo-Frame");
+    /// request means sending the head, the import map, the boot script, the bar
+    /// and the tree for Turbo to throw all of it away. There are two frames now
+    /// — the results and the content pane — so the answer is which, not
+    /// whether: a request for one is not satisfied by the other.
+    private static String frame(Request request) {
+        return request.headers().first("Turbo-Frame").orElse("");
     }
 
     private Page<Symbol> showing() {
@@ -176,8 +180,16 @@ public final class Browser implements AutoCloseable {
             state.description().write(response.writer());
             return;
         }
-        render(Views.page(routes, assets, modules, state.name(), Search.blank(routes), Views.symbol(routes, state)),
-                status, response);
+        render(shell(request, state.name(), Search.blank(routes), Views.symbol(routes, state)), status, response);
+    }
+
+    /// The tree as a page. The sidebar shows it on every page; this is the same
+    /// thing at a URL, which is where the opener goes when there is no
+    /// JavaScript to open a panel with — and it is also the honest answer to
+    /// somebody who asks what this browser has in it.
+    private void browsing(Request request, Response response) throws IOException {
+        render(shell(request, "What there is", Search.blank(routes), Views.browsing(routes, index.roots())),
+                Status.OK, response);
     }
 
     private void asset(Request request, Response response) throws IOException {
@@ -192,9 +204,21 @@ public final class Browser implements AutoCloseable {
     }
 
     private void missing(Request request, Response response) throws IOException {
-        render(Views.page(routes, assets, modules, "Not found", Search.blank(routes),
+        render(shell(request, "Not found", Search.blank(routes),
                 Views.searching(routes, Found.nothing().failed("There is nothing at " + request.path() + "."))),
                 Status.NOT_FOUND, response);
+    }
+
+    /// The page, or only the pane of it that was asked for.
+    ///
+    /// A tree link drives the content frame, so the answer to one has to
+    /// *contain* that frame — a response without it blanks the pane and writes
+    /// `Content missing` into it, which is what the frames spec exists to catch.
+    /// Sending only the frame is the same contract kept for a tenth of the
+    /// bytes.
+    private Html shell(Request request, String heading, Submission search, Html content) {
+        if (Views.CONTENT.equals(frame(request))) return Views.pane(content);
+        return Views.page(routes, assets, modules, heading, search, index.roots(), content);
     }
 
     private static void render(Html html, int status, Response response) throws IOException {

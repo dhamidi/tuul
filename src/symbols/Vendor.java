@@ -9,6 +9,7 @@ import java.util.LinkedHashMap;
 import java.util.List;
 import java.util.Map;
 import java.util.Optional;
+import java.util.TreeSet;
 
 /// The dependencies of a tuul-managed project: every jar under `vendor/`.
 ///
@@ -96,6 +97,33 @@ public final class Vendor {
     /// and keeps the ones under this package. `-info` files are the package
     /// speaking rather than a type in it, and a `$` is a nested type, which
     /// belongs to the type that declares it and not to the package listing.
+    /// Every package a vendored jar holds a usable type in.
+    ///
+    /// A dependency has no name a reader can look up — `vendor/x/x-1.0.jar` is
+    /// a file, not a symbol — so what the jars contribute to a listing is the
+    /// packages inside them, each of which *is* a symbol and answers to
+    /// `tuul docs`.
+    public List<String> packages() {
+        var packages = new TreeSet<String>();
+        for (var jar : binaries) {
+            var archive = Archives.of(jar);
+            if (archive.isEmpty()) continue;
+            try (var tree = Files.walk(archive.get().getPath("/"))) {
+                for (var path : tree.toList()) {
+                    var entry = path.toString().replaceFirst("^/", "");
+                    if (!entry.endsWith(".class") || entry.contains("$")) continue;
+                    var slash = entry.lastIndexOf('/');
+                    if (slash < 0) continue;
+                    if (!Classes.visible(read(path))) continue;
+                    packages.add(entry.substring(0, slash).replace('/', '.'));
+                }
+            } catch (IOException unreadable) {
+                continue;
+            }
+        }
+        return List.copyOf(packages);
+    }
+
     public List<String> types(String name) {
         var prefix = name.replace('.', '/') + "/";
         var types = new ArrayList<String>();

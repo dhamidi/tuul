@@ -32,6 +32,21 @@ import java.util.List;
 /// Props are declared, and an unknown one is refused — see [Props].
 public final class Ui {
 
+    /// The Stimulus identifier [Sidebar] and [Opener] are driven by, the module
+    /// the controller is imported from, and the file it lives in. Named here
+    /// because a disagreement between the pin, the file and the identifier is a
+    /// menu that silently never opens.
+    public static final String CONTROLLER = "ui-sidebar";
+
+    public static final String MODULE = "@tuul/ui-sidebar";
+
+    public static final String FILE = "sidebar.js";
+
+    /// What a [Sidebar] is called when nobody says. The [Opener] has to name
+    /// the thing it controls, so the two agree on a default rather than each
+    /// having one.
+    public static final String SIDEBAR = "sidebar";
+
     private Ui() {}
 
     // ---------------------------------------------------------------- layout
@@ -266,7 +281,7 @@ public final class Ui {
     public record Crumb(Props props, Node[] content) implements Component {
 
         public Crumb {
-            props.only("href");
+            props.only("href", "frame");
         }
 
         /// The last crumb is where the reader already is, so it is not a link
@@ -274,9 +289,11 @@ public final class Ui {
         @Override
         public Html render() {
             var target = props.text("href", "");
+            var frame = props.text("frame", "");
             var inside = target.isEmpty()
                     ? Html.fragment(children(content))
-                    : new Anchor(Props.of("href", target), content);
+                    : new Anchor(frame.isEmpty() ? Props.of("href", target) : Props.of("href", target, "frame", frame),
+                            content);
             return Html.element("li", classes("ui-crumb"), inside);
         }
     }
@@ -315,6 +332,64 @@ public final class Ui {
             var kind = props.flag("submit") ? "submit" : "button";
             return Html.element("button",
                     Component.rooted("ui-button", prepend(Attributes.type(kind), content)));
+        }
+    }
+
+    /// A panel of navigation beside the page on a wide screen, and behind a
+    /// button on a narrow one — one component, because it is one thing.
+    ///
+    /// It is a `<dialog>`, and that is the whole reason it is worth writing.
+    /// `showModal()` brings focus trapping, Escape to close, a backdrop and the
+    /// rest of the page made inert, all of which are what a hand-written drawer
+    /// gets wrong. The wide case does not open it: the element carries `open`
+    /// from the server, so the pane is *there* with no script at all, and CSS
+    /// lays it out beside the content. The narrow case is the only one that
+    /// needs JavaScript, and [#opener] is a link before it is a button, so a
+    /// reader whose scripts failed follows it to a page instead of pressing
+    /// something that does nothing.
+    ///
+    /// `label` names it, because a landmark nobody can name is a landmark
+    /// nothing can navigate to.
+    public record Sidebar(Props props, Node[] content) implements Component {
+
+        public Sidebar {
+            props.only("label", "id");
+        }
+
+        @Override
+        public Html render() {
+            var name = props.text("label", "Navigation");
+            var nodes = new java.util.ArrayList<Node>(List.of(Component.rooted("ui-sidebar", content)));
+            nodes.add(Attributes.id(props.text("id", SIDEBAR)));
+            nodes.add(Attribute.flag("open"));
+            nodes.add(Attributes.aria("label", name));
+            nodes.add(Stimulus.target(CONTROLLER, "panel"));
+            return Html.element("dialog", nodes.toArray(new Node[0]));
+        }
+    }
+
+    /// What opens a [Sidebar] where there is no room for it beside the content.
+    ///
+    /// A link, not a button: without JavaScript it goes to `href`, which should
+    /// be a page saying what the sidebar says. The controller turns it into a
+    /// button — `aria-expanded`, `aria-controls`, focus returned on close — so
+    /// with JavaScript it is a menu and without it is a link, and neither is a
+    /// dead control.
+    public record Opener(Props props, Node[] content) implements Component {
+
+        public Opener {
+            props.only("href", "controls");
+        }
+
+        @Override
+        public Html render() {
+            var controls = props.text("controls", SIDEBAR);
+            var nodes = new java.util.ArrayList<Node>(List.of(Component.rooted("ui-opener", content)));
+            nodes.add(href(props.text("href", "#" + controls)));
+            nodes.add(Attributes.aria("controls", controls));
+            nodes.add(Attributes.aria("expanded", "false"));
+            nodes.add(Stimulus.action(Stimulus.on("click", CONTROLLER, "open")));
+            return Html.element("a", nodes.toArray(new Node[0]));
         }
     }
 
@@ -440,6 +515,14 @@ public final class Ui {
 
     public static Html notice(Props props, Node... content) {
         return new Notice(props, content);
+    }
+
+    public static Html sidebar(Props props, Node... content) {
+        return new Sidebar(props, content);
+    }
+
+    public static Html opener(Props props, Node... content) {
+        return new Opener(props, content);
     }
 
     private static String gap(Props props) {

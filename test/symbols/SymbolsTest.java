@@ -24,6 +24,7 @@ public final class SymbolsTest {
             platformJavadoc(index);
             packages(index);
             located(index);
+        roots(index);
             rendering(index);
         }
         vendored();
@@ -353,6 +354,36 @@ public final class SymbolsTest {
     /// told which file and which line, and a class file compiled with `-g:none`
     /// carries neither — so it comes from the source that was parsed for the
     /// doc comment, which knows exactly.
+    /// What there is, before anything has been named — the one question the
+    /// index could not answer, because the root has no name to ask about.
+    private static void roots(Index index) {
+        var roots = index.roots();
+        Check.that("there are roots at all", !roots.isEmpty());
+
+        var named = roots.stream().map(Index.Root::name).toList();
+        Check.that("the project is one of them", named.contains(Index.PROJECT));
+        Check.that("and so is the JDK", named.contains(Index.PLATFORM));
+        Check.that("a root with nothing in it is not offered, so a project with no jars is not told it has some",
+                roots.stream().noneMatch(root -> root.contents().isEmpty()));
+
+        var project = roots.stream().filter(root -> root.name().equals(Index.PROJECT)).findFirst().orElseThrow();
+        Check.that("the project root holds the package the fixture is written in",
+                project.contents().contains("invoicing"));
+        Check.that("and holds packages rather than types",
+                project.contents().stream().noneMatch(name -> name.contains("Invoice")));
+
+        var jdk = roots.stream().filter(root -> root.name().equals(Index.PLATFORM)).findFirst().orElseThrow();
+        Check.that("the JDK root holds java.base", jdk.contents().contains("java.base"));
+        Check.that("and leaves out what exports nothing anybody can import",
+                jdk.contents().stream().noneMatch(name -> name.equals("jdk.internal.vm.ci")));
+
+        Check.that("every name in a root is one the index can be asked about",
+                index.lookup(project.contents().getFirst()).isPresent()
+                        && index.lookup("java.base").isPresent());
+        Check.that("and asking twice is answered from what was worked out the first time",
+                index.roots() == roots || index.roots().equals(roots));
+    }
+
     private static void located(Index index) {
         var invoice = index.lookup("invoicing.Invoice").orElseThrow();
         Check.that("a project type says which file it is written in",

@@ -16,6 +16,11 @@ public final class Routes {
 
     public static final String SYMBOL = "symbol";
 
+    /// What there is, as a page. The sidebar shows the same thing, and this is
+    /// where its opener goes for a reader whose scripts never arrived — which
+    /// is why it exists as a URL and not only as a panel.
+    public static final String TREE = "tree";
+
     public static final String UPDATES = "updates";
 
     public static final String ASSET = "asset";
@@ -32,6 +37,7 @@ public final class Routes {
                 .get(HOME, "/")
                 .get(SEARCH, "/search")
                 .get(SYMBOL, "/symbols/{name}")
+                .get(TREE, "/tree")
                 .get(UPDATES, "/updates")
                 .get(ASSET, "/assets/{file}")
                 .get(FAVICON, "/favicon.ico");

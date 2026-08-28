@@ -1,0 +1,42 @@
+# The tree, and what a click in it does.
+#
+# The sidebar is navigation and the breadcrumb is location. That separation is
+# what lets a tree link swap the content pane without the tree going stale
+# about a position it never claimed to know — so these assertions are about
+# what the tree *offers*, and about the pane it drives.
+
+visit /tree
+expect status 200
+
+# The roots have to be reachable by name, or the tree is a picture of a
+# hierarchy rather than a way into one. Every entry is a symbol this browser
+# can show.
+expect link "json"
+expect link "java.base"
+
+follow "json"
+expect at /symbols/json
+expect attribute symbol name json
+
+# A package lists what it holds by its short name — the prefix is the page you
+# are already on — and going deeper is following one of them.
+expect link "Json"
+follow "Json"
+expect attribute symbol name json.Json
+
+# The pane the tree drives exists on every page. A tree link that asked for it
+# and did not get it would blank the panel at HTTP 200, which is the failure
+# the frames spec was written for and this one inherits.
+visit /
+expect frame content
+visit /symbols/java.util
+expect frame content
+visit /tree
+expect frame content
+
+# The tree drives that pane, and a link inside the pane does not: it is a
+# navigation like any other. A frame that swallowed its own contents' links
+# would answer a breadcrumb with a fragment, and a fragment has no search box.
+expect link "java.base" targets frame content
+visit /symbols/json.Json
+expect link "java.io.Reader" targets page

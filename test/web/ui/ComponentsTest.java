@@ -25,6 +25,7 @@ public final class ComponentsTest {
         merges();
         refuses();
         renders();
+        sidebar();
         defers();
     }
 
@@ -121,6 +122,34 @@ public final class ComponentsTest {
 
     /// A component renders when it is written, not when it is built — which is
     /// what keeps a streamed page streamed.
+    /// One component, two presentations, and the wide one needs no script.
+    ///
+    /// The dialog carries `open` from the server, which is what makes the pane
+    /// exist for a reader whose JavaScript never arrived. A sidebar that only
+    /// appeared once a controller connected would be navigation that vanishes
+    /// on a slow connection.
+    private static void sidebar() {
+        var panel = Ui.sidebar(Props.of("label", "What there is"), text("tree")).markup();
+        Check.that("a sidebar is a dialog, for what showModal gives it", panel.startsWith("<dialog"));
+        Check.that("open from the server, so the pane needs no script", panel.contains(" open"));
+        Check.that("and named, because a landmark nobody can name is one nothing can reach",
+                panel.contains("aria-label=\"What there is\""));
+        Check.that("the controller can find it", panel.contains("data-ui-sidebar-target=\"panel\""));
+
+        var opener = Ui.opener(Props.of("href", "/tree"), text("Browse")).markup();
+        Check.that("an opener is a link first, so it goes somewhere without JavaScript",
+                opener.startsWith("<a") && opener.contains("href=\"/tree\""));
+        Check.that("it says what it controls", opener.contains("aria-controls=\"sidebar\""));
+        Check.that("and that it is shut", opener.contains("aria-expanded=\"false\""));
+        Check.that("the controller is asked to open it", opener.contains("ui-sidebar#open"));
+
+        Check.equal("the opener and the panel agree on a name without being told one",
+                "sidebar",
+                Ui.SIDEBAR);
+        Check.throwing("and a prop neither understands is refused",
+                () -> Ui.sidebar(Props.of("title", "x")).markup());
+    }
+
     private static void defers() throws IOException {
         var rendered = new AtomicInteger();
         Component counted = () -> {

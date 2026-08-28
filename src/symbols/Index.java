@@ -39,6 +39,19 @@ public final class Index implements AutoCloseable {
     /// time to build it again and nothing else.
     public static final Path INDEX = Path.of("build", "index.db");
 
+    /// One of the places symbols come from, and what it holds at the top.
+    ///
+    /// `name` is what the root is called in a URL or a message; `label` is what
+    /// a reader is shown. They differ because `platform` is a good key and a
+    /// poor heading.
+    public record Root(String name, String label, List<String> contents) {}
+
+    public static final String PROJECT = "project";
+
+    public static final String DEPENDENCIES = "dependencies";
+
+    public static final String PLATFORM = "platform";
+
     /// A symbol the search found: what it is called, what kind of thing it is,
     /// and what it says about itself.
     public record Match(String symbol, String kind, String doc) {}
@@ -48,6 +61,10 @@ public final class Index implements AutoCloseable {
     private final Optional<Store> store;
     private final String stamp;
     private Map<String, byte[]> classes;
+
+    /// Worked out once: the roots do not change while a server is running, and
+    /// walking the JDK's modules for every page would be a walk per page.
+    private List<Root> groups;
 
     private Index(List<Path> roots, Vendor vendor, Optional<Store> store, String stamp) {
         this.roots = List.copyOf(roots);
@@ -326,6 +343,79 @@ public final class Index implements AutoCloseable {
 
     private static String jdkLocation(String module, String entry) {
         return Path.of(System.getProperty("java.home"), "lib", "src.zip") + "!/" + module + "/" + entry;
+    }
+
+    /// What there is, before anything has been named.
+    ///
+    /// Every other question this index answers starts with a symbol somebody
+    /// already knew about. This is the one that does not: a reader arriving
+    /// with nothing asks what exists, and until now there was no way to say —
+    /// `tuul docs java.util` worked and `tuul docs` was an error.
+    ///
+    /// Three roots, because they are three different kinds of thing and a
+    /// reader holds them apart: what this project is, what it was built
+    /// against, and what the language brings. Each entry is a name that can be
+    /// handed straight back to [#lookup], so a listing is navigable rather than
+    /// decorative.
+    ///
+    /// A dependency contributes its packages rather than itself, because a jar
+    /// is a file and not a symbol; an empty root is left out, since a project
+    /// with no dependencies should not be told it has a dependencies section.
+    public List<Root> roots() {
+        if (groups == null) {
+            var found = new ArrayList<Root>();
+            add(found, new Root(PROJECT, "This project", projectPackages()));
+            add(found, new Root(DEPENDENCIES, "Dependencies", vendor.packages()));
+            add(found, new Root(PLATFORM, "The JDK", platformModules()));
+            groups = List.copyOf(found);
+        }
+        return groups;
+    }
+
+    private static void add(List<Root> roots, Root root) {
+        if (!root.contents().isEmpty()) roots.add(root);
+    }
+
+    /// The packages the project's own types are written in.
+    ///
+    /// Read back from the index where there is one, because they were written
+    /// there beside the types and reading a row beats compiling a source tree.
+    /// Where there is none, they are worked out from the names — which is the
+    /// same answer by the longer road.
+    private List<String> projectPackages() {
+        var origin = origin("project", "sources", stamp);
+        if (origin.isPresent() && origin.get().fresh() && origin.get().complete()) {
+            try {
+                var kept = store.orElseThrow().names(origin.get().id(), TypeInfo.Kind.PACKAGE);
+                if (!kept.isEmpty()) return kept;
+            } catch (SqliteException unavailable) {
+                // work it out instead
+            }
+        }
+        return names().stream()
+                .filter(name -> !name.contains("$"))
+                .map(Index::packageOf)
+                .filter(name -> !name.isEmpty())
+                .distinct()
+                .sorted()
+                .toList();
+    }
+
+    /// The modules that export something to everybody.
+    ///
+    /// The JDK ships around ninety, and the ones exporting nothing unqualified
+    /// — `jdk.internal.*` and its like — are exactly the ones a reader cannot
+    /// use. Listing them would make the first thing anybody sees mostly noise.
+    private static List<String> platformModules() {
+        try (var modules = Files.list(modules())) {
+            return modules
+                    .filter(module -> !exports(module).isEmpty())
+                    .map(module -> module.getFileName().toString())
+                    .sorted()
+                    .toList();
+        } catch (IOException unreadable) {
+            return List.of();
+        }
     }
 
     /// Every type name known from source. Vendored and JDK types are found on

@@ -41,7 +41,7 @@ public final class BrowseSpec {
     /// how it is put together, then what it answers, then where its results
     /// lead, then its edges, then two people at once.
     public static final List<String> NAMES =
-            List.of("journey", "frames", "results", "members", "edges", "together");
+            List.of("journey", "frames", "results", "members", "edges", "together", "tree");
 
     private static final String SUFFIX = ".hyperspec";
 

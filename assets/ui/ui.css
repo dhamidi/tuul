@@ -232,6 +232,77 @@
   border: 0;
 }
 
+/* Navigation -------------------------------------------------------------- */
+
+/* One element, two presentations.
+ *
+ * The dialog carries `open` from the server, so where there is room it is
+ * simply a pane — laid out in the flow, no script involved, and a reader whose
+ * JavaScript never arrived still has the whole tree. Where there is not room it
+ * is hidden until `showModal()` makes it modal, and `:modal` is what tells the
+ * two cases apart: the same element, styled by whether the browser has opened
+ * it as a dialog or is merely displaying it. */
+.ui-sidebar {
+  position: static;
+  display: block;
+  width: 100%;
+  max-width: 18rem;
+  max-height: none;
+  margin: 0;
+  padding: 0;
+  border: 0;
+  background: none;
+  color: inherit;
+  overflow: visible;
+}
+
+/* The pane scrolls on its own rather than scrolling the page. A tree of ninety
+   modules beside a page of sixty members would otherwise make one scrollbar
+   move two unrelated things. */
+@media (min-width: 60rem) {
+  .ui-sidebar {
+    position: sticky;
+    top: var(--ui-space-4);
+    max-height: calc(100vh - var(--ui-space-8));
+    overflow-y: auto;
+    overscroll-behavior: contain;
+  }
+}
+
+.ui-sidebar:modal {
+  position: fixed;
+  inset: 0 auto 0 0;
+  max-width: 20rem;
+  height: 100dvh;
+  padding: var(--ui-space-4);
+  background: var(--ui-paper);
+  border-right: 1px solid var(--ui-rule);
+  overflow-y: auto;
+}
+
+.ui-sidebar::backdrop { background: rgb(0 0 0 / 0.4); }
+
+.ui-opener {
+  display: none;
+  align-items: center;
+  gap: var(--ui-space-2);
+  padding: var(--ui-space-1) var(--ui-space-2);
+  border: 1px solid var(--ui-edge);
+  border-radius: var(--ui-radius);
+  color: inherit;
+  text-decoration: none;
+}
+.ui-opener:hover { border-color: var(--ui-ink); }
+.ui-opener:focus-visible { outline: 2px solid var(--ui-link); outline-offset: 2px; }
+
+/* Below the two-pane threshold the pane folds away and the opener appears.
+   Above it the pane is the navigation and a button to open what is already
+   open would be a control that does nothing. */
+@media (max-width: 59.999rem) {
+  .ui-sidebar:not(:modal) { display: none; }
+  .ui-opener { display: inline-flex; }
+}
+
 /* Feedback ---------------------------------------------------------------- */
 
 .ui-notice {

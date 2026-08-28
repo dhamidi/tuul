@@ -2,6 +2,9 @@ package browser;
 
 import harness.Check;
 import java.io.BufferedReader;
+import java.util.ArrayList;
+import java.util.HashSet;
+import java.util.regex.Pattern;
 import java.util.List;
 import java.util.Map;
 import json.Json;
@@ -22,6 +25,7 @@ public final class HandlerTest {
     public static void run(Browser browser) throws Exception {
         routes(browser);
         pages(browser);
+        unique(browser);
         frames(browser);
         negotiates(browser);
         missing(browser);
@@ -95,6 +99,24 @@ public final class HandlerTest {
     /// The frame protocol, which is the part that fails silently when it is
     /// wrong: a browser asks for a panel and gets a document, or asks for a
     /// panel and gets one that is not there.
+    /// Every id on a page is unique, which HTML requires and Turbo depends on.
+    ///
+    /// This is not pedantry. Turbo finds the frame a link targets with
+    /// `querySelector("#id")`, takes whatever comes first, and gives up if it
+    /// is not a frame — so a second element sharing the frame's id turns every
+    /// frame swap into a whole-page visit. Nothing errors, nothing logs, and
+    /// the page still works, which is why it went unnoticed: the skip link
+    /// landed on `#content` and the content frame was already called that.
+    private static void unique(Browser browser) {
+        for (var path : List.of("/", "/search?q=json", "/symbols/json.Json", "/symbols/symbols", "/symbols/nope.Nope")) {
+            var ids = new ArrayList<String>();
+            var found = Pattern.compile("\\bid=\"([^\"]+)\"").matcher(Memory.handle(browser.handler(), Memory.get(path)).text());
+            while (found.find()) ids.add(found.group(1));
+            var once = new HashSet<>(ids);
+            Check.equal("every id on " + path + " appears once", ids.size(), once.size());
+        }
+    }
+
     private static void frames(Browser browser) {
         var whole = Memory.handle(browser.handler(), Memory.get("/search?q=write")).text();
         var frame = Memory.handle(browser.handler(),
@@ -110,8 +132,11 @@ public final class HandlerTest {
         var symbol = Memory.handle(browser.handler(), Memory.get("/symbols/json.Json")).text();
         Check.that("a symbol page carries no results panel, which is why a result link must leave it",
                 !symbol.contains("<turbo-frame id=\"" + Views.RESULTS + "\""));
+        var panel = whole.substring(whole.indexOf("<turbo-frame id=\"" + Views.RESULTS + "\""));
         Check.that("so every result link says it is leaving",
-                count(whole, "href=\"/symbols/") == count(whole, "data-turbo-frame=\"_top\""));
+                count(panel, "href=\"/symbols/") == count(panel, "data-turbo-frame=\"_top\""));
+        Check.that("while a tree link drives the content pane, which every page has",
+                whole.contains("href=\"/symbols/json\" data-turbo-frame=\"" + Views.CONTENT + "\""));
     }
 
     /// One URL, two readers. This is why the application exists in a toolchain

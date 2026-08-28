@@ -117,6 +117,13 @@ final class Store implements AutoCloseable {
         return strings("select name from type where origin = ? order by id", origin);
     }
 
+    /// The names an origin holds of one kind, in alphabetical order — which is
+    /// the order a listing is read in, where `names` answers in the order
+    /// things were indexed.
+    List<String> names(long origin, TypeInfo.Kind kind) {
+        return strings("select name from type where origin = ? and kind = ? order by name", origin, kind.name());
+    }
+
     /// The symbols whose name or documentation match. Ranked by bm25, so the
     /// answer to a two-word question is the symbol that is about both words.
     ///
@@ -346,9 +353,9 @@ final class Store implements AutoCloseable {
         return List.copyOf(tags);
     }
 
-    private List<String> strings(String sql, long id) {
+    private List<String> strings(String sql, Object... parameters) {
         var values = new ArrayList<String>();
-        try (var rows = database.query(sql, id)) {
+        try (var rows = database.query(sql, parameters)) {
             while (rows.next()) values.add(rows.text(0));
         }
         return List.copyOf(values);

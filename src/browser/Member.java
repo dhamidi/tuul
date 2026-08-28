@@ -13,6 +13,7 @@ import web.ui.Component;
 import web.ui.Html;
 import web.ui.Microdata;
 import web.ui.Props;
+import web.ui.Turbo;
 import web.ui.Ui;
 
 /// One member of a type, the way this browser shows it.
@@ -57,7 +58,8 @@ public record Member(Router routes, Props props, Json.Object member) implements 
         var written = 0;
         while (names.find()) {
             if (names.start() > written) parts.add(text(signature.substring(written, names.start())));
-            parts.add(Ui.anchor(Props.of("href", routes.path(Routes.SYMBOL, Map.of("name", names.group()))),
+            parts.add(Ui.anchor(
+                    Props.of("href", routes.path(Routes.SYMBOL, Map.of("name", names.group())), "frame", Turbo.TOP),
                     text(names.group())));
             written = names.end();
         }
