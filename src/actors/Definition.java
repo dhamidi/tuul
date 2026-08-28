@@ -9,7 +9,7 @@ import json.Json;
 ///
 /// ## How an instance is built
 ///
-/// [System] calls [#instantiate(Address)] every time it summons an actor of
+/// [ActorSystem] calls [#instantiate(Address)] every time it summons an actor of
 /// this type, and then replays that actor's log through the application it
 /// received. The state a caller sees is therefore always the fold of the
 /// recorded commands through the definition that is registered *now*, never a
@@ -20,7 +20,7 @@ import json.Json;
 /// ## What belongs here and what does not
 ///
 /// A definition registers update functions. It does not register effect
-/// handlers. Handlers are given to [System#effect(String, Effect.Handler)] once,
+/// handlers. Handlers are given to [ActorSystem#effect(String, Effect.Handler)] once,
 /// at startup, because a handler owns a connection, a file or a socket, and
 /// those must not be rebuilt every time an actor is summoned. The split also
 /// keeps a definition pure: it maps a state and a message to a state and a list
@@ -28,7 +28,7 @@ import json.Json;
 ///
 /// ## Why `inspect` returns JSON
 ///
-/// The state type `S` never leaves the system. [System#inspect(Address)] hands
+/// The state type `S` never leaves the system. [ActorSystem#inspect(Address)] hands
 /// back JSON, and this method is where a definition decides what that JSON
 /// looks like. Letting a caller hold an `S` would mean a caller holding a class
 /// that a future reload wants to discard, and the default is a string form

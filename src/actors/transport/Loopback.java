@@ -1,7 +1,7 @@
 package actors.transport;
 
 import actors.Address;
-import actors.System;
+import actors.ActorSystem;
 import actors.Transport;
 import application.Message;
 import java.util.Map;
@@ -25,9 +25,9 @@ import java.util.concurrent.ConcurrentHashMap;
 /// invent.
 public final class Loopback implements Transport {
 
-    private final Map<String, System> systems = new ConcurrentHashMap<>();
+    private final Map<String, ActorSystem> systems = new ConcurrentHashMap<>();
 
-    public static Loopback of(System... systems) {
+    public static Loopback of(ActorSystem... systems) {
         var loopback = new Loopback();
         for (var system : systems) loopback.join(system);
         return loopback;
@@ -35,7 +35,7 @@ public final class Loopback implements Transport {
 
     /// Adds a system, and makes this the transport that system uses for
     /// addresses that are not its own.
-    public Loopback join(System system) {
+    public Loopback join(ActorSystem system) {
         systems.put(system.name(), system);
         system.transport(this);
         return this;

@@ -71,10 +71,10 @@ import json.Json;
 /// command that caused the `Error` was appended before it was handled, so
 /// summoning the actor again replays it and meets the same `Error` again. The
 /// actor cannot recover on its own. That is what the crash-loop brake in
-/// [System] is for: after [Spawn#restarts()] deaths inside [Spawn#window()] the
+/// [ActorSystem] is for: after [Spawn#restarts()] deaths inside [Spawn#window()] the
 /// system stops summoning it, senders are told
 /// [Undeliverable.Cause#quarantined], and it takes a person to decide what to
-/// do. [System#inspectAt(Address, long)] still reads the state up to the
+/// do. [ActorSystem#inspectAt(Address, long)] still reads the state up to the
 /// command before the poison, which is usually where that person starts.
 final class Actor implements Flow.Subscriber<Message> {
 
@@ -87,7 +87,7 @@ final class Actor implements Flow.Subscriber<Message> {
     /// Pairs a definition with the application it built, so that the state type
     /// stays inside this object.
     ///
-    /// [System] holds actors of many types in one map and must not name their
+    /// [ActorSystem] holds actors of many types in one map and must not name their
     /// state types. Capturing `S` here is what lets `inspect` call
     /// `definition.inspect(application.state())` without a cast, and it is why
     /// no `S` ever escapes to a caller.
@@ -126,7 +126,7 @@ final class Actor implements Flow.Subscriber<Message> {
         }
     }
 
-    private final System system;
+    private final ActorSystem system;
     private final Address address;
     private final Body<?> body;
     private final Log log;
@@ -137,12 +137,12 @@ final class Actor implements Flow.Subscriber<Message> {
     private volatile Thread thread;
     private volatile boolean finished;
     private volatile boolean settled;
-    private volatile long lastAt = java.lang.System.currentTimeMillis();
+    private volatile long lastAt = System.currentTimeMillis();
     private long seenAbandoned;
     private long seenFenced;
     private Flow.Subscription subscription;
 
-    Actor(System system, Address address, Definition<?> definition, Log log, Spawn spawn) {
+    Actor(ActorSystem system, Address address, Definition<?> definition, Log log, Spawn spawn) {
         this.system = system;
         this.address = address;
         this.body = Body.of(definition, address);
@@ -229,7 +229,7 @@ final class Actor implements Flow.Subscriber<Message> {
     /// SQLite file is a way to meet `SQLITE_BUSY` for no reason. An actor that
     /// closed the log on its way out would leave a closed handle in that map
     /// and break the next summon, and it would also stop
-    /// [System#inspectAt(Address, long)] from reading the history of an actor
+    /// [ActorSystem#inspectAt(Address, long)] from reading the history of an actor
     /// that has been evicted. The store owns the lifetime and closes everything
     /// when the system closes.
     void start() {
@@ -258,11 +258,11 @@ final class Actor implements Flow.Subscriber<Message> {
 
     private void loop() {
         try {
-            var started = java.lang.System.nanoTime();
+            var started = System.nanoTime();
             replay();
             system.trace(address, Trace.Kind.summoned, Json.Object.of()
                     .with("commands", log.length())
-                    .with("millis", (java.lang.System.nanoTime() - started) / 1_000_000.0));
+                    .with("millis", (System.nanoTime() - started) / 1_000_000.0));
             resume();
             while (true) {
                 var delivery = mailbox.take();
@@ -427,7 +427,7 @@ final class Actor implements Flow.Subscriber<Message> {
     /// it entered the mailbox rather than the moment of the message that caused
     /// it. That value is logged, which is what makes it replay.
     private long clock() {
-        return java.lang.System.currentTimeMillis();
+        return System.currentTimeMillis();
     }
 
     // ---- Flow.Subscriber -------------------------------------------------

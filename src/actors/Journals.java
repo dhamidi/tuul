@@ -17,7 +17,7 @@ import java.util.stream.Stream;
 ///
 /// A log is opened once and shared, because one actor owns its log and opening
 /// the same SQLite file twice for writing is a way to meet `SQLITE_BUSY` for no
-/// reason. The map is what makes [System#inspectAt(Address, long)] able to read
+/// reason. The map is what makes [ActorSystem#inspectAt(Address, long)] able to read
 /// the history of an actor that is currently running.
 final class Journals implements Logs {
 

@@ -25,7 +25,7 @@ import application.Message;
 ///
 /// ## Failure is reported, not thrown away
 ///
-/// An implementation that cannot deliver throws. [System] turns that into an
+/// An implementation that cannot deliver throws. [ActorSystem] turns that into an
 /// `error.communication` message with cause
 /// [Undeliverable.Cause#unreachable] and hands it to the sender, so a failed
 /// remote delivery is handled by an update function like any other fact.

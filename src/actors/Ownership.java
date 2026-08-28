@@ -32,14 +32,14 @@ import java.util.concurrent.ConcurrentHashMap;
 /// [#files(Path)] is the only implementation shipped, and it covers one machine.
 /// A cluster needs a renewable lease with an expiry, so that the death of a
 /// process releases its actors without anyone tidying up after it. That is a
-/// different implementation of this same interface, and [System] does not have
+/// different implementation of this same interface, and [ActorSystem] does not have
 /// to change to take it: the system claims, holds and releases, and it never
 /// asks how the claim is enforced.
 ///
 /// ## What a claim does not cover
 ///
 /// A claim protects writing. Reading is left alone on purpose, because
-/// [System#inspectAt(Address, long)] has to be able to read the history of an
+/// [ActorSystem#inspectAt(Address, long)] has to be able to read the history of an
 /// actor that another process is running, and an inspector that had to take the
 /// actor away from its owner would be useless.
 public interface Ownership extends AutoCloseable {
@@ -76,7 +76,7 @@ public interface Ownership extends AutoCloseable {
     /// This is right for a system whose actors keep no log, and for a custom
     /// [Logs] implementation that arbitrates writers itself. It is wrong for a
     /// directory of files that two processes can both open, which is why
-    /// [System#rooted(Path)] does not use it.
+    /// [ActorSystem#rooted(Path)] does not use it.
     static Ownership shared() {
         return new Ownership() {
 

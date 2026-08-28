@@ -19,7 +19,7 @@ import json.Json;
 /// nobody has touched today is left out of it.
 ///
 /// [Logs#catalogue()] answers a third question — which addresses have a log —
-/// and that one is operational too. [System#known()] joins the two.
+/// and that one is operational too. [ActorSystem#known()] joins the two.
 ///
 /// ## It is held in memory
 ///

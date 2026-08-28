@@ -47,13 +47,13 @@ import java.util.stream.Stream;
 /// [#concurrency(int)] is what keeps the middle of that range sensible.
 public final class Fleet {
 
-    private final System system;
+    private final ActorSystem system;
     private final String type;
     private List<Address> addresses = List.of();
     private int concurrency = 16;
     private Duration deadline = Duration.ofSeconds(5);
 
-    Fleet(System system, String type) {
+    Fleet(ActorSystem system, String type) {
         this.system = system;
         this.type = type;
     }

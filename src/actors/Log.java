@@ -17,7 +17,7 @@ import java.util.stream.Stream;
 /// definition can interpret its log. Nothing else can read a basket's commands
 /// and work out what the basket contains, because the meaning lives in the
 /// update functions. A projection that needs the answer asks the actor, or
-/// replays it through [System#inspectAt(Address, long)].
+/// replays it through [ActorSystem#inspectAt(Address, long)].
 ///
 /// ## Every message, including the ones effects produced
 ///
@@ -89,7 +89,7 @@ public interface Log extends AutoCloseable {
     /// cached sequence number is then behind the file, and the next append would
     /// collide with a row that already exists.
     ///
-    /// [System] calls this immediately after taking a claim, which is exactly
+    /// [ActorSystem] calls this immediately after taking a claim, which is exactly
     /// the moment the cache may be stale and the only moment it can be corrected
     /// safely. A log that caches nothing does nothing here.
     default void refresh() {

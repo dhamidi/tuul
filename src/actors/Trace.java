@@ -56,13 +56,13 @@ public record Trace(long at, Address address, Kind kind, Json detail) {
         fenced,
 
         /// One message was handled. This is off unless
-        /// [System#tracingMessages(boolean)] turns it on, because an actor
+        /// [ActorSystem#tracingMessages(boolean)] turns it on, because an actor
         /// doing ten thousand messages a second would drown every other event.
         handled
     }
 
     static Trace of(Address address, Kind kind, Json detail) {
-        return new Trace(java.lang.System.currentTimeMillis(), address, kind, detail);
+        return new Trace(System.currentTimeMillis(), address, kind, detail);
     }
 
     /// This trace as JSON, which is what an inspector sends to a browser.

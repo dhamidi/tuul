@@ -37,7 +37,7 @@
 /// written to is an actor with an empty log.
 ///
 /// ```
-/// try (var system = System.named("shop").rooted(Path.of("logs")).define(new Counting())) {
+/// try (var system = ActorSystem.named("shop").rooted(Path.of("logs")).define(new Counting())) {
 ///     var counter = Address.of("counter", "42");
 ///     system.tell(counter, Message.of("add"));
 ///     var answer = system.ask(counter, Message.of("total"), Duration.ofSeconds(2)).get();
@@ -72,7 +72,7 @@
 ///   - `actor.spawn`, `actor.evict` and `actor.schedule` do what they say.
 ///
 /// Handlers for anything else — a database, an HTTP client, a mailer — are
-/// registered once on the system with [System#effect(String,
+/// registered once on the system with [ActorSystem#effect(String,
 /// application.Effect.Handler)]. They belong there because they own connections
 /// that must outlive an actor being evicted, and keeping them out of a
 /// definition is what leaves a definition pure enough to replay.
@@ -101,7 +101,7 @@
 /// system.inspectAt(address, 12)         // the state it had after 12 commands
 /// ```
 ///
-/// [System#inspectAt(Address, long)] is replay with a stopping point. It builds
+/// [ActorSystem#inspectAt(Address, long)] is replay with a stopping point. It builds
 /// a throwaway instance, advances it, reads it and drops it, so it never
 /// disturbs the running actor and never runs an effect. A scrubber over an
 /// actor's history is that method in a loop.
@@ -133,7 +133,7 @@
 ///
 /// ## The types in this package
 ///
-///   - [System] is the front door: define, tell, ask, evict, inspect.
+///   - [ActorSystem] is the front door: define, tell, ask, evict, inspect.
 ///   - [Definition] is what you write. [Address] is how you name an instance.
 ///     [Spawn] decides how it runs.
 ///   - [Log] and [Logs] are the store, with [Journal] keeping one SQLite file
@@ -172,13 +172,8 @@
 ///     asking a durable counter for its total adds an entry to its log. That
 ///     follows from the law and it is not free: an actor that is read far more
 ///     often than it is written grows a log full of questions. Either read it
-///     with [System#inspect(Address)], which never enters the mailbox, or spawn
+///     with [ActorSystem#inspect(Address)], which never enters the mailbox, or spawn
 ///     the read side as its own undurable actor.
-///   - **`import actors.*` makes `System` ambiguous.** The class is named
-///     [System] deliberately, and a wildcard import puts it beside
-///     `java.lang.System`, which javac then refuses to guess between. Import
-///     [System] by name, or write `java.lang.System.out` in the files that need
-///     both.
 ///
 /// ## One process owns one actor
 ///
@@ -188,11 +183,11 @@
 /// notice: the states diverge and the log ends up holding a sequence no single
 /// actor ever saw.
 ///
-/// [System#rooted(java.nio.file.Path)] installs [Ownership#files] for this.
+/// [ActorSystem#rooted(java.nio.file.Path)] installs [Ownership#files] for this.
 /// Summoning an actor another process is running raises [OwnershipException],
 /// immediately and without waiting, because a second owner is a deployment
 /// fault rather than congestion. [Ownership] is an interface so that a cluster
-/// lease can replace the file lock without [System] changing.
+/// lease can replace the file lock without [ActorSystem] changing.
 ///
 /// ## Actors are evicted when they go quiet
 ///
@@ -224,10 +219,10 @@
 ///
 /// ## Watching a system work
 ///
-/// [System#traces()] publishes a [Trace] for every summon, eviction,
+/// [ActorSystem#traces()] publishes a [Trace] for every summon, eviction,
 /// quarantine, undeliverable message, abandoned effect and dropped late
 /// emission, live and in this process. A subscriber that falls behind loses the
-/// oldest events it had not read and [System#tracesDropped()] counts them.
+/// oldest events it had not read and [ActorSystem#tracesDropped()] counts them.
 ///
 /// [Flight] is one subscriber, and it writes those events into JDK Flight
 /// Recorder. It is the only file in this package that names `jdk.jfr`, so an
@@ -248,7 +243,7 @@
 /// state that cannot be reproduced from the commands is a state nobody can
 /// explain. Correcting an actor is therefore the same operation as using it:
 /// send the message that says what happened. The correction is recorded, it
-/// replays, and it is visible in [System#history(Address, long, int)] beside
+/// replays, and it is visible in [ActorSystem#history(Address, long, int)] beside
 /// everything else.
 ///
 /// ## What is deliberately not built
@@ -257,8 +252,8 @@
 /// control socket, log snapshots, supervision trees, and links and monitors.
 /// Each is a real feature and none is needed to know whether the core is right.
 /// The seams are there: [Definition] is the unit a reload would swap, [Logs] is
-/// where a snapshot or a tiered store would go, [System#known()] is what an
-/// inspector would read, and [System#traces()] is the live feed it would show.
+/// where a snapshot or a tiered store would go, [ActorSystem#known()] is what an
+/// inspector would read, and [ActorSystem#traces()] is the live feed it would show.
 ///
 /// Log growth is the known limit. Nothing compacts a log and nothing snapshots
 /// one, so replay time grows with history for as long as an actor lives. That is

@@ -38,7 +38,7 @@ public record Delivery(Message command, Address to, Address from, Address replyT
 
     /// A delivery with no routing beyond its destination, stamped now.
     public static Delivery of(Address to, Message command) {
-        return new Delivery(command, to, null, null, null, java.lang.System.currentTimeMillis());
+        return new Delivery(command, to, null, null, null, System.currentTimeMillis());
     }
 
     /// A delivery replayed out of a log. It carries the recorded timestamp and

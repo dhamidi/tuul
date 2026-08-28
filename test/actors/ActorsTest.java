@@ -55,7 +55,7 @@ public final class ActorsTest {
         var address = Address.of("counter", "1");
         var seen = new CopyOnWriteArrayList<Trace>();
 
-        try (var system = System.named("test").rooted(root).define(new Counting(1))) {
+        try (var system = ActorSystem.named("test").rooted(root).define(new Counting(1))) {
             system.traces().subscribe(collector(seen));
             system.tell(address, Message.of("add").with("by", Json.of(1)));
             settle();
@@ -85,7 +85,7 @@ public final class ActorsTest {
 
         // Per-message traces only when they are turned on.
         var chatty = new CopyOnWriteArrayList<Trace>();
-        try (var system = System.named("test").rooted(root()).define(new Counting(1))
+        try (var system = ActorSystem.named("test").rooted(root()).define(new Counting(1))
                 .tracingMessages(true)) {
             system.traces().subscribe(collector(chatty));
             system.tell(Address.of("counter", "2"), Message.of("add"));
@@ -129,7 +129,7 @@ public final class ActorsTest {
         file.toFile().deleteOnExit();
         var address = Address.of("counter", "1");
 
-        try (var system = System.named("test").rooted(root).define(new Counting(1));
+        try (var system = ActorSystem.named("test").rooted(root).define(new Counting(1));
                 var flight = Flight.recording(system);
                 var recording = new jdk.jfr.Recording()) {
             recording.enable("tuul.actors.Summoned");
@@ -207,7 +207,7 @@ public final class ActorsTest {
         // In ordinary running the mark keeps up with the log.
         var busy = root();
         var address = Address.of("acting", "1");
-        try (var system = System.named("test").rooted(busy).define(new Acting())
+        try (var system = ActorSystem.named("test").rooted(busy).define(new Acting())
                 .effect("record", (effect, emit) -> {})) {
             system.tell(address, Message.of("add").with("by", Json.of(2)));
             system.tell(address, Message.of("add").with("by", Json.of(3)));
@@ -234,13 +234,13 @@ public final class ActorsTest {
         crashed(settled);
         var ran = new java.util.concurrent.atomic.AtomicInteger();
         var redelivering = Spawn.durable().redelivers(true);
-        try (var system = System.named("test").rooted(settled).define(new Acting(), redelivering)
+        try (var system = ActorSystem.named("test").rooted(settled).define(new Acting(), redelivering)
                 .effect("record", (effect, emit) -> ran.incrementAndGet())) {
             summon(system, tailAddress());
             settle();
             Check.equal("the tail runs on the first summon after the crash", 7.0, total(system, tailAddress()));
         }
-        try (var system = System.named("test").rooted(settled).define(new Acting(), redelivering)
+        try (var system = ActorSystem.named("test").rooted(settled).define(new Acting(), redelivering)
                 .effect("record", (effect, emit) -> ran.incrementAndGet())) {
             summon(system, tailAddress());
             settle();
@@ -258,7 +258,7 @@ public final class ActorsTest {
     private static void crashed(Path root) {
         try (var logs = new Journals(root)) {
             var log = logs.open(tailAddress());
-            log.append(Message.of("add").with("by", Json.of(7)), java.lang.System.currentTimeMillis());
+            log.append(Message.of("add").with("by", Json.of(7)), System.currentTimeMillis());
         }
     }
 
@@ -269,7 +269,7 @@ public final class ActorsTest {
         crashed(root);
         var ran = new AtomicInteger();
         var spawn = Spawn.durable().redelivers(redelivers);
-        try (var system = System.named("test").rooted(root).define(new Acting(), spawn)
+        try (var system = ActorSystem.named("test").rooted(root).define(new Acting(), spawn)
                 .effect("record", (effect, emit) -> ran.incrementAndGet())) {
             Check.equal("an unloaded actor inspects to the full fold of its log",
                     7.0, total(system, tailAddress()));
@@ -283,7 +283,7 @@ public final class ActorsTest {
 
     /// Loads an actor without sending it anything, so that replay runs and the
     /// log gains no entry the test did not intend.
-    private static void summon(System system, Address address) {
+    private static void summon(ActorSystem system, Address address) {
         system.subscriber(address);
     }
 
@@ -311,14 +311,14 @@ public final class ActorsTest {
 
         // A durable actor still behaves the same way with either setting.
         var address = Address.of("counter", "1");
-        try (var system = System.named("test").rooted(root)
+        try (var system = ActorSystem.named("test").rooted(root)
                 .define(new Counting(1), Spawn.durable().durability(Durability.full))) {
             system.tell(address, Message.of("add").with("by", Json.of(4)));
             settle();
             Check.equal("an actor with full durability records and replays as usual",
                     4.0, total(system, address));
         }
-        try (var system = System.named("test").rooted(root)
+        try (var system = ActorSystem.named("test").rooted(root)
                 .define(new Counting(1), Spawn.durable().durability(Durability.full))) {
             Check.equal("and comes back from the log", 4.0, total(system, address));
         }
@@ -333,7 +333,7 @@ public final class ActorsTest {
         var address = Address.of("counter", "1");
         var brief = Spawn.durable().idle(Duration.ofMillis(600));
 
-        try (var system = System.named("test").rooted(root)
+        try (var system = ActorSystem.named("test").rooted(root)
                 .define(new Counting(1), brief)
                 .sweeping(Duration.ofMillis(40))) {
             system.tell(address, Message.of("add").with("by", Json.of(3)));
@@ -348,7 +348,7 @@ public final class ActorsTest {
         }
 
         // An actor that is never idle stays put.
-        try (var system = System.named("test").rooted(root)
+        try (var system = ActorSystem.named("test").rooted(root)
                 .define(new Counting(1), brief)
                 .sweeping(Duration.ofMillis(40))) {
             var busy = Address.of("counter", "busy");
@@ -360,7 +360,7 @@ public final class ActorsTest {
         }
 
         // Passivation can be turned off for one actor.
-        try (var system = System.named("test").rooted(root)
+        try (var system = ActorSystem.named("test").rooted(root)
                 .define(new Counting(1), brief.idle(Duration.ZERO))
                 .sweeping(Duration.ofMillis(40))) {
             var pinned = Address.of("counter", "pinned");
@@ -372,7 +372,7 @@ public final class ActorsTest {
         // A settled actor goes without waiting out its idle period, and the
         // registry says so before it goes.
         var patient = Spawn.durable().idle(Duration.ofMinutes(10));
-        try (var system = System.named("test").rooted(root())
+        try (var system = ActorSystem.named("test").rooted(root())
                 .define(new Closing(), patient)
                 .sweeping(Duration.ofMillis(40))) {
             var closing = Address.of("closing", "1");
@@ -415,7 +415,7 @@ public final class ActorsTest {
             }
         };
 
-        try (var system = System.named("test").rooted(root())
+        try (var system = ActorSystem.named("test").rooted(root())
                 .define(broken, Spawn.durable().idle(Duration.ofMinutes(10)))
                 .sweeping(Duration.ofMillis(40))) {
             var faulty = Address.of("broken", "1");
@@ -451,7 +451,7 @@ public final class ActorsTest {
         }
     }
 
-    private static boolean isLoaded(System system, Address address) {
+    private static boolean isLoaded(ActorSystem system, Address address) {
         return system.known().anyMatch(entry -> entry.address().equals(address) && entry.loaded());
     }
 
@@ -463,12 +463,12 @@ public final class ActorsTest {
         var root = root();
         var address = Address.of("counter", "1");
 
-        try (var first = System.named("test").rooted(root).define(new Counting(1))) {
+        try (var first = ActorSystem.named("test").rooted(root).define(new Counting(1))) {
             first.tell(address, Message.of("add").with("by", Json.of(2)));
             settle();
             Check.equal("the first owner runs the actor", 2.0, total(first, address));
 
-            try (var second = System.named("test").rooted(root).define(new Counting(1))) {
+            try (var second = ActorSystem.named("test").rooted(root).define(new Counting(1))) {
                 var refused = new ArrayList<String>();
                 try {
                     second.tell(address, Message.of("add").with("by", Json.of(5)));
@@ -490,7 +490,7 @@ public final class ActorsTest {
 
         // The claim belongs to the actor, not to the log, so a handover works
         // once the first owner has let go.
-        try (var second = System.named("test").rooted(root).define(new Counting(1))) {
+        try (var second = ActorSystem.named("test").rooted(root).define(new Counting(1))) {
             second.tell(address, Message.of("add").with("by", Json.of(5)));
             settle();
             Check.equal("a later owner takes over and appends to the same history",
@@ -499,7 +499,7 @@ public final class ActorsTest {
 
         // Eviction releases the claim inside one process too, so the same
         // system can summon the actor again straight afterwards.
-        try (var system = System.named("test").rooted(root).define(new Counting(1))) {
+        try (var system = ActorSystem.named("test").rooted(root).define(new Counting(1))) {
             system.tell(address, Message.of("add").with("by", Json.of(1)));
             settle();
             system.evict(address);
@@ -511,8 +511,8 @@ public final class ActorsTest {
 
         // An actor with no log has no shared history, so nothing is claimed and
         // two systems can both run one.
-        try (var one = System.named("test").rooted(root).define(definitionOf("free"), Spawn.ephemeral());
-                var two = System.named("test").rooted(root).define(definitionOf("free"), Spawn.ephemeral())) {
+        try (var one = ActorSystem.named("test").rooted(root).define(definitionOf("free"), Spawn.ephemeral());
+                var two = ActorSystem.named("test").rooted(root).define(definitionOf("free"), Spawn.ephemeral())) {
             var free = Address.of("free", "1");
             one.tell(free, Message.of("nothing"));
             two.tell(free, Message.of("nothing"));
@@ -523,7 +523,7 @@ public final class ActorsTest {
 
     /// Sends to an address this system cannot claim, and answers with the
     /// refusal.
-    private static OwnershipException ownershipFailure(System system, Address taken) {
+    private static OwnershipException ownershipFailure(ActorSystem system, Address taken) {
         try {
             system.tell(taken, Message.of("add"));
             throw new IllegalStateException("expected the claim on " + taken + " to be refused");
@@ -555,7 +555,7 @@ public final class ActorsTest {
             return Application.of(new Counter(0))
                     .on("add", (state, message) -> Step.of(new Counter(state.total() + weight * amount(message))))
                     .on("total", (state, message) -> Step.of(state,
-                            Effect.of(System.REPLY).with("message",
+                            Effect.of(ActorSystem.REPLY).with("message",
                                     Message.of("total").with("value", Json.of(state.total())).body())));
         }
 
@@ -614,7 +614,7 @@ public final class ActorsTest {
     private static void replays() throws Exception {
         var root = root();
         var address = Address.of("counter", "1");
-        try (var system = System.named("test").rooted(root).define(new Counting(1))) {
+        try (var system = ActorSystem.named("test").rooted(root).define(new Counting(1))) {
             system.tell(address, Message.of("add").with("by", Json.of(3)));
             system.tell(address, Message.of("add").with("by", Json.of(4)));
             settle();
@@ -624,7 +624,7 @@ public final class ActorsTest {
             Check.equal("an evicted actor comes back with the same state", 7.0, total(system, address));
         }
 
-        try (var system = System.named("test").rooted(root).define(new Counting(1))) {
+        try (var system = ActorSystem.named("test").rooted(root).define(new Counting(1))) {
             Check.equal("and comes back in a new system too, from the log alone",
                     7.0, total(system, address));
         }
@@ -635,12 +635,12 @@ public final class ActorsTest {
     private static void upgrades() throws Exception {
         var root = root();
         var address = Address.of("counter", "1");
-        try (var system = System.named("test").rooted(root).define(new Counting(1))) {
+        try (var system = ActorSystem.named("test").rooted(root).define(new Counting(1))) {
             system.tell(address, Message.of("add").with("by", Json.of(5)));
             settle();
             Check.equal("the first definition counts once", 5.0, total(system, address));
         }
-        try (var system = System.named("test").rooted(root).define(new Counting(10))) {
+        try (var system = ActorSystem.named("test").rooted(root).define(new Counting(10))) {
             Check.equal("replaying the same commands through a new definition recomputes the state",
                     50.0, total(system, address));
         }
@@ -671,7 +671,7 @@ public final class ActorsTest {
             }
         };
 
-        try (var system = System.named("test").rooted(root).define(noisy)
+        try (var system = ActorSystem.named("test").rooted(root).define(noisy)
                 .effect("record", (effect, emit) -> ran.add("ran"))) {
             system.tell(address, Message.of("shout"));
             system.tell(address, Message.of("shout"));
@@ -679,7 +679,7 @@ public final class ActorsTest {
             Check.equal("the effect ran once per message while live", 2, ran.size());
         }
 
-        try (var system = System.named("test").rooted(root).define(noisy)
+        try (var system = ActorSystem.named("test").rooted(root).define(noisy)
                 .effect("record", (effect, emit) -> ran.add("ran"))) {
             Check.equal("replay rebuilt the state", 2.0, number(system.inspect(address)));
             Check.equal("and ran no effect while doing it", 2, ran.size());
@@ -690,7 +690,7 @@ public final class ActorsTest {
     private static void forgets() throws Exception {
         var root = root();
         var address = Address.of("counter", "1");
-        try (var system = System.named("test").rooted(root)
+        try (var system = ActorSystem.named("test").rooted(root)
                 .define(new Counting(1), Spawn.ephemeral())) {
             system.tell(address, Message.of("add").with("by", Json.of(3)));
             settle();
@@ -706,7 +706,7 @@ public final class ActorsTest {
     // ---- ask -------------------------------------------------------------
 
     private static void asks() throws Exception {
-        try (var system = System.named("test").define(new Counting(1), Spawn.ephemeral())) {
+        try (var system = ActorSystem.named("test").define(new Counting(1), Spawn.ephemeral())) {
             var address = Address.of("counter", "1");
             system.tell(address, Message.of("add").with("by", Json.of(2)));
             var answer = system.ask(address, Message.of("total"), Duration.ofSeconds(2)).get();
@@ -714,7 +714,7 @@ public final class ActorsTest {
         }
 
         Definition<Long> silent = definitionOf("silent");
-        try (var system = System.named("test").define(silent, Spawn.ephemeral())) {
+        try (var system = ActorSystem.named("test").define(silent, Spawn.ephemeral())) {
             var failed = false;
             try {
                 system.ask(silent.at("1"), Message.of("nothing"), Duration.ofMillis(150)).get();
@@ -739,7 +739,7 @@ public final class ActorsTest {
             @Override
             public Application<Long> instantiate(Address self) {
                 return Application.of(0L)
-                        .on("go", (state, message) -> Step.of(state, Effect.of(System.TELL)
+                        .on("go", (state, message) -> Step.of(state, Effect.of(ActorSystem.TELL)
                                 .with("to", Address.parse(message.string("to", "")).json())
                                 .with("message", Message.of("hello").body())))
                         .on(Undeliverable.TYPE, (state, message) -> {
@@ -749,7 +749,7 @@ public final class ActorsTest {
             }
         };
 
-        try (var system = System.named("test").define(sender, Spawn.ephemeral())) {
+        try (var system = ActorSystem.named("test").define(sender, Spawn.ephemeral())) {
             system.tell(sender.at("1"), Message.of("go").with("to", "nobody/1"));
             settle();
             Check.equal("an address with no definition is refused at once", 1, notices.size());
@@ -762,7 +762,7 @@ public final class ActorsTest {
         }
 
         notices.clear();
-        try (var system = System.named("test").define(sender, Spawn.ephemeral())) {
+        try (var system = ActorSystem.named("test").define(sender, Spawn.ephemeral())) {
             system.tell(sender.at("1"), Message.of("go").with("to", "elsewhere:thing/1"));
             settle();
             Check.equal("a foreign address with no transport is unreachable",
@@ -791,7 +791,7 @@ public final class ActorsTest {
                 });
             }
         };
-        try (var system = System.named("test")
+        try (var system = ActorSystem.named("test")
                 .define(slow, Spawn.ephemeral().mailbox(1).patience(Duration.ofMillis(50)))
                 .define(sender, Spawn.ephemeral())) {
             system.tell(slow.at("1"), Message.of("wait"));
@@ -834,7 +834,7 @@ public final class ActorsTest {
             }
         };
 
-        try (var system = System.named("test").rooted(root).define(brittle)) {
+        try (var system = ActorSystem.named("test").rooted(root).define(brittle)) {
             system.tell(address, Message.of("add"));
             system.tell(address, Message.of("boom"));
             system.tell(address, Message.of("add"));
@@ -847,7 +847,7 @@ public final class ActorsTest {
                     system.history(address, 0, 100).anyMatch(m -> m.type().equals("error")));
         }
 
-        try (var system = System.named("test").rooted(root).define(brittle)) {
+        try (var system = ActorSystem.named("test").rooted(root).define(brittle)) {
             Check.equal("replay reproduces the live outcome exactly, poison and all",
                     2.0, number(system.inspect(address)));
         }
@@ -883,7 +883,7 @@ public final class ActorsTest {
 
         // An undurable actor: nothing to replay, so a restart is clean.
         var passing = Address.of("fragile", "1");
-        try (var system = System.named("test").define(fragile, Spawn.ephemeral())) {
+        try (var system = ActorSystem.named("test").define(fragile, Spawn.ephemeral())) {
             system.tell(passing, Message.of("add"));
             settle();
             Check.equal("one instance so far", 1, lives.get());
@@ -900,7 +900,7 @@ public final class ActorsTest {
         // meets it again. Failing open catches an Exception and not an Error.
         lives.set(0);
         var poisoned = Address.of("fragile", "2");
-        try (var system = System.named("test").rooted(root)
+        try (var system = ActorSystem.named("test").rooted(root)
                 .define(fragile, Spawn.durable().restarts(3, Duration.ofMinutes(1)))) {
             system.tell(poisoned, Message.of("add"));
             settle();
@@ -936,7 +936,7 @@ public final class ActorsTest {
             }
         };
 
-        try (var system = System.named("test")
+        try (var system = ActorSystem.named("test")
                 .define(doomed, Spawn.ephemeral().restarts(3, Duration.ofMinutes(1)))) {
             for (var attempt = 0; attempt < 5; attempt++) {
                 system.tell(address, Message.of("die"));
@@ -978,7 +978,7 @@ public final class ActorsTest {
             }
         };
 
-        try (var system = System.named("test").rooted(root).define(waking)) {
+        try (var system = ActorSystem.named("test").rooted(root).define(waking)) {
             system.tell(address, Message.of("add"));
             settle();
             Check.equal("actors.resumed arrives once when the actor loads", 1, resumed.get());
@@ -999,7 +999,7 @@ public final class ActorsTest {
     private static void travels() throws Exception {
         var root = root();
         var address = Address.of("counter", "1");
-        try (var system = System.named("test").rooted(root).define(new Counting(1))) {
+        try (var system = ActorSystem.named("test").rooted(root).define(new Counting(1))) {
             for (var step = 1; step <= 5; step++) system.tell(address, Message.of("add").with("by", Json.of(1)));
             settle();
             Check.equal("the state now", 5.0, total(system, address));
@@ -1014,7 +1014,7 @@ public final class ActorsTest {
     // ---- fleets ----------------------------------------------------------
 
     private static void fans() throws Exception {
-        try (var system = System.named("test").define(new Counting(1), Spawn.ephemeral())) {
+        try (var system = ActorSystem.named("test").define(new Counting(1), Spawn.ephemeral())) {
             var ids = IntStream.rangeClosed(1, 100).mapToObj(String::valueOf).toList();
             var answers = system.fleet("counter")
                     .over(ids)
@@ -1036,8 +1036,8 @@ public final class ActorsTest {
     // ---- two systems -----------------------------------------------------
 
     private static void crossesSystems() throws Exception {
-        try (var orders = System.named("orders").define(new Counting(1), Spawn.ephemeral());
-                var billing = System.named("billing").define(new Counting(1), Spawn.ephemeral())) {
+        try (var orders = ActorSystem.named("orders").define(new Counting(1), Spawn.ephemeral());
+                var billing = ActorSystem.named("billing").define(new Counting(1), Spawn.ephemeral())) {
             Loopback.of(orders, billing);
 
             var there = Address.at("billing", "counter", "7");
@@ -1076,9 +1076,9 @@ public final class ActorsTest {
                     emit.emit(Message.of("late"));
                 });
 
-        var began = java.lang.System.currentTimeMillis();
+        var began = System.currentTimeMillis();
         app.dispatch(Message.of("start"));
-        var took = java.lang.System.currentTimeMillis() - began;
+        var took = System.currentTimeMillis() - began;
 
         Check.that("the step stops waiting for an effect that hangs", took < 2_000);
         Check.equal("and the effect it gave up on is counted", 1L, app.abandoned());
@@ -1107,7 +1107,7 @@ public final class ActorsTest {
         };
     }
 
-    private static double total(System system, Address address) {
+    private static double total(ActorSystem system, Address address) {
         return number(field(system.inspect(address), "total"));
     }
 

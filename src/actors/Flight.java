@@ -16,15 +16,15 @@ import json.Json;
 /// ## How to use it
 ///
 /// ```
-/// try (var system = System.named("orders").rooted(root).define(new Baskets());
+/// try (var system = ActorSystem.named("orders").rooted(root).define(new Baskets());
 ///         var flight = Flight.recording(system)) {
 ///     // jcmd <pid> JFR.start name=actors settings=profile
 /// }
 /// ```
 ///
 /// Nothing else in the package refers to `jdk.jfr`. That is deliberate: this is
-/// one subscriber on [System#traces()], and a system that never calls
-/// [#recording(System)] never loads this class. On a `jlink` image built without
+/// one subscriber on [ActorSystem#traces()], and a system that never calls
+/// [#recording(ActorSystem)] never loads this class. On a `jlink` image built without
 /// the `jdk.jfr` module, a program that does not ask for flight recording keeps
 /// working, and one that does gets a `NoClassDefFoundError` naming the missing
 /// module rather than a system that silently records nothing.
@@ -34,7 +34,7 @@ import json.Json;
 /// Writing these events straight from the actor code would make a JFR recording
 /// the only way to watch a system. A recording is a file that flushes about once
 /// a second and is read by parsing it, which is right for profiling and wrong
-/// for anything live. [System#traces()] is the live feed, this is one consumer
+/// for anything live. [ActorSystem#traces()] is the live feed, this is one consumer
 /// of it, and an inspector is another.
 ///
 /// ## What it costs when nothing is recording
@@ -44,14 +44,14 @@ import json.Json;
 /// work while it has no subscriber, but this class *is* a subscriber, so a
 /// system with flight recording attached does build a [Trace] for every event it
 /// produces. That is why the per-message trace stays off unless
-/// [System#tracingMessages(boolean)] turns it on.
+/// [ActorSystem#tracingMessages(boolean)] turns it on.
 public final class Flight implements AutoCloseable {
 
-    private final System system;
+    private final ActorSystem system;
     private final Feed feed;
     private final Runnable gauges;
 
-    private Flight(System system) {
+    private Flight(ActorSystem system) {
         this.system = system;
         this.feed = new Feed();
         this.gauges = this::sample;
@@ -61,7 +61,7 @@ public final class Flight implements AutoCloseable {
 
     /// Starts writing this system's events as flight recorder events, until the
     /// returned object is closed.
-    public static Flight recording(System system) {
+    public static Flight recording(ActorSystem system) {
         return new Flight(system);
     }
 
@@ -264,7 +264,7 @@ public final class Flight implements AutoCloseable {
         @Label("Fenced So Far") long total;
     }
 
-    /// One message. Enabled only when [System#tracingMessages(boolean)] is on,
+    /// One message. Enabled only when [ActorSystem#tracingMessages(boolean)] is on,
     /// because an actor doing ten thousand messages a second would fill a
     /// recording with these and nothing else.
     @Name("tuul.actors.Handled")

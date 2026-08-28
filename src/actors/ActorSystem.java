@@ -72,7 +72,7 @@ import json.Json;
 /// already the unit a reload would swap, [Logs] is already the seam a snapshot
 /// would use, [#known()] is already what an inspector would read, and
 /// [#traces()] is already the feed it would subscribe to.
-public final class System implements AutoCloseable {
+public final class ActorSystem implements AutoCloseable {
 
     /// Effect types the system handles for every actor.
     static final String TELL = "actor.tell";
@@ -107,14 +107,14 @@ public final class System implements AutoCloseable {
             new java.util.concurrent.atomic.AtomicBoolean();
     private volatile boolean closed;
 
-    private System(String name) {
+    private ActorSystem(String name) {
         this.name = name;
     }
 
     /// A system with no durable actors. Everything it runs keeps its state in
     /// memory and loses it when the system closes.
-    public static System named(String name) {
-        return new System(name);
+    public static ActorSystem named(String name) {
+        return new ActorSystem(name);
     }
 
     public String name() {
@@ -128,7 +128,7 @@ public final class System implements AutoCloseable {
     /// installs [Ownership#files(Path)]. Summoning an actor another process is
     /// already running raises [OwnershipException] rather than quietly starting
     /// a second copy of it.
-    public System rooted(Path root) {
+    public ActorSystem rooted(Path root) {
         logs = Logs.at(root);
         ownership = Ownership.files(root);
         return this;
@@ -140,7 +140,7 @@ public final class System implements AutoCloseable {
     /// Ownership is left as it was, because a store that is not a directory
     /// knows how it arbitrates writers and this class does not. Pair it with
     /// [#owning(Ownership)] when the store needs claims of its own.
-    public System storing(Logs logs) {
+    public ActorSystem storing(Logs logs) {
         this.logs = logs;
         return this;
     }
@@ -150,7 +150,7 @@ public final class System implements AutoCloseable {
     /// [#rooted(Path)] already sets this to a file lock. Call this to replace it
     /// — with a cluster lease, or with [Ownership#shared()] for a store that
     /// arbitrates writers itself.
-    public System owning(Ownership ownership) {
+    public ActorSystem owning(Ownership ownership) {
         this.ownership = ownership;
         return this;
     }
@@ -162,19 +162,19 @@ public final class System implements AutoCloseable {
     /// the loaded map and finds nothing; sweeping less often means an actor
     /// stays loaded for up to one extra period after it went quiet. Neither is
     /// a correctness question, which is why one period serves every actor.
-    public System sweeping(Duration every) {
+    public ActorSystem sweeping(Duration every) {
         this.sweep = every;
         return this;
     }
 
     /// Registers a definition. Instances of this type are durable unless a
     /// later call says otherwise.
-    public System define(Definition<?> definition) {
+    public ActorSystem define(Definition<?> definition) {
         return define(definition, Spawn.durable());
     }
 
     /// Registers a definition and the spawn options its instances use.
-    public System define(Definition<?> definition, Spawn spawn) {
+    public ActorSystem define(Definition<?> definition, Spawn spawn) {
         definitions.put(definition.type(), definition);
         defaults.put(definition.type(), spawn);
         return this;
@@ -182,7 +182,7 @@ public final class System implements AutoCloseable {
 
     /// Overrides the spawn options for one address. This is how one instance of
     /// a durable type runs without a log, or the other way round.
-    public System spawn(Address address, Spawn spawn) {
+    public ActorSystem spawn(Address address, Spawn spawn) {
         overrides.put(address.here(), spawn);
         return this;
     }
@@ -193,13 +193,13 @@ public final class System implements AutoCloseable {
     /// a connection, a file or a socket, and those must survive an actor being
     /// evicted and summoned again. It also keeps definitions pure, which is
     /// what makes replay safe.
-    public System effect(String type, Effect.Handler handler) {
+    public ActorSystem effect(String type, Effect.Handler handler) {
         shared.put(type, handler);
         return this;
     }
 
     /// How messages reach systems other than this one.
-    public System transport(Transport transport) {
+    public ActorSystem transport(Transport transport) {
         this.transport = transport;
         return this;
     }
@@ -229,7 +229,7 @@ public final class System implements AutoCloseable {
     /// Off by default. An actor handling ten thousand messages a second would
     /// bury every other event, and the per-message trace is only worth having
     /// while somebody is watching one actor closely.
-    public System tracingMessages(boolean tracingMessages) {
+    public ActorSystem tracingMessages(boolean tracingMessages) {
         this.tracingMessages = tracingMessages;
         return this;
     }
@@ -480,7 +480,7 @@ public final class System implements AutoCloseable {
     /// failure would be invisible.
     private void passivate() {
         if (closed) return;
-        var now = java.lang.System.currentTimeMillis();
+        var now = System.currentTimeMillis();
         for (var actor : loaded.values()) {
             try {
                 if (stale(actor, now)) actor.stop();
@@ -609,8 +609,8 @@ public final class System implements AutoCloseable {
         if (closed) return;
         closed = true;
         loaded.values().forEach(Actor::stop);
-        var deadline = java.lang.System.currentTimeMillis() + 2_000;
-        while (!loaded.isEmpty() && java.lang.System.currentTimeMillis() < deadline) {
+        var deadline = System.currentTimeMillis() + 2_000;
+        while (!loaded.isEmpty() && System.currentTimeMillis() < deadline) {
             Thread.onSpinWait();
         }
         timers.shutdownNow();
