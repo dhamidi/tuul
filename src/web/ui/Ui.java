@@ -294,7 +294,10 @@ public final class Ui {
                     ? Html.fragment(children(content))
                     : new Anchor(frame.isEmpty() ? Props.of("href", target) : Props.of("href", target, "frame", frame),
                             content);
-            return Html.element("li", classes("ui-crumb"), inside);
+            var here = target.isEmpty()
+                    ? Attributes.aria("current", "page")
+                    : Html.nothing();
+            return Html.element("li", classes("ui-crumb"), here, inside);
         }
     }
 
@@ -356,14 +359,37 @@ public final class Ui {
             props.only("label", "id");
         }
 
+        /// A header that names it and closes it, then a body that scrolls.
+        ///
+        /// The close button is not decoration. As a drawer this is a modal
+        /// dialog, so Escape closes it and a reader who knows that is fine —
+        /// but nothing on screen said so, and a menu somebody cannot see how to
+        /// shut is a menu that traps them. The button is the visible half of
+        /// what Escape already did.
+        ///
+        /// The body is the scroller, and it has to be: a dialog with a fixed
+        /// height whose content overflows a child paints that content outside
+        /// itself and scrolls nothing, which put two thirds of the tree out of
+        /// reach on a phone. A flex column with a body that may shrink is what
+        /// makes the overflow land somewhere that scrolls.
         @Override
         public Html render() {
             var name = props.text("label", "Navigation");
-            var nodes = new java.util.ArrayList<Node>(List.of(Component.rooted("ui-sidebar", content)));
+            var head = Html.element("div", classes("ui-sidebar-head"),
+                    Html.element("span", classes("ui-sidebar-name"), Tags.text(name)),
+                    new Button(Props.of(), new Node[] {
+                            classes("ui-sidebar-close"),
+                            Attributes.aria("label", "Close " + name),
+                            Stimulus.action(Stimulus.on("click", CONTROLLER, "close")),
+                            Html.element("span", Attributes.aria("hidden", "true"), Tags.text("\u00d7"))}));
+            var body = Html.element("div", classes("ui-sidebar-body"), Html.fragment(children(content)));
+
+            var nodes = new java.util.ArrayList<Node>(List.of(Component.rooted("ui-sidebar", new Node[] {head, body})));
             nodes.add(Attributes.id(props.text("id", SIDEBAR)));
             nodes.add(Attribute.flag("open"));
             nodes.add(Attributes.aria("label", name));
             nodes.add(Stimulus.target(CONTROLLER, "panel"));
+            nodes.add(Stimulus.action(Stimulus.on("click", CONTROLLER, "dismiss")));
             return Html.element("dialog", nodes.toArray(new Node[0]));
         }
     }
@@ -390,6 +416,73 @@ public final class Ui {
             nodes.add(Attributes.aria("expanded", "false"));
             nodes.add(Stimulus.action(Stimulus.on("click", CONTROLLER, "open")));
             return Html.element("a", nodes.toArray(new Node[0]));
+        }
+    }
+
+    /// A line in a list somebody navigates: a target big enough to hit, a state
+    /// worth seeing, and room for a label and a hint.
+    ///
+    /// Radix calls this a NavigationMenu item and Mantine a NavLink; the name
+    /// here is what it is. It exists because a bare anchor in a list is 18
+    /// pixels tall, and a thumb is not — WCAG asks for 44, and everything a
+    /// reader taps in a sidebar was under half of that.
+    ///
+    /// `current` marks where the reader already is. It sets `aria-current` as
+    /// well as a class, because "you are here" is information and not
+    /// decoration.
+    public record Row(Props props, Node[] content) implements Component {
+
+        public Row {
+            props.only("href", "frame", "hint", "current");
+        }
+
+        @Override
+        public Html render() {
+            var target = props.text("href", "");
+            var hint = props.text("hint", "");
+            var here = props.flag("current");
+            var inside = new java.util.ArrayList<Node>();
+            inside.add(Html.element("span", classes("ui-row-label"), Html.fragment(children(content))));
+            if (!hint.isEmpty()) inside.add(Html.element("span", classes("ui-row-hint"), Tags.text(hint)));
+
+            var classes = "ui-row" + (here ? " ui-row--current" : "");
+            if (target.isEmpty()) {
+                return Html.element("span", Component.rooted(classes, inside.toArray(new Node[0])));
+            }
+            var link = new java.util.ArrayList<Node>(inside);
+            link.add(href(target));
+            if (here) link.add(Attributes.aria("current", "true"));
+            var frame = props.text("frame", "");
+            if (!frame.isEmpty()) link.add(Turbo.targetFrame(frame));
+            return Html.element("a", Component.rooted(classes, link.toArray(new Node[0])));
+        }
+    }
+
+    /// A section that opens and closes, with a heading that says which it is.
+    ///
+    /// Radix calls it an Accordion and Mantine calls it one too; underneath it
+    /// is `<details>` and `<summary>`, because the browser already implements
+    /// opening, closing, keyboard operation and find-in-page, and a hand-built
+    /// one gets those wrong one at a time. What was missing was never the
+    /// behaviour — it was that a bare summary is 29 pixels tall, shows no state
+    /// but a default triangle, and looks like nothing anybody designed.
+    ///
+    /// `open` says it starts open. `label` is the heading.
+    public record Disclosure(Props props, Node[] content) implements Component {
+
+        public Disclosure {
+            props.only("label", "open");
+        }
+
+        @Override
+        public Html render() {
+            var nodes = new java.util.ArrayList<Node>();
+            nodes.add(Html.element("summary", classes("ui-disclosure-head"),
+                    Html.element("span", classes("ui-disclosure-mark"), Attributes.aria("hidden", "true")),
+                    Html.element("span", classes("ui-disclosure-label"), Tags.text(props.text("label", "")))));
+            nodes.add(Html.element("div", classes("ui-disclosure-body"), Html.fragment(children(content))));
+            if (props.flag("open")) nodes.add(Attribute.flag("open"));
+            return Html.element("details", Component.rooted("ui-disclosure", nodes.toArray(new Node[0])));
         }
     }
 
@@ -515,6 +608,14 @@ public final class Ui {
 
     public static Html notice(Props props, Node... content) {
         return new Notice(props, content);
+    }
+
+    public static Html row(Props props, Node... content) {
+        return new Row(props, content);
+    }
+
+    public static Html disclosure(Props props, Node... content) {
+        return new Disclosure(props, content);
     }
 
     public static Html sidebar(Props props, Node... content) {

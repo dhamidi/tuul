@@ -64,6 +64,20 @@ export default class Sidebar extends Controller {
     if (this.panelTarget.open) this.panelTarget.close()
   }
 
+  // Light dismiss: a tap outside the panel closes it, which is what the
+  // Popover API would have given for free and what a drawer is expected to do.
+  // <dialog> was kept anyway — it is the only one of the two that traps focus
+  // and makes the rest of the page inert, which a full-height menu over the
+  // content needs — so the one missing behaviour is added here.
+  //
+  // A click on the backdrop reports the dialog itself as its target, because
+  // the backdrop is the dialog's own pseudo-element. Anything inside reports
+  // that instead, so this closes only when the panel itself was hit.
+  dismiss(event) {
+    if (event.target !== this.panelTarget) return
+    if (this.panelTarget.matches(":modal")) this.close()
+  }
+
   // A closed dialog has no `open`, and a dialog with no `open` is display:none
   // in every browser — so a reader who opens the drawer, closes it and then
   // widens the window would find the pane gone. Putting the attribute back

@@ -140,14 +140,13 @@ public final class Views {
     /// project came for the project, and ninety JDK modules unfolded is a wall.
     public static Html tree(Router routes, List<Index.Root> roots) {
         if (roots.isEmpty()) return Html.nothing();
-        return Ui.stack(Props.of("gap", "sm"),
-                Html.each(roots, root -> Html.element("details",
-                        root.name().equals(Index.PROJECT) ? flag("open") : Html.nothing(),
-                        classes("branch"),
-                        Html.element("summary", classes("branch-name"), text(root.label())),
-                        Ui.items(Html.each(root.contents(), name -> Ui.item(
-                                Ui.anchor(Props.of("href", symbolPath(routes, name), "frame", CONTENT),
-                                        Turbo.advance(), Ui.mono(text(name)))))))));
+        return Ui.stack(Props.of("gap", "none"),
+                Html.each(roots, root -> Ui.disclosure(
+                        root.name().equals(Index.PROJECT) ? Props.of("label", root.label()).on("open")
+                                : Props.of("label", root.label()),
+                        Html.each(root.contents(), name -> Ui.row(
+                                Props.of("href", symbolPath(routes, name), "frame", CONTENT),
+                                Turbo.advance(), Ui.mono(text(name)))))));
     }
 
     /// The same tree as a page of its own, for the opener to point at where
@@ -392,15 +391,20 @@ public final class Views {
                                                 text(name.startsWith(prefix) ? name.substring(prefix.length()) : name)))))));
     }
 
-    /// The package a type is in, as a trail. It is the only hierarchy this page
-    /// can show today — a package has no page of its own yet — so the last
-    /// crumb is the type and the ones before it are where it lives.
+    /// The package a type is in, as a trail: the last crumb is the type and the
+    /// ones before it are where it lives.
+    ///
+    /// The package crumb is a link, because a package is a page now. It was
+    /// plain text back when it named nothing, and stayed plain after packages
+    /// became symbols — so the one crumb a reader would actually click was the
+    /// one that did nothing.
     private static Html where(Router routes, String qualified) {
         var dot = qualified.lastIndexOf('.');
         if (dot < 0) return Html.nothing();
+        var owner = qualified.substring(0, dot);
         return Ui.breadcrumbs(
                 Ui.crumb(Props.of("href", routes.path(Routes.HOME), "frame", Turbo.TOP), text("tuul")),
-                Ui.crumb(Props.of(), text(qualified.substring(0, dot))),
+                Ui.crumb(Props.of("href", symbolPath(routes, owner), "frame", Turbo.TOP), text(owner)),
                 Ui.crumb(Props.of(), text(qualified.substring(dot + 1))));
     }
 

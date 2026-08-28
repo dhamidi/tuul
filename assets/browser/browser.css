@@ -35,7 +35,10 @@ body {
   padding: 0 var(--ui-space-6);
 }
 
-.brand { font-weight: 600; letter-spacing: 0.02em; color: var(--ui-ink); }
+.brand {
+  min-height: 2.75rem;
+  display: inline-flex;
+  align-items: center; font-weight: 600; letter-spacing: 0.02em; color: var(--ui-ink); }
 
 main { max-width: var(--page); margin: 0 auto; padding: var(--ui-space-6); }
 
@@ -55,6 +58,11 @@ main { max-width: var(--page); margin: 0 auto; padding: var(--ui-space-6); }
   border-radius: var(--ui-radius);
   transition: top 0.1s;
 }
+.skip {
+  min-height: 2.75rem;
+  display: inline-flex;
+  align-items: center;
+}
 .skip:focus {
   top: var(--ui-space-2);
   outline: 2px solid var(--ui-link);
@@ -63,7 +71,18 @@ main { max-width: var(--page); margin: 0 auto; padding: var(--ui-space-6); }
 
 /* The search form comes from web.forms, so it is styled by what it is rather
    than by a class this application chose. */
-.search { display: flex; gap: var(--ui-space-2); align-items: center; flex: 1; }
+.search { display: flex; gap: var(--ui-space-2); align-items: center; flex: 1; min-width: 0; }
+
+/* Below the two-pane threshold the bar wraps and the search takes a line of its
+   own. Sharing one row with a brand, a burger and a submit button left the
+   field 68px wide at 375 and 18px at 320 — about a word, for the control the
+   whole application is driven from. Wrapping costs one row of height and gives
+   it the width back. */
+@media (max-width: 60rem) {
+  .bar > .ui-group { flex-wrap: wrap; }
+  .search { order: 3; flex-basis: 100%; }
+  .search .field { max-width: none; }
+}
 .search .field { flex: 1; max-width: 32rem; display: flex; gap: var(--ui-space-2); align-items: center; }
 /* The label and the hint are said to a screen reader and not to the eye. They
    were `display: none`, which says them to neither: the control announced
@@ -82,6 +101,7 @@ main { max-width: var(--page); margin: 0 auto; padding: var(--ui-space-6); }
 }
 .search input {
   width: 100%;
+  min-height: 2.75rem;
   padding: var(--ui-space-1) var(--ui-space-2);
   /* A control's boundary, not a divider: 3:1, where the rule is 1.6:1 and was
      1.28:1 — a field nobody could see the edge of. */
@@ -119,18 +139,6 @@ turbo-frame { display: block; }
   .panes { grid-template-columns: 18rem minmax(0, 1fr); }
 }
 
-/* A branch of the tree. `details` is the disclosure the browser already has —
-   it opens without JavaScript, remembers nothing it should not, and is what a
-   reader's keyboard already knows how to work. */
-.branch-name {
-  cursor: pointer;
-  font-size: var(--ui-text-sm);
-  font-weight: 600;
-  letter-spacing: 0.02em;
-  color: var(--ui-muted);
-  padding: var(--ui-space-1) 0;
-}
-.branch-name:focus-visible { outline: 2px solid var(--ui-link); outline-offset: 2px; }
-.branch .ui-items { padding-left: var(--ui-space-2); }
-.branch .ui-item { padding: 1px 0; }
-.branch .ui-mono { font-size: 0.85rem; }
+/* The tree is rows and disclosures from web.ui now; what is left here is only
+   what is particular to this application. */
+.ui-sidebar .ui-mono { font-size: var(--ui-text-sm); }
