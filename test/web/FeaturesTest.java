@@ -19,6 +19,8 @@ public final class FeaturesTest {
         page();
         serving();
         mounting();
+        wrapping();
+        guarding();
         refusing();
     }
 
@@ -135,6 +137,76 @@ public final class FeaturesTest {
                 Memory.handle(wiring.routing(), Memory.get("/streams/live")).text());
         Check.equal("and no longer where it was declared", 404,
                 Memory.handle(wiring.routing(), Memory.get("/live")).status());
+    }
+
+    /// A feature's middleware wraps everything, in the order the features were
+    /// named, and nothing an application does afterwards can drop it.
+    private static void wrapping() throws Exception {
+        var order = new StringBuilder();
+        var outer = Feature.named("outer").wrappedBy(mark(order, "outer"));
+        var inner = Feature.named("inner").wrappedBy(mark(order, "inner"));
+        var wiring = Features.of(Router.of().get("home", "/"), outer, inner);
+
+        var app = wiring.routing()
+                .on("home", (request, response) -> Responses.text("home", response))
+                .otherwise((request, response) -> Responses.text("nothing", response));
+
+        Check.equal("the handler still answers", "home", Memory.handle(app, Memory.get("/")).text());
+        Check.equal("the first feature named is the outermost", "outer inner ", order.toString());
+
+        order.setLength(0);
+        Check.equal("a request that matches no route is still answered", "nothing",
+                Memory.handle(app, Memory.get("/nowhere")).text());
+        Check.equal("and the stack still ran for it — a check a 404 skips is not a check",
+                "outer inner ", order.toString());
+
+        order.setLength(0);
+        Memory.handle(wiring.routing().otherwise((request, response) -> {}), Memory.get("/"));
+        Check.equal("otherwise carries the stack forward", "outer inner ", order.toString());
+
+        Handler bare = (request, response) -> {};
+        Check.that("features that ask for no wrapper compose to the one that does nothing",
+                Features.of(Router.of()).middleware().wrap(bare) == bare);
+    }
+
+    /// The two scopes, and the fact that only one of them needed building.
+    ///
+    /// `web.controllers` already produces both kinds: [web.controllers.Sessions#middleware()]
+    /// belongs around the whole application, and [web.controllers.Sessions#required(String)]
+    /// guards one route. The second needs nothing from [Feature] — it is spelled
+    /// on the handler where the route is named — so there is one way to say each
+    /// and they do not overlap.
+    private static void guarding() throws Exception {
+        var sessions = web.controllers.Sessions.of(web.controllers.Signature.of("a-test-secret-that-is-long-enough"));
+
+        var feature = Feature.named("app")
+                .wrappedBy(sessions.middleware())
+                .get("open", "/open", (request, response) ->
+                        Responses.text("session=" + web.controllers.Sessions.of(request).present(), response))
+                .get("shut", "/shut",
+                        ((Handler) (request, response) -> Responses.text("secret", response))
+                                .wrappedBy(sessions.required("/sign-in")));
+
+        var app = Features.of(Router.of(), feature).routing()
+                .otherwise((request, response) -> Responses.empty(Status.NOT_FOUND, response));
+
+        // That the wrapper runs at all is proven in wrapping(); an absent session
+        // and an empty one both read as NONE, so this cannot tell them apart and
+        // does not claim to. What it shows is that the stack passes a request
+        // through rather than swallowing it.
+        Check.equal("a request travels through the application-wide stack to its handler",
+                "session=false", Memory.handle(app, Memory.get("/open")).text());
+        Check.equal("the route-scoped guard refuses a request with no session",
+                303, Memory.handle(app, Memory.get("/shut")).status());
+        Check.equal("and it guards only its own route",
+                200, Memory.handle(app, Memory.get("/open")).status());
+    }
+
+    private static Middleware mark(StringBuilder order, String name) {
+        return next -> (request, response) -> {
+            order.append(name).append(' ');
+            next.handle(request, response);
+        };
     }
 
     private static void refusing() {

@@ -10,6 +10,14 @@ import java.util.Set;
 
 /// The wrappers every hypermedia application needs, and none of which need a
 /// server.
+///
+/// There is one. There were two, and the other one — a middleware that took a
+/// mount prefix off the path on the way in — is gone: it moved where a request
+/// was recognised and could not move where a link was written, so an
+/// application that used it answered correctly and rendered every URL on every
+/// page wrong. [web.dispatch.Router#mount(String, Router)] moves the templates
+/// instead, which moves both. Mounting is a thing you do to a route table, not
+/// to a request.
 public final class Middlewares {
 
     /// The parameter Rails taught browsers to send, because a form element can
@@ -62,22 +70,6 @@ public final class Middlewares {
                 return;
             }
             next.handle(overridden(request), response);
-        };
-    }
-
-    /// Serves an application mounted somewhere other than the root: the prefix
-    /// comes off the path before anything downstream sees it, and a request
-    /// that is not under the prefix is a 404 here rather than a surprise there.
-    public static Middleware mountedAt(String prefix) {
-        var mount = prefix.endsWith("/") ? prefix.substring(0, prefix.length() - 1) : prefix;
-        return next -> (request, response) -> {
-            var path = request.path();
-            if (!path.equals(mount) && !path.startsWith(mount + "/")) {
-                Responses.empty(Status.NOT_FOUND, response);
-                return;
-            }
-            var stripped = path.substring(mount.length());
-            next.handle(request.path(stripped.isEmpty() ? "/" : stripped), response);
         };
     }
 

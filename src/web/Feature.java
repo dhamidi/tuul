@@ -57,7 +57,7 @@ import web.text.Escape;
 /// for what that order means across features.
 public record Feature(String name, String mount, List<Path> assets, Map<String, String> pins,
                       Router routes, Map<String, Handler> handlers,
-                      List<Contribution> head, List<Contribution> body) {
+                      List<Contribution> head, List<Contribution> body, List<Middleware> middleware) {
 
     public Feature {
         if (name.isBlank()) throw new IllegalArgumentException("a feature needs a name");
@@ -66,12 +66,13 @@ public record Feature(String name, String mount, List<Path> assets, Map<String, 
         handlers = new LinkedHashMap<>(handlers);
         head = List.copyOf(head);
         body = List.copyOf(body);
+        middleware = List.copyOf(middleware);
     }
 
     /// A feature that contributes nothing yet. The name is for whoever reads an
     /// error: a pin that cannot resolve says which feature asked for it.
     public static Feature named(String name) {
-        return new Feature(name, "", List.of(), Map.of(), Router.of(), Map.of(), List.of(), List.of());
+        return new Feature(name, "", List.of(), Map.of(), Router.of(), Map.of(), List.of(), List.of(), List.of());
     }
 
     /// A directory of files this ships. Usually one —
@@ -80,7 +81,7 @@ public record Feature(String name, String mount, List<Path> assets, Map<String, 
     public Feature from(Path directory) {
         var next = new ArrayList<>(assets);
         next.add(directory);
-        return new Feature(name, mount, next, pins, routes, handlers, head, body);
+        return new Feature(name, mount, next, pins, routes, handlers, head, body, middleware);
     }
 
     /// A bare specifier, and the logical name of the file behind it.
@@ -91,7 +92,7 @@ public record Feature(String name, String mount, List<Path> assets, Map<String, 
     public Feature pin(String module, String logical) {
         var next = new LinkedHashMap<>(pins);
         next.put(module, logical);
-        return new Feature(name, mount, assets, next, routes, handlers, head, body);
+        return new Feature(name, mount, assets, next, routes, handlers, head, body, middleware);
     }
 
     /// Where this feature's paths hang. Empty means at the root, which is what
@@ -99,7 +100,7 @@ public record Feature(String name, String mount, List<Path> assets, Map<String, 
     /// rather than `/updates` says so here and nothing else changes, because
     /// the route keeps its name and every link is built from that name.
     public Feature at(String mount) {
-        return new Feature(name, mount, assets, pins, routes, handlers, head, body);
+        return new Feature(name, mount, assets, pins, routes, handlers, head, body, middleware);
     }
 
     /// A stylesheet this ships, and the `link` that reaches it.
@@ -125,7 +126,7 @@ public record Feature(String name, String mount, List<Path> assets, Map<String, 
     public Feature head(Contribution contribution) {
         var next = new ArrayList<>(head);
         next.add(contribution);
-        return new Feature(name, mount, assets, pins, routes, handlers, next, body);
+        return new Feature(name, mount, assets, pins, routes, handlers, next, body, middleware);
     }
 
     /// Something this puts at the top of the document body.
@@ -137,7 +138,31 @@ public record Feature(String name, String mount, List<Path> assets, Map<String, 
     public Feature body(Contribution contribution) {
         var next = new ArrayList<>(body);
         next.add(contribution);
-        return new Feature(name, mount, assets, pins, routes, handlers, head, next);
+        return new Feature(name, mount, assets, pins, routes, handlers, head, next, middleware);
+    }
+
+    /// Something this wraps around the whole application.
+    ///
+    /// A session that is read for some requests and not others is not a
+    /// session, and a check that some paths skip is not a check, so what is
+    /// declared here runs for every request the application answers —
+    /// including the ones that match no route. [web.controllers.Sessions#middleware()]
+    /// and [web.controllers.Csrf#middleware()] are the two this exists for.
+    ///
+    /// **A guard on one route is not this.** A wrapper that protects a single
+    /// handler is spelled where that handler is named, and needs nothing from
+    /// this class:
+    ///
+    /// ```
+    /// feature.get("admin", "/admin", page.wrappedBy(sessions.required("/sign-in")));
+    /// ```
+    ///
+    /// That already worked, so there are not two ways to do it here. This is
+    /// only for the stack that has to see everything.
+    public Feature wrappedBy(Middleware wrapper) {
+        var next = new ArrayList<>(middleware);
+        next.add(wrapper);
+        return new Feature(name, mount, assets, pins, routes, handlers, head, body, next);
     }
 
     /// A route and the handler that answers it, together.
@@ -148,7 +173,7 @@ public record Feature(String name, String mount, List<Path> assets, Map<String, 
     public Feature route(String route, String method, String template, Handler handler) {
         var next = new LinkedHashMap<>(handlers);
         next.put(route, handler);
-        return new Feature(name, mount, assets, pins, routes.route(route, method, template), next, head, body);
+        return new Feature(name, mount, assets, pins, routes.route(route, method, template), next, head, body, middleware);
     }
 
     public Feature get(String route, String template, Handler handler) {

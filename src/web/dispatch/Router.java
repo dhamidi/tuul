@@ -119,6 +119,21 @@ public final class Router {
     /// cannot be merged, because [#path(String, Map)] would then have two
     /// answers and would silently give whichever arrived first. [#with] already
     /// refuses that; this only says which mount found it.
+    ///
+    /// **This is the only way to mount something.** There was a second, a
+    /// middleware that took the prefix off the path on the way in, and it could
+    /// not have worked: it moves where a request is *recognised* and cannot move
+    /// where a link is *written*, because by the time a request arrives the
+    /// table a page builds its URLs from has already been built. An application
+    /// mounted that way answered `/blog/posts/7` with a 200 and then wrote every
+    /// link on the page as `/posts/7`. Moving the templates moves both, since
+    /// [#recognise] and [#path(String, Map)] read the same table.
+    ///
+    /// One thing it does not move: [web.assets.Assets] builds its URLs from its
+    /// own prefix and is not part of this table, so mounting a whole application
+    /// — rather than a feature inside one — would leave its files pointing at
+    /// where they used to be. Nothing here needs that yet, and doing it would
+    /// mean giving the pipeline the prefix as well.
     public Router mount(String prefix, Router mounted) {
         if (!prefix.isEmpty() && !prefix.startsWith("/")) {
             throw new DispatchException("a mount prefix is a path and starts with /, unlike " + prefix);

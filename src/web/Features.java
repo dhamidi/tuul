@@ -42,6 +42,9 @@ import web.dispatch.Router;
 /// application is a design system whose rules the application can override, and
 /// the reverse silently is not.
 ///
+/// It is middleware order too: the first feature named wraps outermost and sees
+/// a request before the ones after it.
+///
 /// The two uses of that one order pull opposite ways, and an application has to
 /// choose. Naming yourself **first** means your file wins when a feature ships
 /// one of the same name. Naming yourself **last** means your stylesheet cascades
@@ -160,12 +163,31 @@ public final class Features {
         return features;
     }
 
-    /// The features' handlers, already bound. An application adds its own with
-    /// [Routing#on] and ends with [Routing#otherwise].
+    /// The features' handlers, already bound, and their middleware already
+    /// wrapped around everything.
+    ///
+    /// An application adds its own with [Routing#on] and ends with
+    /// [Routing#otherwise], and both carry the stack forward — so there is no
+    /// step at the end to forget. A feature that asks for a session or a token
+    /// check gets it by being named, which is the whole point of being named.
+    ///
+    /// See the note on order above: the first feature named is the outermost
+    /// wrapper and sees a request first.
     public Routing routing() {
         var routing = Routing.of(routes);
         for (var handler : handlers.entrySet()) routing = routing.on(handler.getKey(), handler.getValue());
-        return routing;
+        return routing.wrappedBy(middleware());
+    }
+
+    /// Every feature's middleware, as one, outermost first.
+    ///
+    /// Answered separately as well as applied by [#routing()], because a test
+    /// that wants to prove what the stack does should not have to build a route
+    /// table to see it.
+    public Middleware middleware() {
+        var stack = new ArrayList<Middleware>();
+        for (var feature : features) stack.addAll(feature.middleware());
+        return Middleware.of(stack);
     }
 
     /// Answering for a file.

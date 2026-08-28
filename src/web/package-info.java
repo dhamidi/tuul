@@ -78,13 +78,16 @@
 ///
 /// ## Wrappers
 ///
-/// A [web.Middleware] is a handler that wraps a handler. [web.Middlewares]
-/// holds the two that every hypermedia application needs.
+/// A [web.Middleware] is a handler that wraps a handler.
 ///
 /// ```
-/// var stack = app.wrappedBy(Middlewares.methodOverride())
-///                .wrappedBy(Middlewares.mountedAt("/blog"));
+/// var stack = app.wrappedBy(Middlewares.methodOverride());
 /// ```
+///
+/// A wrapper that a package needs is declared by that package rather than
+/// installed by hand — see [web.Feature#wrappedBy(web.Middleware)], which puts
+/// it around everything the application answers, and
+/// [web.Handler#wrappedBy(web.Middleware)], which guards one handler.
 ///
 /// [web.Middlewares#methodOverride()] believes a form that says it meant PUT
 /// or DELETE, because a browser sends only GET and POST. It reads the body to

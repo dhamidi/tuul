@@ -235,13 +235,6 @@ public final class WebTest {
                         Memory.request("POST", "/notes", Headers.of("Content-Type", "application/json"), "{\"a\":1}"))
                         .text());
 
-        Handler path = (request, response) -> Responses.text(request.path(), response);
-        var mounted = path.wrappedBy(Middlewares.mountedAt("/app"));
-        Check.equal("a mounted handler sees the path it was mounted at",
-                "/notes", Memory.handle(mounted, get("/app/notes")).text());
-        Check.equal("the mount point itself is the root", "/", Memory.handle(mounted, get("/app")).text());
-        Check.equal("and anything outside it never arrives", 404, Memory.handle(mounted, get("/other")).status());
-
         var order = new StringBuilder();
         Middleware first = next -> (request, response) -> {
             order.append("first ");
