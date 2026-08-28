@@ -137,6 +137,34 @@ public final class WebTest {
         var empty = Memory.handle((request, response) -> Responses.empty(Status.NO_CONTENT, response), get("/"));
         Check.equal("a 204 is a 204", 204, empty.status());
         Check.equal("with nothing in it", 0, empty.body().length);
+
+        // A handler that writes through the writer closes it, because that is
+        // what a try-with-resources does. The harness then flushed the closed
+        // writer and recorded the "Stream closed" it got as a failure of the
+        // handler, so "nothing threw" — the first test anybody writes — failed
+        // on a handler that was right.
+        var html = Memory.handle((request, response) ->
+                Responses.html(Tags.p(Tags.text("hi")), response), get("/"));
+        Check.equal("an HTML answer is written", "<p>hi</p>", html.text());
+        Check.that("and closing the writer is not a failure", html.failure().isEmpty());
+
+        var served = Memory.handle((request, response) ->
+                Responses.json(json.Json.Object.of().with("ok", true), response), get("/"));
+        Check.that("nor for JSON", served.failure().isEmpty());
+
+        var turbo = Memory.handle((request, response) ->
+                Responses.turbo(Tags.p(Tags.text("hi")), response), get("/"));
+        Check.that("nor for a turbo stream", turbo.failure().isEmpty());
+
+        var again = Memory.handle((request, response) -> {
+            var out = response.writer();
+            out.write("a");
+            response.flush();
+            out.close();
+            response.flush();
+        }, get("/"));
+        Check.that("flushing after the writer is closed is not one either", again.failure().isEmpty());
+        Check.equal("and every flush is still counted", List.of(1, 1), again.flushes());
     }
 
     private static void routing() throws Exception {
@@ -177,6 +205,35 @@ public final class WebTest {
                 "GET", Memory.handle(overriding, get("/notes/1?_method=DELETE")).text());
         Check.equal("and neither may a POST claiming to be a GET",
                 "POST", Memory.handle(overriding, post("/notes", "_method=GET")).text());
+
+        // The middleware read the body to find `_method` and then handed the
+        // emptied request downstream, so a form that said PUT and a handler
+        // that read that form could not be combined at all.
+        Handler read = (request, response) ->
+                Responses.text(request.method() + " " + request.form().first("title", "missing"), response);
+        var reading = read.wrappedBy(Middlewares.methodOverride());
+        Check.equal("the form is still there after the method was overridden",
+                "PUT hello", Memory.handle(reading, post("/notes/1", "_method=PUT&title=hello")).text());
+        Check.equal("and after a POST that overrode nothing",
+                "POST hello", Memory.handle(reading, post("/notes", "title=hello")).text());
+        Check.equal("an override in the query does not read the body at all",
+                "PUT hello",
+                Memory.handle(reading, Memory.request("POST", "/notes/1?_method=PUT",
+                        Headers.of("Content-Type", "application/x-www-form-urlencoded"), "title=hello")).text());
+
+        Handler size = (request, response) ->
+                Responses.text(request.method() + " " + request.bytes().length, response);
+        var sizing = size.wrappedBy(Middlewares.methodOverride());
+        var huge = "title=" + "a".repeat(200_000);
+        Check.equal("a body longer than the bound reaches the handler whole",
+                "POST " + huge.length(), Memory.handle(sizing, post("/notes", huge)).text());
+
+        Handler body = (request, response) -> Responses.text(request.text(), response);
+        Check.equal("a body that is not a form is never read here",
+                "{\"a\":1}",
+                Memory.handle(body.wrappedBy(Middlewares.methodOverride()),
+                        Memory.request("POST", "/notes", Headers.of("Content-Type", "application/json"), "{\"a\":1}"))
+                        .text());
 
         Handler path = (request, response) -> Responses.text(request.path(), response);
         var mounted = path.wrappedBy(Middlewares.mountedAt("/app"));

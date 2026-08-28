@@ -81,6 +81,28 @@ public final class ApplicationTest {
                 });
         Check.equal("every effect reported back", 3, app.dispatch(Message.of("start")));
         Check.that("effects of a step run at the same time", peak.get() > 1);
+
+        // Running together means running in no order. An actor that replies to
+        // its caller and tells another actor in the same step cannot make the
+        // telling land first, so read-your-writes across two actors has to be
+        // orchestrated by the caller.
+        var order = new java.util.concurrent.CopyOnWriteArrayList<String>();
+        var gate = new java.util.concurrent.CountDownLatch(1);
+        Application.<Integer>of(0)
+                .patience(java.time.Duration.ofSeconds(5))
+                .on("start", (state, message) ->
+                        new Step<>(state, List.of(Effect.of("first"), Effect.of("second"))))
+                .effect("first", (effect, emit) -> {
+                    gate.await(5, java.util.concurrent.TimeUnit.SECONDS);
+                    order.add("first");
+                })
+                .effect("second", (effect, emit) -> {
+                    order.add("second");
+                    gate.countDown();
+                })
+                .dispatch(Message.of("start"));
+        Check.equal("and the effect listed first may finish last",
+                List.of("second", "first"), List.copyOf(order));
     }
 
     private static void composes() {

@@ -56,7 +56,10 @@ public final class App {
                 .with("search", search)
                 .with("sourcePath", directories(asking.sourcePath()))
                 .with("vendorPath", directories(asking.vendorPath()))
-                .with("all", asking.all()));
+                .with("all", asking.all())
+                .with("index", asking.index().toString())
+                .with("members", message.flag("members") || message.flag("recursive"))
+                .with("recursive", message.flag("recursive")));
     }
 
     private static Step<State> result(State state, Message message) {
@@ -118,7 +121,7 @@ public final class App {
     /// pays for one — and every search after it does not.
     private static void search(Effect effect, Effect.Emitter emit) throws IOException {
         var wanted = effect.string("search", "");
-        try (var index = Index.of(paths(effect.list("sourcePath")), paths(effect.list("vendorPath")))) {
+        try (var index = index(effect)) {
             var found = index.search(wanted, MATCHES).stream()
                     .map(match -> (Json) Json.Object.of()
                             .with("symbol", match.symbol())
@@ -132,16 +135,49 @@ public final class App {
     private static void look(Effect effect, Effect.Emitter emit) throws IOException {
         var symbol = effect.string("symbol", "");
         if (symbol.isEmpty()) {
-            try (var index = Index.of(paths(effect.list("sourcePath")), paths(effect.list("vendorPath")))) {
+            try (var index = index(effect)) {
                 emit.emit(Message.of("docs.roots", Docs.describe(index.roots())));
             }
             return;
         }
-        try (var index = Index.of(paths(effect.list("sourcePath")), paths(effect.list("vendorPath")))) {
+        try (var index = index(effect)) {
             emit.emit(index.lookup(symbol)
-                    .map(type -> Message.of("docs.result", Docs.describe(type, effect.flag("all"))))
+                    .map(type -> Message.of("docs.result", described(index, type, effect)))
                     .orElseGet(() -> Message.of("docs.missing").with("symbol", symbol)));
         }
+    }
+
+    /// One symbol, and what it holds when the caller asked for that.
+    private static Json.Object described(Index index, symbols.TypeInfo type, Effect effect) {
+        var description = Docs.describe(type, effect.flag("all"));
+        if (!effect.flag("members")) return description;
+        return description.with("members", Json.Array.of(
+                members(index, description, effect.flag("all"), effect.flag("recursive"), new LinkedHashSet<>())));
+    }
+
+    /// Every symbol a package or a type holds, described in the same way it is.
+    ///
+    /// Reading a package took a question per type in it, which is the dominant
+    /// cost of this tool for anybody getting oriented — a person or an agent.
+    /// One question now answers for all of them.
+    ///
+    /// A subpackage is skipped unless `recursive` is set, because `web` holds
+    /// eight of them and a reader who asked about `web` asked about `web`. The
+    /// `seen` set makes a name appear once however many ways it is reached.
+    private static List<Json> members(Index index, Json.Object description, boolean all, boolean recursive,
+            Set<String> seen) {
+        var described = new ArrayList<Json>();
+        for (var name : strings(description.list("nested"))) {
+            if (!seen.add(name)) continue;
+            var found = index.lookup(name);
+            if (found.isEmpty()) continue;
+            var member = Docs.describe(found.get(), all);
+            var group = member.string("kind", "").equals("package") || member.string("kind", "").equals("module");
+            if (group && !recursive) continue;
+            described.add(member);
+            if (group) described.addAll(members(index, member, all, true, seen));
+        }
+        return List.copyOf(described);
     }
 
     private static void print(Effect effect, Writer out) throws IOException {
@@ -167,10 +203,22 @@ public final class App {
         }
         if (!(effect.get("symbol") instanceof Json.Object description)) return;
         var sections = sections(effect.list("sections"));
+        var members = description.list("members");
+        var one = description.without("members");
         if (!effect.flag("json")) {
-            Docs.text(description, sections, out);
+            Docs.text(one, sections, out);
+            for (var member : members) {
+                if (!(member instanceof Json.Object held)) continue;
+                out.write("\n");
+                Docs.text(held, sections, out);
+            }
         } else {
-            Docs.select(description, sections).write(out);
+            var selected = Docs.select(one, sections);
+            if (!members.isEmpty()) selected = selected.with("members", Json.Array.of(members.stream()
+                    .filter(Json.Object.class::isInstance)
+                    .map(member -> (Json) Docs.select((Json.Object) member, sections))
+                    .toList()));
+            selected.write(out);
             out.write("\n");
         }
         out.flush();
@@ -179,6 +227,13 @@ public final class App {
     private static void report(Effect effect, Writer err) throws IOException {
         err.write(effect.string("line", "") + "\n");
         err.flush();
+    }
+
+    /// The index this question is answered from. Everything it needs travels in
+    /// the effect, so nothing here reads a field of the state.
+    private static Index index(Effect effect) throws IOException {
+        return Index.of(paths(effect.list("sourcePath")), paths(effect.list("vendorPath")),
+                Path.of(effect.string("index", Index.INDEX.toString())));
     }
 
     private static List<Path> given(List<Json> values, List<Path> fallback) {

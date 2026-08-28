@@ -30,6 +30,55 @@ public final class SymbolsTest {
         }
         vendored();
         remembers();
+        entrypoints();
+    }
+
+    /// A project may have more than one entrypoint, and asking about it still
+    /// works.
+    ///
+    /// Every `main.java` compiles to the same implicitly declared class `main`,
+    /// so two of them made javac stop with `duplicate class: main` and every
+    /// question about the project — and about the JDK, which shares the
+    /// compile — failed with it.
+    private static void entrypoints() throws IOException {
+        var root = Files.createTempDirectory("tuul-entrypoints");
+        root.toFile().deleteOnExit();
+        var cli = Files.createDirectories(root.resolve("cli"));
+        Files.writeString(cli.resolve("main.java"), """
+                /// The command line.
+                void main(String[] args) {
+                    java.lang.System.out.println("cli");
+                }
+                """);
+        var serve = Files.createDirectories(root.resolve("serve"));
+        Files.writeString(serve.resolve("main.java"), """
+                /// The server.
+                void main(String[] args) {
+                    java.lang.System.out.println("serve");
+                }
+                """);
+        var lib = Files.createDirectories(root.resolve("greeting"));
+        Files.writeString(lib.resolve("Greeter.java"), """
+                package greeting;
+
+                /** Says hello. */
+                public final class Greeter {
+
+                    /** Greets somebody by name. */
+                    public String greet(String name) {
+                        return "hi " + name;
+                    }
+                }
+                """);
+        try (var index = Index.of(List.of(root), List.of(), kept())) {
+            Check.equal("two entrypoints do not stop the index",
+                    "greeting.Greeter", index.lookup("greeting.Greeter").orElseThrow().name());
+            Check.that("a question about the JDK survives a second entrypoint too",
+                    index.lookup("java.lang.String").isPresent());
+            Check.that("an entrypoint is not a symbol", index.lookup("main").isEmpty());
+            Check.that("and it is not in the listing either",
+                    index.names().stream().noneMatch(name -> name.equals("main")));
+        }
     }
 
     /// An index of its own for every test, in a directory that goes away with

@@ -59,7 +59,9 @@
 /// really matters here: **an update function must be a pure function of its
 /// state and its message.** No clock, no random number, no file, no socket. The
 /// only "now" available is the timestamp of the message being handled, which is
-/// recorded and therefore replays unchanged.
+/// recorded and therefore replays unchanged. An update reads it as
+/// `message.at()`: the actor stamps it before the update runs, live and on
+/// replay alike, so the same message always produces the same state.
 ///
 /// ## Reaching anything else
 ///
@@ -167,6 +169,16 @@
 ///     answers `error.communication` with cause `busy`. A message whose
 ///     deadline has already passed is dropped before it is logged, because its
 ///     sender has stopped waiting.
+///   - **The effects of one step have no order.** [application.Application]
+///     runs every effect of a step on its own virtual thread and waits for all
+///     of them, so an `actor.tell` and an `actor.reply` asked for by the same
+///     update race. **An actor cannot make an announcement land before the
+///     reply its caller is waiting on.** A post that answers its caller and
+///     announces itself to an index gives the caller a redirect that can reach
+///     a list one mailbox hop behind. Read-your-writes across two actors is
+///     therefore not expressible inside a definition: the caller asks A, waits
+///     for the answer, and then asks B with what A said. Two effects in one
+///     step are only safe when neither one's result is read through the other.
 ///   - **A query is logged too.** Every message that enters a mailbox is
 ///     recorded, and a message that only reads the state is still a message. So
 ///     asking a durable counter for its total adds an entry to its log. That

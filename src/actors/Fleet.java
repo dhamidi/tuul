@@ -142,8 +142,7 @@ public final class Fleet {
 
         /// A numeric field of the answer, or zero when there was no answer.
         public double number(String field) {
-            if (message == null) return 0;
-            return message.get(field) instanceof json.Json.Num(var value) ? value : 0;
+            return message == null ? 0 : message.number(field, 0);
         }
     }
 }

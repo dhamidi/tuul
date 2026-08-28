@@ -28,6 +28,11 @@ import javax.tools.ToolProvider;
 /// [Classes] then reads. Nothing is written to disk.
 public final class Sources {
 
+    /// The file that makes a directory under `src/` an entrypoint. The name is
+    /// repeated here rather than read from `project.Layout`, because `symbols`
+    /// does not depend on `project`.
+    public static final String ENTRYPOINT = "main.java";
+
     private Sources() {}
 
     public static Map<String, byte[]> compile(List<Path> roots) throws IOException {
@@ -59,15 +64,36 @@ public final class Sources {
         return options;
     }
 
+    /// Every Java file under the roots, except the entrypoints.
+    ///
+    /// A tuul project marks an entrypoint with `main.java`, and that file holds
+    /// an implicitly declared class. Java names such a class after its file, so
+    /// every `main.java` in a project compiles to the same class `main`. A
+    /// project with two entrypoints — a command and a server, which is an
+    /// ordinary shape — therefore made javac stop with `duplicate class: main`.
+    /// One broken compile made **every** question fail, including questions
+    /// about the JDK, because the index compiles the project before it answers
+    /// anything.
+    ///
+    /// An entrypoint holds no symbol worth documenting: it is one method that
+    /// reads arguments and calls a library. So the index leaves it out, and a
+    /// project may have as many entrypoints as it needs.
     private static List<Path> find(List<Path> roots) throws IOException {
         var sources = new ArrayList<Path>();
         for (var root : roots) {
             if (!Files.isDirectory(root)) continue;
             try (var tree = Files.walk(root)) {
-                tree.filter(path -> path.toString().endsWith(".java")).forEach(sources::add);
+                tree.filter(Sources::documentable).forEach(sources::add);
             }
         }
         return sources;
+    }
+
+    /// Whether this file holds symbols worth compiling: Java, and not an
+    /// entrypoint.
+    private static boolean documentable(Path path) {
+        var file = path.getFileName().toString();
+        return file.endsWith(".java") && !file.equals(ENTRYPOINT);
     }
 
     private static String report(DiagnosticCollector<JavaFileObject> problems) {

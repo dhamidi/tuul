@@ -168,7 +168,7 @@ public final class SelfTest {
 
         var docs = tuul(project, "docs", "application.Application");
         check(checks, "and tuul docs answers about a vendored tuul type",
-                docs.output().contains("An application: a state, the handlers that update it"),
+                docs.output().contains("An application holds a state, the handlers that update it"),
                 docs.output());
 
         check(checks, "tuul found its own sqlite3 from a directory that is not its own",

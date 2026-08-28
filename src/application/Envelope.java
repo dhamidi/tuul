@@ -28,6 +28,16 @@ public interface Envelope {
         return body().flag(name);
     }
 
+    /// A numeric field, or the fallback when the field is missing or is not a
+    /// number.
+    ///
+    /// JSON has one number type, so a timestamp, a count and an amount all
+    /// come back as a `double`. A caller that wants a `long` casts, and the
+    /// cast is exact up to 2^53 — far past any epoch millisecond this century.
+    default double number(String name, double fallback) {
+        return body().number(name, fallback);
+    }
+
     default List<Json> list(String name) {
         return body().list(name);
     }

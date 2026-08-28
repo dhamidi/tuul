@@ -45,6 +45,8 @@ Command tuul() {
     var docs = Command.named("docs", "describe a type from the project, vendor/ or the JDK")
             .flag("json", "print the description as JSON")
             .flag("all", "include non-public members")
+            .flag("members", "describe everything the symbol holds, not only the symbol")
+            .flag("recursive", "as --members, and into subpackages too")
             .value("search", "search names and documentation instead of naming a symbol")
             .repeated("source-path", "where to look for sources (default: src)")
             .repeated("vendor", "where to look for jars (default: vendor)")
@@ -160,6 +162,8 @@ Message docs(Json.Object values) {
             .with("search", values.string("search", ""))
             .with("json", values.flag("json"))
             .with("all", values.flag("all"))
+            .with("members", values.flag("members"))
+            .with("recursive", values.flag("recursive"))
             .with("sections", Json.Array.of(sections))
             .with("sourcePath", Json.Array.of(values.list("source-path")))
             .with("vendorPath", Json.Array.of(values.list("vendor")));

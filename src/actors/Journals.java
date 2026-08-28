@@ -53,6 +53,14 @@ final class Journals implements Logs {
         return journal;
     }
 
+    /// A log exists when it is already open, or when its file is there. Neither
+    /// test opens anything, which is the point: opening creates.
+    @Override
+    public boolean exists(Address address) {
+        var at = address.here();
+        return open.containsKey(at) || Files.exists(at.path(root));
+    }
+
     @Override
     public Stream<Address> catalogue() {
         return types().flatMap(this::catalogue);

@@ -154,6 +154,7 @@ public final class Memory {
         private Headers headers = Headers.NONE;
         private int status = Status.OK;
         private boolean committed;
+        private boolean closed;
         private Writer writer;
 
         private Recording(boolean headless, OutputStream sink) {
@@ -210,9 +211,26 @@ public final class Memory {
             return headless || Status.bodiless(status) ? OutputStream.nullOutputStream() : new Tee();
         }
 
+        /// A writer whose close is the response's close, exactly as in
+        /// [Http]. The two bindings have to agree about this, or a handler
+        /// that is correct on a socket fails in a test.
+        private final class Closing extends java.io.FilterWriter {
+
+            private Closing(Writer out) {
+                super(out);
+            }
+
+            @Override
+            public void close() throws IOException {
+                if (closed) return;
+                out.flush();
+                Recording.this.close();
+            }
+        }
+
         @Override
         public Writer writer() {
-            if (writer == null) writer = new OutputStreamWriter(body(), StandardCharsets.UTF_8);
+            if (writer == null) writer = new Closing(new OutputStreamWriter(body(), StandardCharsets.UTF_8));
             return writer;
         }
 
@@ -224,8 +242,20 @@ public final class Memory {
             flushes.add(written.size());
         }
 
+        /// Closing twice does nothing the second time.
+        ///
+        /// [web.Responses#html] and every other writer-based answer write inside a
+        /// try-with-resources, so the handler has already closed the writer
+        /// when [Memory#handle] closes the response. Flushing a closed writer
+        /// throws, and this harness reported that as [Recorded#failure()] — a
+        /// failure the plumbing invented, on a handler that did nothing wrong.
+        /// The first test anybody writes is "nothing threw", so every such test
+        /// failed. The writer therefore never closes the stream below it, and
+        /// the flush below is always safe.
         @Override
         public void close() throws IOException {
+            if (closed) return;
+            closed = true;
             commit();
             if (writer != null) writer.flush();
             if (sink != null) {

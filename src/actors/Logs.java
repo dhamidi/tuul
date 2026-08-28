@@ -36,6 +36,20 @@ public interface Logs extends AutoCloseable {
         return open(address);
     }
 
+    /// Whether this address has a log already.
+    ///
+    /// Asking is not opening. [#open(Address)] makes a log that does not exist
+    /// yet, so a read that opens one writes files for an actor nobody has ever
+    /// written to — and an actor id comes from a URL, so that is a way for
+    /// anybody to fill a disk. Every read asks this first.
+    ///
+    /// The answer is the catalogue by default, which every store can answer. A
+    /// store that can tell more cheaply says so.
+    default boolean exists(Address address) {
+        var here = address.here();
+        return catalogue(here.type(), here.id()).anyMatch(here::equals);
+    }
+
     /// Every address that has a log.
     Stream<Address> catalogue();
 

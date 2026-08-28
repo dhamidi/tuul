@@ -267,6 +267,20 @@ public final class ActorSystem implements AutoCloseable {
 
     /// Sends a message and waits for one answer.
     ///
+    /// **To read an actor, use [#inspect(Address)] instead.** An ask enters the
+    /// mailbox, and every message that enters a mailbox is logged, so asking a
+    /// post for its text writes a command every time anybody reads it. The log
+    /// of a page that is read a thousand times a day then holds a thousand
+    /// questions a day and one answer. [#inspect(Address)] never enters the
+    /// mailbox and writes nothing.
+    ///
+    /// The two doors look far apart because they are: writing is a message and
+    /// reading is not. [#inspect(Address)] answers with [json.Json] rather than
+    /// the state type, so a caller that wants a record back writes a
+    /// `from(Json)` for each of its states. That cost is deliberate and
+    /// [Definition#inspect(Object)] says why: the state type must not leave the
+    /// system.
+    ///
     /// The reply address is an ordinary address in this system, and it is the
     /// correlation: no table of outstanding requests, no sequence numbers, and
     /// an ask works across a [Transport] because the answer routes back the
@@ -670,24 +684,32 @@ public final class ActorSystem implements AutoCloseable {
 
     /// Builds a throwaway instance and advances it through the log.
     ///
-    /// An actor that keeps no log has no history to read, and asking the store
-    /// for one would create an empty database as a side effect of a read. So
-    /// the store is only touched for an actor that keeps a log, and an
-    /// undurable actor that is not loaded inspects as its initial state, which
-    /// is exactly what it would be if it were summoned.
+    /// An actor with no log has no history to read, and asking the store for
+    /// one would create an empty database as a side effect of a read. So the
+    /// store is only opened for an actor that keeps a log **and already has
+    /// one**, and every other actor inspects as its initial state, which is
+    /// exactly what it would be if it were summoned.
+    ///
+    /// Both halves of that test matter. An actor id comes from a URL, so
+    /// `GET /posts/<anything>` would otherwise write three files per name
+    /// anybody typed, and nothing bounds how many names there are.
     private <S> Json shadow(Definition<S> definition, Address address, long seq) {
         var application = definition.instantiate(address);
-        if (!spawnFor(address).keepsLog()) return definition.inspect(application.state());
+        if (!spawnFor(address).keepsLog() || !logs.exists(address)) return definition.inspect(application.state());
         try (var entries = logs.open(address).replay(0, seq)) {
-            entries.forEach(entry -> application.advance(entry.command()));
+            entries.forEach(entry -> application.advance(entry.command().at(entry.at())));
         }
         return definition.inspect(application.state());
     }
 
     /// The commands one actor recorded, in order.
+    ///
+    /// An actor with no log recorded nothing, and this says so without making
+    /// one — for the same reason [#shadow] does not.
     public Stream<Message> history(Address address, long from, int limit) {
-        var log = logs.open(address.here());
-        return log.replay(from, limit).map(Log.Entry::command);
+        var here = address.here();
+        if (!logs.exists(here)) return Stream.of();
+        return logs.open(here).replay(from, limit).map(Log.Entry::command);
     }
 
     /// The state of many actors, read without summoning any of them.

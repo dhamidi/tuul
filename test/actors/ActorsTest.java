@@ -45,6 +45,115 @@ public final class ActorsTest {
         marksApplied();
         traces();
         flies();
+        readsNothingIntoExistence();
+        stamps();
+        numbers();
+    }
+
+    // ---- reading does not write ------------------------------------------
+
+    /// Inspecting an actor that has never existed used to create its log.
+    ///
+    /// An actor id comes from a URL, so `GET /posts/<anything>` reading the
+    /// post directly wrote three files per name anybody typed. Nothing bounded
+    /// how many names there were.
+    private static void readsNothingIntoExistence() throws Exception {
+        var root = root();
+        var never = Address.of("counter", "nobody-ever-wrote-this");
+        try (var system = ActorSystem.named("test").rooted(root).define(new Counting(1))) {
+            Check.equal("nothing is on disk before anything is asked", 0L, files(root));
+            Check.equal("an actor with no log inspects as its initial state",
+                    0.0, total(system, never));
+            Check.equal("and reading it wrote nothing", 0L, files(root));
+
+            Check.equal("its history is empty", 0L, system.history(never, 0, 100).count());
+            Check.equal("and reading that wrote nothing either", 0L, files(root));
+
+            Check.equal("the state at a sequence number is the initial state too",
+                    0.0, number(field(system.inspectAt(never, 5), "total")));
+            Check.equal("and still nothing on disk", 0L, files(root));
+
+            Check.equal("so the system knows of no actor at all", 0L, system.known().count());
+
+            var written = Address.of("counter", "1");
+            system.tell(written, Message.of("add").with("by", Json.of(3)));
+            settle();
+            Check.that("an actor that was written to does have a log", files(root) > 0);
+            Check.equal("and it reads back", 3.0, total(system, written));
+            Check.equal("its history is what it recorded", 1L, system.history(written, 0, 100).count());
+        }
+    }
+
+    private static long files(Path root) throws IOException {
+        try (var tree = Files.walk(root)) {
+            return tree.filter(Files::isRegularFile).count();
+        }
+    }
+
+    // ---- the timestamp of the message being handled ----------------------
+
+    /// The documentation promises an update a "now" that replays unchanged.
+    /// The actor stamps it, so [Message#at()] is that promise.
+    private static void stamps() throws Exception {
+        var root = root();
+        var address = Address.of("stamping", "1");
+        long before = java.lang.System.currentTimeMillis();
+        long live;
+        try (var system = ActorSystem.named("test").rooted(root).define(new Stamping())) {
+            system.tell(address, Message.of("mark"));
+            settle();
+            live = (long) number(field(system.inspect(address), "at"));
+            Check.that("an update reads the moment its own message arrived", live >= before);
+        }
+        try (var system = ActorSystem.named("test").rooted(root).define(new Stamping())) {
+            Check.equal("and replay hands it the same number, not a new clock reading",
+                    (double) live, number(field(system.inspect(address), "at")));
+        }
+
+        var sent = Message.of("mark").with("at", 42.0);
+        Check.equal("a message that carries its own timestamp keeps it", 42L, sent.at(999).at());
+        Check.equal("and a message with none is stamped", 999L, Message.of("mark").at(999).at());
+        Check.equal("a message nobody stamped says zero", 0L, Message.of("mark").at());
+    }
+
+    /// An actor whose whole state is when it was last spoken to.
+    private record Marked(long at) {}
+
+    private static final class Stamping implements Definition<Marked> {
+
+        @Override
+        public String type() {
+            return "stamping";
+        }
+
+        @Override
+        public Application<Marked> instantiate(Address self) {
+            return Application.of(new Marked(0))
+                    .on("mark", (state, message) -> Step.of(new Marked(message.at())));
+        }
+
+        @Override
+        public Json inspect(Marked state) {
+            return Json.Object.of().with("at", (double) state.at());
+        }
+    }
+
+    // ---- numbers ---------------------------------------------------------
+
+    /// Every message carrying a count, an amount or a timestamp needed this,
+    /// and the only numeric accessor lived on [Fleet.Reply].
+    private static void numbers() {
+        var message = Message.of("counted").with("total", 7.0).with("name", "ada");
+        Check.equal("a numeric field reads back", 7.0, message.number("total", -1));
+        Check.equal("a field that is not a number is the fallback", -1.0, message.number("name", -1));
+        Check.equal("and so is a field nobody set", -1.0, message.number("missing", -1));
+        Check.equal("an effect reads one the same way",
+                7.0, Effect.of("count").with("total", 7.0).number("total", -1));
+
+        Check.equal("a fleet reply reads its answer through the same accessor",
+                7.0, new Fleet.Reply(Address.of("counter", "1"), message).number("total"));
+        Check.equal("and an unanswered ask is zero",
+                0.0, new Fleet.Reply(Address.of("counter", "1"), null).number("total"));
     }
 
     // ---- the trace bus ---------------------------------------------------

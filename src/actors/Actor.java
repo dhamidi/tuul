@@ -42,6 +42,13 @@ import json.Json;
 /// timestamp of the message being handled, which is recorded and so replays
 /// unchanged.
 ///
+/// An update reads it as [application.Message#at()], because the actor stamps
+/// the timestamp into the message before the update sees it. The log keeps the
+/// command as it was sent and the timestamp in its own column, so what is
+/// stamped live and what is stamped on replay are the same number, and a
+/// deadline computed from it survives replay exactly. A message that already
+/// carries an `at` keeps the one its sender gave it.
+///
 /// ## Failing open, and poison commands
 ///
 /// A command is appended before it is handled, so a command that makes an
@@ -310,7 +317,7 @@ final class Actor implements Flow.Subscriber<Message> {
     private void advanceQuietly(Log.Entry entry) {
         current = Delivery.replayed(address, entry.command(), entry.at());
         try {
-            body.advance(entry.command());
+            body.advance(entry.command().at(entry.at()));
         } finally {
             current = null;
         }
@@ -366,7 +373,7 @@ final class Actor implements Flow.Subscriber<Message> {
     private void apply(Delivery delivery, long seq) {
         current = delivery;
         try {
-            var step = body.advance(delivery.command());
+            var step = body.advance(delivery.command().at(delivery.at()));
             var emitted = body.perform(step.effects());
             for (var message : emitted) mailbox.self(new Delivery(message, address, address, null, null, clock()));
             if (seq > 0) log.applied(seq);

@@ -28,6 +28,11 @@ import java.time.Instant;
 /// value makes an actor a deterministic function of its input, and it lets a
 /// business deadline computed from it survive replay exactly.
 ///
+/// An update never holds a delivery, so [Actor] stamps this value into the
+/// message and the update reads [application.Message#at()]. The stamp is put on
+/// after the command is logged, so the log holds the intent as it was sent and
+/// the timestamp beside it, and replay stamps the recorded number back.
+///
 /// @param command  the message the actor will handle
 /// @param to       the actor it is addressed to
 /// @param from     the actor that sent it, or null when it came from outside

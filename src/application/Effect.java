@@ -39,6 +39,10 @@ public record Effect(Json.Object body) implements Envelope {
         return new Effect(body.with(name, value));
     }
 
+    public Effect with(String name, double value) {
+        return new Effect(body.with(name, value));
+    }
+
     /// Carries out one kind of effect. A throw is caught by the application and
     /// reported as an `error` message, so no handler can take the loop down.
     @FunctionalInterface

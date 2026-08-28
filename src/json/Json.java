@@ -94,6 +94,13 @@ public sealed interface Json {
             return get(name) instanceof Bool(var value) && value;
         }
 
+        /// A numeric field, or the fallback when the field is missing or is
+        /// not a number. JSON has one number type, so a count, an amount and a
+        /// timestamp all arrive here.
+        public double number(String name, double fallback) {
+            return get(name) instanceof Num(var value) ? value : fallback;
+        }
+
         /// The items of an array field, or an empty list when the field is
         /// missing or is not an array.
         public List<Json> list(String name) {
