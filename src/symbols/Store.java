@@ -80,7 +80,8 @@ final class Store implements AutoCloseable {
     /// under.
     Optional<TypeInfo> type(long origin, String name) {
         try (var rows = database.query(
-                "select id, kind, modifiers, superclass, doc from type where origin = ? and name = ?", origin, name)) {
+                "select id, kind, modifiers, superclass, doc, source, line from type where origin = ? and name = ?",
+                origin, name)) {
             if (!rows.next()) return Optional.empty();
             var id = rows.integer(0);
             return Optional.of(new TypeInfo(
@@ -95,7 +96,9 @@ final class Store implements AutoCloseable {
                     methods(id),
                     fields(id),
                     rows.text(4),
-                    tags("select position, tag, name, text from tag where type = ? order by position", id)));
+                    tags("select position, tag, name, text from tag where type = ? order by position", id),
+                    rows.text(5),
+                    (int) rows.integer(6)));
         }
     }
 
@@ -200,13 +203,15 @@ final class Store implements AutoCloseable {
 
         private final Statement forget = Statement.of(database, "delete from type where origin = ? and name = ?");
         private final Statement type = Statement.of(database,
-                "insert into type (origin, name, kind, modifiers, superclass, doc) values (?, ?, ?, ?, ?, ?)");
+                "insert into type (origin, name, kind, modifiers, superclass, doc, source, line)"
+                        + " values (?, ?, ?, ?, ?, ?, ?, ?)");
         private final Statement parameter = Statement.of(database,
                 "insert into type_parameter (type, position, name) values (?, ?, ?)");
         private final Statement related = Statement.of(database,
                 "insert into related (type, relation, position, name) values (?, ?, ?, ?)");
         private final Statement member = Statement.of(database,
-                "insert into member (type, position, kind, name, returns, modifiers, doc) values (?, ?, ?, ?, ?, ?, ?)");
+                "insert into member (type, position, kind, name, returns, modifiers, doc, line)"
+                        + " values (?, ?, ?, ?, ?, ?, ?, ?)");
         private final Statement argument = Statement.of(database,
                 "insert into parameter (member, position, type, name) values (?, ?, ?, ?)");
         private final Statement tag = Statement.of(database,
@@ -215,7 +220,7 @@ final class Store implements AutoCloseable {
         private void put(long origin, String name, TypeInfo info) {
             forget.run(origin, name);
             var id = type.run(origin, name, info.kind().name(), String.join(" ", info.modifiers()),
-                    info.superclass(), info.doc());
+                    info.superclass(), info.doc(), info.source(), info.line());
 
             for (var at = 0; at < info.typeParameters().size(); at++) {
                 parameter.run(id, at, info.typeParameters().get(at));
@@ -228,7 +233,7 @@ final class Store implements AutoCloseable {
             var position = 0;
             for (var method : info.methods()) {
                 var owner = member.run(id, position++, "method", method.name(), method.returns(),
-                        String.join(" ", method.modifiers()), method.doc());
+                        String.join(" ", method.modifiers()), method.doc(), method.line());
                 for (var at = 0; at < method.parameters().size(); at++) {
                     var taken = method.parameters().get(at);
                     argument.run(owner, at, taken.type(), taken.name());
@@ -237,7 +242,7 @@ final class Store implements AutoCloseable {
             }
             for (var field : info.fields()) {
                 var owner = member.run(id, position++, "field", field.name(), field.type(),
-                        String.join(" ", field.modifiers()), field.doc());
+                        String.join(" ", field.modifiers()), field.doc(), field.line());
                 tags(null, owner, field.tags());
             }
         }
@@ -270,13 +275,14 @@ final class Store implements AutoCloseable {
         var tags = tags(type, "method");
         var methods = new ArrayList<TypeInfo.Method>();
         try (var rows = database.query(
-                "select id, name, returns, modifiers, doc from member where type = ? and kind = 'method' order by position",
+                "select id, name, returns, modifiers, doc, line from member where type = ? and kind = 'method'"
+                        + " order by position",
                 type)) {
             while (rows.next()) {
                 var id = rows.integer(0);
                 methods.add(new TypeInfo.Method(rows.text(1), rows.text(2),
                         parameters.getOrDefault(id, List.of()), words(rows.text(3)), rows.text(4),
-                        tags.getOrDefault(id, List.of())));
+                        tags.getOrDefault(id, List.of()), (int) rows.integer(5)));
             }
         }
         return List.copyOf(methods);
@@ -286,12 +292,13 @@ final class Store implements AutoCloseable {
         var tags = tags(type, "field");
         var fields = new ArrayList<TypeInfo.Field>();
         try (var rows = database.query(
-                "select id, name, returns, modifiers, doc from member where type = ? and kind = 'field' order by position",
+                "select id, name, returns, modifiers, doc, line from member where type = ? and kind = 'field'"
+                        + " order by position",
                 type)) {
             while (rows.next()) {
                 var id = rows.integer(0);
                 fields.add(new TypeInfo.Field(rows.text(1), rows.text(2), words(rows.text(3)), rows.text(4),
-                        tags.getOrDefault(id, List.of())));
+                        tags.getOrDefault(id, List.of()), (int) rows.integer(5)));
             }
         }
         return List.copyOf(fields);

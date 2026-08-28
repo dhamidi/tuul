@@ -63,7 +63,30 @@ public final class StoreTest {
             store.write(origin.id(), Map.of("invoicing.Invoice", invoice()), true);
             Check.equal("writing the same type again replaces it rather than doubling it",
                     List.of("invoicing.Invoice"), store.names(origin.id()));
+
+            Check.equal("where a type is written survives the trip", "src/invoicing/Invoice.java", read.source());
+            Check.equal("and which line it starts on", 7, read.line());
+            Check.equal("so does a member's line", 42, read.methods().getFirst().line());
+            Check.equal("and a field's", 11, read.fields().getFirst().line());
+
+            // A package is a symbol, so it is stored as one. Anything the index
+            // forgets is a question that works cold and fails warm, which is
+            // worse than one that never worked.
+            store.write(origin.id(), Map.of("invoicing", invoicing()), false);
+            var read_ = store.type(origin.id(), "invoicing").orElseThrow();
+            Check.equal("a package comes back as it went in", invoicing(), read_);
+            Check.equal("still a package", TypeInfo.Kind.PACKAGE, read_.kind());
+            Check.equal("still holding what it holds",
+                    List.of("invoicing.Invoice", "invoicing.Ledger"), read_.nested());
         }
+    }
+
+    /// A package: a name, what somebody wrote about it, and what it holds.
+    private static TypeInfo invoicing() {
+        return new TypeInfo("invoicing", TypeInfo.Kind.PACKAGE, List.of(), List.of(), "", List.of(), List.of(),
+                List.of("invoicing.Invoice", "invoicing.Ledger"), List.of(), List.of(),
+                "Money owed, and who owes it.", List.of(new TypeInfo.Tag("since", "", "1.0")),
+                "src/invoicing/package-info.java", 5);
     }
 
     /// The stamp is the whole contract: same stamp, same facts.
@@ -181,17 +204,19 @@ public final class StoreTest {
                 List.of(new TypeInfo.Parameter("invoicing.Invoice", "other")),
                 List.of("public"),
                 "Orders invoices by amount, then id.",
-                List.of(new TypeInfo.Tag("param", "other", "the invoice to compare with")));
-        var id = new TypeInfo.Method("id", "java.lang.String", List.of(), List.of("public"), "", List.of());
+                List.of(new TypeInfo.Tag("param", "other", "the invoice to compare with")),
+                42);
+        var id = new TypeInfo.Method("id", "java.lang.String", List.of(), List.of("public"), "", List.of(), 0);
         var amount = new TypeInfo.Field("amount", "java.math.BigDecimal", List.of("private", "final"),
-                "What is owed.", List.of());
+                "What is owed.", List.of(), 11);
         return new TypeInfo("invoicing.Invoice", TypeInfo.Kind.RECORD, List.of("public"), List.of("T"),
                 "", List.of("java.lang.Comparable<invoicing.Invoice>"),
                 List.of("invoicing.Invoice.Paid", "invoicing.Invoice.Owing"),
                 List.of("invoicing.Invoice.Kind"),
                 List.of(compareTo, id), List.of(amount),
                 "An invoice for a fixed amount, identified by id.",
-                List.of(new TypeInfo.Tag("since", "", "1.0")));
+                List.of(new TypeInfo.Tag("since", "", "1.0")),
+                "src/invoicing/Invoice.java", 7);
     }
 
     private static Path index(String name) throws IOException {

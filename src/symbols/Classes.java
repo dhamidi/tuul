@@ -28,6 +28,14 @@ public final class Classes {
 
     private Classes() {}
 
+    /// Whether a class file declares a type somebody outside its package could
+    /// use. Listing a package's contents asks this of every class file in it,
+    /// which is why it reads the flags and stops rather than inspecting the
+    /// whole type: `java.util` holds 489 class files and 134 public types.
+    static boolean visible(byte[] classFile) {
+        return (ClassFile.of().parse(classFile).flags().flagsMask() & ClassFile.ACC_PUBLIC) != 0;
+    }
+
     public static TypeInfo inspect(byte[] classFile) {
         var model = ClassFile.of().parse(classFile);
         var signature = model.findAttribute(Attributes.signature())
@@ -47,7 +55,9 @@ public final class Classes {
                 model.methods().stream().filter(Classes::declared).map(method -> method(method, simple)).toList(),
                 model.fields().stream().filter(Classes::declared).map(Classes::field).toList(),
                 "",
-                List.of());
+                List.of(),
+                "",
+                0);
     }
 
     /// The subtypes a sealed type allows, which are its cases — the most
@@ -132,7 +142,8 @@ public final class Classes {
                 named(spread(types, (mask & ClassFile.ACC_VARARGS) != 0), parameterNames(model)),
                 modifiers(mask, AccessFlag.Location.METHOD),
                 "",
-                List.of());
+                List.of(),
+                0);
     }
 
     private static TypeInfo.Field field(FieldModel model) {
@@ -144,7 +155,8 @@ public final class Classes {
                 type,
                 modifiers(model.flags().flagsMask(), AccessFlag.Location.FIELD),
                 "",
-                List.of());
+                List.of(),
+                0);
     }
 
     /// Parameter names survive only when the sources were compiled with

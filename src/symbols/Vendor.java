@@ -74,12 +74,57 @@ public final class Vendor {
         return stamp.toString();
     }
 
+    /// A file inside a vendored jar: what it says, and where a reader would
+    /// have to look to see it themselves.
+    public record Found(String text, String location) {}
+
     public Optional<Origin> lookup(String binaryName, String sourceFile) {
         var classFile = binaryName.replace('.', '/') + ".class";
         for (var jar : binaries) {
             var found = entry(jar, classFile);
             if (found.isEmpty()) continue;
-            return found.map(path -> new Origin(read(path), source(jar, sourceFile)));
+            var source = source(jar, sourceFile);
+            return found.map(path -> new Origin(read(path), source.map(Found::text),
+                    source.map(Found::location).orElse("")));
+        }
+        return Optional.empty();
+    }
+
+    /// The top-level types a package holds, across every vendored jar.
+    ///
+    /// A jar has no directory entry to ask, so this reads the names it holds
+    /// and keeps the ones under this package. `-info` files are the package
+    /// speaking rather than a type in it, and a `$` is a nested type, which
+    /// belongs to the type that declares it and not to the package listing.
+    public List<String> types(String name) {
+        var prefix = name.replace('.', '/') + "/";
+        var types = new ArrayList<String>();
+        for (var jar : binaries) {
+            var archive = Archives.of(jar);
+            if (archive.isEmpty()) continue;
+            try (var tree = Files.walk(archive.get().getPath("/"))) {
+                for (var path : tree.toList()) {
+                    var entry = path.toString().replaceFirst("^/", "");
+                    if (!entry.startsWith(prefix) || !entry.endsWith(".class")) continue;
+                    var type = entry.substring(0, entry.length() - ".class".length());
+                    if (type.contains("$") || type.endsWith("-info")) continue;
+                    if (!Classes.visible(read(path))) continue;
+                    types.add(type.replace('/', '.'));
+                }
+            } catch (IOException unreadable) {
+                continue;
+            }
+        }
+        return List.copyOf(types);
+    }
+
+    /// What a vendored package says about itself, if its sources jar carries a
+    /// `package-info.java`.
+    public Optional<Found> packageInfo(String name) {
+        var entry = name.replace('.', '/') + "/package-info.java";
+        for (var jar : binaries) {
+            var found = source(jar, entry);
+            if (found.isPresent()) return found;
         }
         return Optional.empty();
     }
@@ -100,9 +145,9 @@ public final class Vendor {
 
     /// Sources come from the sources jar, or from the binary jar itself when an
     /// artifact ships both together.
-    private Optional<String> source(Path binary, String sourceFile) {
+    private Optional<Found> source(Path binary, String sourceFile) {
         var jar = sources.getOrDefault(binary, binary);
-        return entry(jar, sourceFile).map(Vendor::text);
+        return entry(jar, sourceFile).map(path -> new Found(text(path), jar + "!/" + sourceFile));
     }
 
     private static Optional<Path> entry(Path jar, String name) {

@@ -22,6 +22,8 @@ public final class SymbolsTest {
             platform(index);
             javadoc(index);
             platformJavadoc(index);
+            packages(index);
+            located(index);
             rendering(index);
         }
         vendored();
@@ -306,6 +308,74 @@ public final class SymbolsTest {
         }
     }
 
+    /// A package and a module are symbols. Until they were, a reader who
+    /// wanted to know what a package was for had nowhere to go — and every
+    /// package in the JDK says, in the one file nothing was reading.
+    private static void packages(Index index) {
+        var invoicing = index.lookup("invoicing").orElseThrow();
+        Check.equal("a project package is a symbol", TypeInfo.Kind.PACKAGE, invoicing.kind());
+        Check.equal("and package-info.java is where it says what it is for",
+                "Money owed, and who owes it.", invoicing.doc());
+        Check.equal("with its tags, like anything else documented",
+                List.of("@since 1.0"), invoicing.tags().stream().map(TypeInfo.Tag::line).toList());
+        Check.equal("it declares no members, because a package has none", List.of(), invoicing.methods());
+        Check.that("and it holds the types written in it",
+                invoicing.nested().contains("invoicing.Invoice"));
+        Check.that("only the ones somebody outside could use",
+                invoicing.nested().stream().noneMatch(name -> name.contains("$")));
+
+        var util = index.lookup("java.util").orElseThrow();
+        Check.equal("a JDK package is one too", TypeInfo.Kind.PACKAGE, util.kind());
+        Check.that("read out of src.zip, since the JDK ships no package-info.class",
+                util.doc().startsWith("Contains the collections framework"));
+        Check.that("holding its public types", util.nested().contains("java.util.ArrayList"));
+        Check.that("and its subpackages", util.nested().contains("java.util.concurrent"));
+        Check.that("subpackages come before the types, because they are the other question",
+                util.nested().indexOf("java.util.concurrent") < util.nested().indexOf("java.util.ArrayList"));
+        Check.that("what a package holds is what could be used from outside it",
+                !util.nested().contains("java.util.TimSort"));
+
+        var base = index.lookup("java.base").orElseThrow();
+        Check.equal("a module is a symbol as well", TypeInfo.Kind.MODULE, base.kind());
+        Check.that("module-info.java says what it is for",
+                base.doc().startsWith("Defines the foundational APIs"));
+        Check.that("and it holds the packages it exports", base.nested().contains("java.util"));
+        Check.that("not the ones it keeps to itself, nor the ones it opened to one other module",
+                base.nested().stream().noneMatch(name -> name.startsWith("jdk.internal")));
+
+        Check.that("a name that is neither a type nor a package is still unknown",
+                index.lookup("invoicing.nowhere").isEmpty());
+        Check.that("and neither is a fragment of one",
+                index.lookup("invoic").isEmpty());
+    }
+
+    /// Where a symbol is written. A reader who wants to see the code has to be
+    /// told which file and which line, and a class file compiled with `-g:none`
+    /// carries neither — so it comes from the source that was parsed for the
+    /// doc comment, which knows exactly.
+    private static void located(Index index) {
+        var invoice = index.lookup("invoicing.Invoice").orElseThrow();
+        Check.that("a project type says which file it is written in",
+                invoice.source().endsWith("invoicing/Invoice.java"));
+        Check.that("and which line the declaration starts on", invoice.line() > 0);
+
+        var compareTo = invoice.methods().stream()
+                .filter(method -> method.name().equals("compareTo"))
+                .findFirst()
+                .orElseThrow();
+        Check.that("so does a member", compareTo.line() > 0);
+        Check.that("and it is further down the file than the type", compareTo.line() > invoice.line());
+
+        var string = index.lookup("java.lang.String").orElseThrow();
+        Check.that("a JDK type names the archive and the entry inside it",
+                string.source().endsWith("src.zip!/java.base/java/lang/String.java"));
+        Check.that("with a line, because src.zip is the source that was read", string.line() > 0);
+
+        var util = index.lookup("java.util").orElseThrow();
+        Check.that("and so does a package, through its package-info",
+                util.source().endsWith("!/java.base/java/util/package-info.java"));
+    }
+
     private static void rendering(Index index) throws IOException {
         var described = Docs.describe(index.lookup("invoicing.Invoice").orElseThrow(), false);
         Check.equal("the description names the symbol", "invoicing.Invoice", described.string("class", ""));
@@ -355,6 +425,14 @@ public final class SymbolsTest {
     private static Path sources() throws IOException {
         var root = Files.createTempDirectory("tuul-symbols");
         var invoicing = Files.createDirectories(root.resolve("invoicing"));
+        Files.writeString(invoicing.resolve("package-info.java"), """
+                /**
+                 * Money owed, and who owes it.
+                 *
+                 * @since 1.0
+                 */
+                package invoicing;
+                """);
         Files.writeString(invoicing.resolve("Invoice.java"), """
                 package invoicing;
 

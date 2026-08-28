@@ -19,7 +19,7 @@ public final class Docs {
     private static final int WIDTH = 78;
 
     public static final List<String> SECTIONS =
-            List.of("doc", "extends", "implements", "permits", "nested", "methods", "fields");
+            List.of("doc", "source", "extends", "implements", "permits", "nested", "methods", "fields");
 
     private Docs() {}
 
@@ -34,6 +34,8 @@ public final class Docs {
                 .with("implements", Json.Array.strings(type.interfaces()))
                 .with("permits", Json.Array.strings(type.permits()))
                 .with("nested", Json.Array.strings(type.nested()))
+                .with("source", type.source())
+                .with("line", Json.of(type.line()))
                 .with("tags", tags(type.tags()))
                 .with("methods", methods(type, all))
                 .with("fields", fields(type, all));
@@ -67,9 +69,47 @@ public final class Docs {
         line(description, "extends", "  extends ", out);
         line(description, "implements", "  implements ", out);
         line(description, "permits", "  permits ", out);
-        line(description, "nested", "  declares ", out);
+        where(description, out);
+        if (grouping(description)) contents(description, out);
+        else line(description, "nested", "  declares ", out);
         members(description, "methods", out);
         members(description, "fields", out);
+    }
+
+    /// A type *declares* the types written in its body; a package or a module
+    /// *contains* what happens to be filed under it. Not the same relationship,
+    /// and they should not read as though they were.
+    private static boolean grouping(Json.Object description) {
+        var kind = description.string("kind", "class");
+        return kind.equals("package") || kind.equals("module");
+    }
+
+    /// What a package or a module holds, one per line and written out in full.
+    ///
+    /// Members are listed this way and this is the same question. Shortening is
+    /// wrong here for a reason that only shows up on a package: it exists to
+    /// take `java.util.List` down to `List` inside a signature, and applied to a
+    /// list of package names it takes `java.util.concurrent` down to
+    /// `concurrent`, which names nothing a reader could look up.
+    private static void contents(Json.Object description, Writer out) throws IOException {
+        var held = strings(description, "nested");
+        if (held.isEmpty()) return;
+        out.write("\n");
+        for (var name : held) out.write("  " + name + "\n");
+    }
+
+    /// Where the declaration is written, when it is known. A project's source
+    /// is a file somebody can open; the other two name an entry inside an
+    /// archive, which is still the answer to *where does this come from*.
+    private static void where(Json.Object description, Writer out) throws IOException {
+        var source = description.string("source", "");
+        if (source.isEmpty()) return;
+        var line = number(description, "line");
+        out.write("  at " + source + (line > 0 ? ":" + line : "") + "\n");
+    }
+
+    private static long number(Json.Object description, String name) {
+        return description.get(name) instanceof Json.Num(var value) ? (long) value : 0;
     }
 
     private static String head(Json.Object description) {
@@ -109,6 +149,13 @@ public final class Docs {
         if (section.equals("doc")) {
             wrap(description.string("doc", ""), "", out);
             block(description, out);
+            return;
+        }
+        if (section.equals("source")) {
+            var source = description.string("source", "");
+            if (source.isEmpty()) return;
+            var line = number(description, "line");
+            out.write(source + (line > 0 ? ":" + line : "") + "\n");
             return;
         }
         switch (description.get(section)) {
@@ -214,6 +261,7 @@ public final class Docs {
                         .with("parameters", Json.Array.strings(method.parameters().stream().map(TypeInfo.Parameter::text).toList()))
                         .with("modifiers", Json.Array.strings(method.modifiers()))
                         .with("signature", method.signature())
+                        .with("line", Json.of(method.line()))
                         .with("doc", method.doc())
                         .with("tags", tags(method.tags())))
                 .toList());
@@ -227,6 +275,7 @@ public final class Docs {
                         .with("type", field.type())
                         .with("modifiers", Json.Array.strings(field.modifiers()))
                         .with("signature", field.signature())
+                        .with("line", Json.of(field.line()))
                         .with("doc", field.doc())
                         .with("tags", tags(field.tags())))
                 .toList());

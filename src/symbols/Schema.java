@@ -22,8 +22,10 @@ final class Schema {
     static final int APPLICATION = 0x7475756c;
 
     /// Bumped when the shape below changes in a way that would make an older
-    /// file answer differently — version 2 stopped indexing private members.
-    static final int VERSION = 3;
+    /// file answer differently — version 2 stopped indexing private members,
+    /// version 4 added where a symbol is written and made packages and modules
+    /// symbols in their own right.
+    static final int VERSION = 4;
 
     /// The whole format. Types, the members they declare, the parameters those
     /// take, the tags on either, and the origin each type was learned from.
@@ -37,6 +39,12 @@ final class Schema {
                 unique (kind, location)
             );
 
+            -- `kind` holds package and module as well as the five kinds of
+            -- type: a package is a symbol with a name, a comment and a list of
+            -- what it holds, which is the same shape with the members empty.
+            -- `source` and `line` say where the declaration is written; both
+            -- are empty for a symbol whose source was never found, which is
+            -- every type in a jar that shipped without one.
             create table type (
                 id         integer primary key,
                 origin     integer not null references origin (id) on delete cascade,
@@ -45,6 +53,8 @@ final class Schema {
                 modifiers  text    not null,
                 superclass text    not null,
                 doc        text    not null,
+                source     text    not null default '',
+                line       integer not null default 0,
                 unique (origin, name)
             );
 
@@ -77,7 +87,8 @@ final class Schema {
                 name      text    not null,
                 returns   text    not null,
                 modifiers text    not null,
-                doc       text    not null
+                doc       text    not null,
+                line      integer not null default 0
             );
 
             create index member_of_type on member (type, position);

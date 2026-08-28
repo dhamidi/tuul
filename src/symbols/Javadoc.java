@@ -19,10 +19,13 @@ import com.sun.source.doctree.TextTree;
 import com.sun.source.doctree.ThrowsTree;
 import com.sun.source.doctree.UnknownBlockTagTree;
 import com.sun.source.tree.ClassTree;
+import com.sun.source.tree.CompilationUnitTree;
+import com.sun.source.tree.Tree;
 import com.sun.source.tree.MethodTree;
 import com.sun.source.tree.VariableTree;
 import com.sun.source.util.DocTrees;
 import com.sun.source.util.JavacTask;
+import com.sun.source.util.TreePath;
 import com.sun.source.util.TreePathScanner;
 import java.io.IOException;
 import java.net.URI;
@@ -72,13 +75,55 @@ public final class Javadoc {
 
     /// What the source says about a declaration and the class file cannot: the
     /// prose, the block tags under it, and the names of the parameters.
-    public record Comment(String doc, List<TypeInfo.Tag> tags, List<String> parameters) {
+    public record Comment(String doc, List<TypeInfo.Tag> tags, List<String> parameters, int line) {
 
-        static final Comment NONE = new Comment("", List.of(), List.of());
+        static final Comment NONE = new Comment("", List.of(), List.of(), 0);
 
         boolean empty() {
-            return doc.isEmpty() && tags.isEmpty() && parameters.isEmpty();
+            return doc.isEmpty() && tags.isEmpty() && parameters.isEmpty() && line == 0;
         }
+    }
+
+    /// The comment on the file itself rather than on anything in it — which is
+    /// the only kind `package-info.java` and `module-info.java` have.
+    ///
+    /// A package says what it is for in a comment attached to its package
+    /// declaration, and a module in one attached to its module declaration.
+    /// Neither is a class, so neither is reachable by walking declarations; both
+    /// hang off the compilation unit, and this asks it directly.
+    public static Comment file(String source, String fileName) {
+        var compiler = ToolProvider.getSystemJavaCompiler();
+        if (compiler == null) return Comment.NONE;
+        try {
+            var files = compiler.getStandardFileManager(null, null, StandardCharsets.UTF_8);
+            var task = (JavacTask) compiler.getTask(
+                    null, files, diagnostic -> {}, List.of("-proc:none"), null, List.of(new Text(fileName, source)));
+            var trees = DocTrees.instance(task);
+            for (var unit : task.parse()) {
+                var at = unit.getModule() != null ? unit.getModule() : unit.getPackage();
+                if (at == null) continue;
+                var comment = trees.getDocCommentTree(new TreePath(new TreePath(unit), at));
+                if (comment == null) continue;
+                return new Comment(flatten(comment.getFullBody()), tags(comment.getBlockTags()), List.of(),
+                        line(trees, unit, at));
+            }
+        } catch (IOException | RuntimeException unreadable) {
+            return Comment.NONE;
+        }
+        return Comment.NONE;
+    }
+
+    /// Which line a declaration starts on, counted by javac rather than by us.
+    ///
+    /// This is where line numbers come from at all: `symbols.Sources` compiles
+    /// with `-g:none`, so no class file carries a `LineNumberTable`, and turning
+    /// that on would pay for every line of every method to answer a question
+    /// about one. The source is already being parsed here to read the comment,
+    /// and the parse knows exactly where everything is.
+    private static int line(DocTrees trees, CompilationUnitTree unit, Tree node) {
+        if (node == null) return 0;
+        var start = trees.getSourcePositions().getStartPosition(node);
+        return start < 0 ? 0 : (int) unit.getLineMap().getLineNumber(start);
     }
 
     /// Every doc comment in one source file, keyed by declaration.
@@ -109,15 +154,16 @@ public final class Javadoc {
                 type.methods().stream().map(method -> documented(method, find(docs, path, method))).toList(),
                 type.fields().stream()
                         .map(field -> documented(field, docs.getOrDefault(path + "#" + field.name(), Comment.NONE)))
-                        .toList());
+                        .toList(),
+                here.line());
     }
 
     private static TypeInfo.Method documented(TypeInfo.Method method, Comment comment) {
-        return method.documented(comment.doc(), comment.tags()).named(comment.parameters());
+        return method.documented(comment.doc(), comment.tags(), comment.line()).named(comment.parameters());
     }
 
     private static TypeInfo.Field documented(TypeInfo.Field field, Comment comment) {
-        return field.documented(comment.doc(), comment.tags());
+        return field.documented(comment.doc(), comment.tags(), comment.line());
     }
 
     /// Matches on erased parameter types, and falls back to the name alone when
@@ -293,7 +339,7 @@ public final class Javadoc {
         public Void visitClass(ClassTree node, Void ignored) {
             if (node.getSimpleName().isEmpty()) return null;
             enclosing.addLast(node.getSimpleName().toString());
-            put(String.join(".", enclosing), List.of());
+            put(String.join(".", enclosing), List.of(), node);
             var scanned = super.visitClass(node, ignored);
             enclosing.removeLast();
             return scanned;
@@ -303,23 +349,24 @@ public final class Javadoc {
         public Void visitMethod(MethodTree node, Void ignored) {
             var types = node.getParameters().stream().map(parameter -> parameter.getType().toString()).toList();
             var names = node.getParameters().stream().map(parameter -> parameter.getName().toString()).toList();
-            put(String.join(".", enclosing) + "#" + signature(node.getName().toString(), types), names);
+            put(String.join(".", enclosing) + "#" + signature(node.getName().toString(), types), names, node);
             return null;
         }
 
         @Override
         public Void visitVariable(VariableTree node, Void ignored) {
             if (getCurrentPath().getParentPath().getLeaf() instanceof ClassTree) {
-                put(String.join(".", enclosing) + "#" + node.getName(), List.of());
+                put(String.join(".", enclosing) + "#" + node.getName(), List.of(), node);
             }
             return null;
         }
 
-        private void put(String key, List<String> parameters) {
+        private void put(String key, List<String> parameters, Tree node) {
             var comment = trees.getDocCommentTree(getCurrentPath());
+            var line = line(trees, getCurrentPath().getCompilationUnit(), node);
             var doc = comment == null
-                    ? new Comment("", List.of(), parameters)
-                    : new Comment(flatten(comment.getFullBody()), tags(comment.getBlockTags()), parameters);
+                    ? new Comment("", List.of(), parameters, line)
+                    : new Comment(flatten(comment.getFullBody()), tags(comment.getBlockTags()), parameters, line);
             if (!doc.empty()) docs.put(key, doc);
         }
     }
