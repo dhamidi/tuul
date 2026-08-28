@@ -24,6 +24,7 @@ public final class SymbolsTest {
             platformJavadoc(index);
             packages(index);
             located(index);
+            references(index);
         roots(index);
             rendering(index);
         }
@@ -80,10 +81,22 @@ public final class SymbolsTest {
         Check.equal("a type carries its doc comment, paragraphs and all",
                 "An invoice for a fixed amount, identified by id.\n\nInvoices are compared by amount.",
                 invoice.doc());
-        Check.equal("so does a method", "Orders invoices by amount, then id.", method(invoice, "compareTo").doc());
-        Check.equal("markdown doc comments are read too",
-                "The customer this invoice is for.",
+        Check.equal("so does a method", "Orders invoices by amount, then id. See Invoice.Kind.",
+                method(invoice, "compareTo").doc());
+        Check.equal("markdown doc comments are read too, brackets and all",
+                "The customer this invoice is for.\n\nNot [Invoice.Kind], and not [Nowhere] either.",
                 method(invoice, "customer").doc());
+        // `[Invoice.Kind]` in a `///` comment is javadoc's reference link, and
+        // javac hands it over parsed rather than as the text it was written as.
+        // Writing back what was parsed dropped the brackets, which left the
+        // word in the prose and no way for anything downstream to tell it had
+        // ever been a cross-reference — see the pair above and [References].
+        // `{@link}` keeps its old shape, because nobody typed a bracket there.
+        Check.that("a markdown reference keeps the syntax that makes it one",
+                method(invoice, "customer").doc().contains("[Invoice.Kind]"));
+        Check.that("and an inline tag does not grow one it never had",
+                !method(invoice, "compareTo").doc().contains("["));
+
         var kind = index.lookup("invoicing.Invoice.Kind").orElseThrow();
         Check.equal("a nested type finds its comment in the enclosing file", "What stage an invoice is at.", kind.doc());
         Check.equal("a field's comment lands on the field",
@@ -453,6 +466,74 @@ public final class SymbolsTest {
                 .orElseThrow();
     }
 
+    /// Javadoc's reference links, resolved — and, as often, not resolved.
+    ///
+    /// `[Invoice#compareTo(Invoice)]` in a `///` comment is a cross-reference to
+    /// a Java symbol wearing CommonMark's punctuation, and a markdown parser
+    /// reads it as a shortcut reference to a definition the comment never
+    /// writes: brackets, on the page, where a link was meant. What is checked
+    /// here is the half of the answer that is neither markdown's nor a browser's
+    /// — whether the index has the thing, and what the thing is called.
+    ///
+    /// The misses matter more than the hits. A name the index cannot find has to
+    /// stay as text: a dead link says the page is wrong about its own project,
+    /// where brackets only say a name.
+    private static void references(Index index) {
+        Check.equal("a bare name in a package comment is a type in that package",
+                "/invoicing.Invoice", link(index, "invoicing", "Invoice"));
+        Check.equal("a member reference points at the type, and says which member",
+                "/invoicing.Invoice#compareTo", link(index, "invoicing", "Invoice#compareTo(Invoice)"));
+        Check.equal("a member written with no parameters resolves the same way",
+                "/invoicing.Invoice#customer", link(index, "invoicing", "Invoice#customer()"));
+        Check.equal("and so does one written with no brackets at all",
+                "/invoicing.Invoice#amount", link(index, "invoicing", "Invoice#amount"));
+        Check.equal("a nested type is named the way somebody would write it",
+                "/invoicing.Invoice.Kind", link(index, "invoicing", "Invoice.Kind"));
+        Check.equal("a fully qualified name means itself, wherever it is read from",
+                "/java.lang.String", link(index, "invoicing", "java.lang.String"));
+
+        Check.equal("read from inside a type, a bare name is one of its nested types",
+                "/invoicing.Invoice.Kind", link(index, "invoicing.Invoice", "Kind"));
+        Check.equal("and failing that, a neighbour in the same package",
+                "/invoicing.Invoice", link(index, "invoicing.Invoice", "Invoice"));
+        Check.equal("an empty type is the type the comment is on",
+                "/invoicing.Invoice#customer", link(index, "invoicing.Invoice", "#customer()"));
+
+        Check.that("a type the index has never heard of stays as text",
+                link(index, "invoicing", "Nowhere") == null);
+        Check.that("a member the type does not declare stays as text, though the type exists",
+                link(index, "invoicing", "Invoice#refund()") == null);
+        Check.that("prose in brackets is not a reference and is not looked up",
+                link(index, "invoicing", "the docs") == null);
+        Check.that("nor is punctuation somebody bracketed",
+                link(index, "invoicing", "1.2.3") == null);
+        Check.that("an empty label is nothing at all", link(index, "invoicing", "") == null);
+
+        var scoped = References.of(index, "invoicing", SymbolsTest::url);
+        Check.equal("the same label asked twice answers the same thing",
+                scoped.destination("Invoice"), scoped.destination("Invoice"));
+
+        var rendered = markdown.Markdown.html("""
+                An [Invoice] is compared by [Invoice#compareTo(Invoice)], which
+                is not the same as [Invoice#refund()] or [the docs].
+                """, scoped);
+        Check.that("a comment renders the references it can as links",
+                rendered.contains("<a href=\"/invoicing.Invoice\">Invoice</a>")
+                        && rendered.contains("<a href=\"/invoicing.Invoice#compareTo\">"));
+        Check.that("and leaves the ones it cannot as the text that was written",
+                rendered.contains("[Invoice#refund()]") && rendered.contains("[the docs]"));
+    }
+
+    /// Where the tests pretend a symbol lives. A real one is a route, which is
+    /// the caller's business and never [References]'.
+    private static String url(String symbol, String member) {
+        return "/" + symbol + (member.isEmpty() ? "" : "#" + member);
+    }
+
+    private static String link(Index index, String scope, String label) {
+        return References.of(index, scope, SymbolsTest::url).destination(label);
+    }
+
     private static Path sources() throws IOException {
         var root = Files.createTempDirectory("tuul-symbols");
         var invoicing = Files.createDirectories(root.resolve("invoicing"));
@@ -489,7 +570,7 @@ public final class SymbolsTest {
                     }
 
                     /**
-                     * Orders invoices by amount, then id.
+                     * Orders invoices by amount, then id. See {@link Invoice.Kind}.
                      *
                      * @param other the invoice to compare with
                      * @return a negative number, zero, or a positive number
@@ -500,6 +581,8 @@ public final class SymbolsTest {
                     }
 
                     /// The customer this invoice is for.
+                    ///
+                    /// Not [Invoice.Kind], and not [Nowhere] either.
                     public String customer() {
                         return "nobody";
                     }

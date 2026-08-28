@@ -17,16 +17,24 @@ import java.io.Writer;
 public final class Html {
 
     private final Document document;
+    private final Links links;
     private final Writer out;
     private char last = '\n';
 
-    private Html(Document document, Writer out) {
+    private Html(Document document, Links links, Writer out) {
         this.document = document;
+        this.links = links;
         this.out = out;
     }
 
     public static void render(Document document, Writer out) throws IOException {
-        new Html(document, out).write();
+        render(document, Links.NONE, out);
+    }
+
+    /// Renders, offering `links` every reference the document itself never
+    /// defined. See [Links] for why that offer is made here rather than earlier.
+    public static void render(Document document, Links links, Writer out) throws IOException {
+        new Html(document, links, out).write();
     }
 
     /// Writes, remembering the last character, so that [#line] can tell whether
@@ -134,7 +142,7 @@ public final class Html {
             case EMPHASIS -> write("<em>");
             case STRONG -> write("<strong>");
             case LINK -> link(cursor);
-            case REFERENCE -> write("[");
+            case REFERENCE -> reference(cursor);
             case TEXT -> escape(cursor.text());
             case ESCAPE -> escape(cursor.text().subSequence(1, 2));
             case ENTITY -> escape(Entities.decode(cursor.text()));
@@ -160,8 +168,11 @@ public final class Html {
             case STRONG -> write("</strong>");
             case LINK -> write("</a>");
             case REFERENCE -> {
-                write("]");
-                escape(remainder(cursor));
+                if (destination(cursor) != null) write("</a>");
+                else {
+                    write("]");
+                    escape(remainder(cursor));
+                }
             }
             default -> { }
         }
@@ -244,6 +255,32 @@ public final class Html {
         write("<img src=\"" + url(target.destination()) + "\" alt=\"" + attribute(alt(image)) + "\"");
         if (!target.title().isEmpty()) write(" title=\"" + attribute(target.title()) + "\"");
         write(" />");
+    }
+
+    /// A reference nobody defined: a link if a caller claimed the label, and
+    /// otherwise the brackets that were typed.
+    ///
+    /// The label is offered on the way out as well as on the way in, rather
+    /// than remembered between the two. [Links] is asked a question about a
+    /// string and a walk can be inside more than one reference at a time, so
+    /// asking twice is cheaper than the stack that would avoid it — and it is
+    /// the answer that decides both tags, so the two cannot disagree.
+    private void reference(Cursor reference) throws IOException {
+        var destination = destination(reference);
+        if (destination == null) write("[");
+        else write("<a href=\"" + url(destination) + "\">");
+    }
+
+    /// What a caller says the label points at, or null for nobody.
+    ///
+    /// An image reference is not offered, and not because it could not be: an
+    /// unresolved `![alt][x]` renders its alternative text and nothing else, so
+    /// there is no element to hang a destination on, and a caller's naming
+    /// scheme is a scheme of names rather than of pictures.
+    private String destination(Cursor reference) {
+        if (links == Links.NONE || References.image(document.nodes(), reference.index())) return null;
+        var label = reference.copy();
+        return label.child(Kind.LABEL) ? links.destination(Labels.collapse(label.text())) : null;
     }
 
     /// What an unmatched reference wrote after its text, which goes back out

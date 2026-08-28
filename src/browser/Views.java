@@ -13,6 +13,7 @@ import java.util.Locale;
 import java.util.Map;
 import java.util.regex.Pattern;
 import json.Json;
+import markdown.Links;
 import markdown.Markdown;
 import symbols.Index;
 import web.assets.Assets;
@@ -297,11 +298,23 @@ public final class Views {
     /// One symbol: where it sits, what it is, what it says about itself, and
     /// what it declares.
     public static Html symbol(Router routes, Symbol state) {
+        return symbol(routes, Links.NONE, state);
+    }
+
+    /// The same page, with `links` given the cross-references in its prose.
+    ///
+    /// A doc comment writes one as `[Invoice#compareTo(Invoice)]`, which is
+    /// javadoc's syntax and CommonMark's punctuation for a link definition
+    /// nobody wrote — so without somebody to ask, a page of cross-references
+    /// renders as a page of square brackets. Who to ask is not decided here:
+    /// this hands the answer on to the comment and has no opinion about what a
+    /// label means. See [markdown.Links].
+    public static Html symbol(Router routes, Links links, Symbol state) {
         if (!state.problem().isEmpty()) return missing(routes, state);
 
         var description = state.description();
         var qualified = description.string("class", "");
-        if (holder(description.string("kind", ""))) return holding(routes, description, qualified);
+        if (holder(description.string("kind", ""))) return holding(routes, links, description, qualified);
         return Ui.stack(Props.of("gap", "lg"), Microdata.scope(), Microdata.type("/Symbol"),
                 where(routes, qualified),
                 Ui.stack(Props.of("gap", "sm"),
@@ -310,11 +323,11 @@ public final class Views {
                                         Ui.mono(Microdata.of("name"), text(qualified))),
                                 Ui.badge(Microdata.of("kind"), text(description.string("kind", "class"))),
                                 modifiers(description)),
-                        documentation(description.string("doc", ""))),
+                        documentation(links, description.string("doc", ""))),
                 relations(routes, description),
                 tags(description),
-                members(routes, "Constructors and methods", description, "methods"),
-                members(routes, "Fields", description, "fields"));
+                members(routes, links, "Constructors and methods", description, "methods"),
+                members(routes, links, "Fields", description, "fields"));
     }
 
     /// A symbol nobody has. It is still a page of this browser — the trail, the
@@ -353,7 +366,7 @@ public final class Views {
     /// down a column, so the names are a column; the prefix is the page you are
     /// already on, so it goes; and packages are listed apart from types because
     /// going deeper and stopping here are different questions.
-    private static Html holding(Router routes, Json.Object description, String qualified) {
+    private static Html holding(Router routes, Links links, Json.Object description, String qualified) {
         var packages = new ArrayList<String>();
         var types = new ArrayList<String>();
         for (var held : strings(description, "nested")) {
@@ -366,7 +379,7 @@ public final class Views {
                                 Ui.heading(Props.of("level", "1"),
                                         Ui.mono(Microdata.of("name"), text(qualified))),
                                 Ui.badge(Microdata.of("kind"), text(description.string("kind", "package")))),
-                        documentation(description.string("doc", ""))),
+                        documentation(links, description.string("doc", ""))),
                 contents(routes, "Packages", qualified, packages),
                 contents(routes, "Types", qualified, types));
     }
@@ -431,9 +444,13 @@ public final class Views {
     /// It renders into the page's own writer rather than building a string,
     /// which is what keeps a long comment from being held twice.
     static Html documentation(String doc) {
+        return documentation(Links.NONE, doc);
+    }
+
+    static Html documentation(Links links, String doc) {
         if (doc.isBlank()) return Html.nothing();
         return Html.element("div", classes("ui-doc"), Microdata.of("doc"),
-                Html.deferred(out -> Markdown.render(doc, out)));
+                Html.deferred(out -> Markdown.render(doc, links, out)));
     }
 
     /// Code keeps its shape but not the indentation that marked it as code, so
@@ -503,7 +520,7 @@ public final class Views {
     /// to the place it is written. Overloads share a name and an id has to be
     /// unique, so the second `of` is `of-2` and a link to `#of` lands on the
     /// first — which is what somebody following a result meant.
-    private static Html members(Router routes, String heading, Json.Object description, String key) {
+    private static Html members(Router routes, Links links, String heading, Json.Object description, String key) {
         var members = objects(description, key);
         if (members.isEmpty()) return Html.nothing();
         var taken = new HashMap<String, Integer>();
@@ -511,7 +528,7 @@ public final class Views {
         for (var member : members) {
             var name = member.string("name", "");
             var seen = taken.merge(name, 1, Integer::sum);
-            written.add(Member.of(routes, member, seen == 1 ? name : name + "-" + seen));
+            written.add(Member.of(routes, links, member, seen == 1 ? name : name + "-" + seen));
         }
         return Ui.stack(Props.of("gap", "sm"),
                 Ui.heading(Props.of("level", "2"), text(heading)),

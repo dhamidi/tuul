@@ -568,11 +568,29 @@ final class Blocks {
     }
 
     private Open open(Kind kind, int start) {
+        while (!contains(deepest().kind, kind)) close(stack.size() - 1);
         var parent = deepest();
         var node = nodes.open(kind, parent.node, start);
         var opened = new Open(node, kind);
         stack.add(opened);
         return opened;
+    }
+
+    /// Whether a block of this kind may hold a block of that one.
+    ///
+    /// A list holds items and nothing else. Without that rule a list stays open
+    /// for the rest of the document — [#continues] answers that a list always
+    /// continues, which is right, because what ends a list is the arrival of
+    /// something a list cannot hold, and only this knows what that is. A
+    /// paragraph after a list was becoming a child of the list, the blank line
+    /// before it made the list loose, and the list's closing tag came at the
+    /// end of the document.
+    private static boolean contains(Kind parent, Kind child) {
+        return switch (parent) {
+            case LIST -> child == Kind.ITEM;
+            case DOCUMENT, QUOTE, ITEM -> true;
+            default -> false;
+        };
     }
 
     /// Closes the block at `index` and everything under it. A leaf's content
@@ -614,9 +632,17 @@ final class Blocks {
         if (!list.tight) markLoose(list.node);
     }
 
+    /// A loose list is marked on its items, and only on its items.
+    ///
+    /// `number` means different things to different kinds — a heading's number
+    /// is its level — so marking a child that is not an item silently rewrites
+    /// something else. That is not hypothetical: while a list could hold a
+    /// heading, `## Second` came out as `<h1>`, because this ran over it.
+    /// [#contains] is what makes the assumption true; the check is here so the
+    /// two cannot drift apart quietly.
     private void markLoose(int list) {
         for (var item = nodes.first(list); item != Nodes.NONE; item = nodes.next(item)) {
-            nodes.number(item, 1);
+            if (nodes.kind(item) == Kind.ITEM) nodes.number(item, 1);
         }
     }
 

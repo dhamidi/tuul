@@ -11,7 +11,15 @@ final class Labels {
 
     private Labels() {}
 
-    static String normalize(CharSequence label) {
+    /// A label with its whitespace collapsed but its case left alone.
+    ///
+    /// The collapsing is CommonMark's and applies to any reader of a label; the
+    /// case folding is CommonMark's rule for *matching* one, and a [Links] that
+    /// reads labels in some other naming scheme wants the first without the
+    /// second. `Foo` and `foo` are one reference to CommonMark and two Java
+    /// types, and a label that broke across a line as `[ActorSystem#effect(String,`
+    /// / `Effect.Handler)]` has to come back out as one signature.
+    static String collapse(CharSequence label) {
         var folded = new StringBuilder(label.length());
         var space = false;
         for (var i = 0; i < label.length(); i++) {
@@ -24,6 +32,10 @@ final class Labels {
             space = false;
             folded.append(character);
         }
-        return folded.toString().toLowerCase(Locale.ROOT).toUpperCase(Locale.ROOT).toLowerCase(Locale.ROOT);
+        return folded.toString();
+    }
+
+    static String normalize(CharSequence label) {
+        return collapse(label).toLowerCase(Locale.ROOT).toUpperCase(Locale.ROOT).toLowerCase(Locale.ROOT);
     }
 }

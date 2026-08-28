@@ -72,16 +72,32 @@ public final class Markdown {
         Html.render(document, out);
     }
 
+    /// Renders, letting `links` answer for the references the document never
+    /// defined. A caller with an index of its own — of Java symbols, of pages,
+    /// of anything named — turns the text a reader was going to see into the
+    /// link they meant. See [Links].
+    public static void render(Document document, Links links, Writer out) throws IOException {
+        Html.render(document, links, out);
+    }
+
     /// Parses and renders in one step, for the caller who wants HTML and has no
     /// use for the tree.
     public static void render(String source, Writer out) throws IOException {
         Html.render(parse(source), out);
     }
 
+    public static void render(String source, Links links, Writer out) throws IOException {
+        Html.render(parse(source), links, out);
+    }
+
     public static String html(String source) {
+        return html(source, Links.NONE);
+    }
+
+    public static String html(String source, Links links) {
         var out = new StringWriter();
         try {
-            render(source, out);
+            render(source, links, out);
         } catch (IOException e) {
             throw new java.io.UncheckedIOException(e);
         }

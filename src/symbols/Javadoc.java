@@ -240,8 +240,9 @@ public final class Javadoc {
     /// the middle of it.
     private static String flatten(List<? extends DocTree> parts) {
         var text = new StringBuilder();
-        write(parts, text);
-        if (markdown(parts)) return text.toString().strip();
+        var markdown = markdown(parts);
+        write(parts, markdown, text);
+        if (markdown) return text.toString().strip();
         return text.toString()
                 .strip()
                 .replaceAll("(?<=\\S)[ \t]{2,}", " ")
@@ -257,18 +258,18 @@ public final class Javadoc {
     /// Appends without normalising, so that a nested body — the summary inside
     /// `{@summary}` — is written into the same text as everything around it and
     /// tidied once at the end.
-    private static void write(List<? extends DocTree> parts, StringBuilder text) {
+    private static void write(List<? extends DocTree> parts, boolean markdown, StringBuilder text) {
         var preformatted = 0;
         for (var part : parts) {
             switch (part) {
                 case TextTree tree -> text.append(preformatted > 0 ? tree.getBody() : squeeze(tree.getBody()));
                 case LiteralTree tree -> text.append(tree.getBody().getBody());
-                case LinkTree tree -> text.append(reference(tree));
+                case LinkTree tree -> text.append(markdown ? written(tree) : reference(tree));
                 case EntityTree tree -> text.append(entity(tree));
                 case RawTextTree tree -> text.append(tree.getContent());
                 case ReferenceTree tree -> text.append(tree.getSignature());
-                case SummaryTree tree -> write(tree.getSummary(), text);
-                case IndexTree tree -> write(List.of(tree.getSearchTerm()), text);
+                case SummaryTree tree -> write(tree.getSummary(), markdown, text);
+                case IndexTree tree -> write(List.of(tree.getSearchTerm()), markdown, text);
                 case StartElementTree tree -> {
                     if (PREFORMATTED.contains(name(tree.getName()))) preformatted++;
                     text.append(gap(name(tree.getName())));
@@ -301,6 +302,25 @@ public final class Javadoc {
         if (tree.getReference() == null) return "";
         var signature = tree.getReference().getSignature();
         return signature.startsWith("#") ? signature.substring(1) : signature;
+    }
+
+    /// A reference in a markdown comment, put back the way it was typed.
+    ///
+    /// `[Blocks]` in a `///` comment is javadoc's reference link, and javac
+    /// hands it over parsed — which is how the brackets came to be dropped
+    /// here, leaving the word `Blocks` in the prose and nothing to click. They
+    /// are the author's own syntax and the only record that a cross-reference
+    /// was meant, so they go back: what a reader wants is a link, and what
+    /// makes one is a [symbols.References] that can look the name up against
+    /// the index. That is a question about a symbol, asked later, by somebody
+    /// who has an index and a URL space; all that is needed here is not to
+    /// throw away the question.
+    ///
+    /// A `/** */` comment is left alone. There the author wrote `{@link Foo}`
+    /// and never typed a bracket, and inventing one would put punctuation into
+    /// prose that nobody asked for.
+    private static String written(LinkTree tree) {
+        return tree.getReference() == null ? "" : "[" + tree.getReference().getSignature() + "]";
     }
 
     /// Whether the comment was written in markdown — the `///` kind, which

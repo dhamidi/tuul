@@ -19,12 +19,14 @@ public final class MarkdownTest {
         code();
         quotes();
         lists();
+        after();
         paragraphs();
         emphasis();
         links();
         references();
         patching();
         unresolved();
+        offered();
         incremental();
         images();
         html();
@@ -90,6 +92,48 @@ public final class MarkdownTest {
                 "<ul>\n<li>\n<p>a</p>\n<pre><code>code\n</code></pre>\n</li>\n</ul>\n", "- a\n\n      code\n");
         equal("a list interrupts a paragraph when it starts at one",
                 "<p>foo</p>\n<ul>\n<li>bar</li>\n</ul>\n", "foo\n- bar\n");
+    }
+
+    /// What follows a list, which is where a list stops.
+    ///
+    /// A list holds items and nothing else, so the first thing that is not an
+    /// item ends it. Every one of these produced a document whose `</ul>` came
+    /// at the very end, with the paragraphs, headings and code blocks after the
+    /// list nested inside it — and a heading after a list came out one level
+    /// too high, because the marker for a loose list writes to the same field a
+    /// heading keeps its level in.
+    private static void after() {
+        equal("a paragraph ends a list",
+                "<ul>\n<li>one</li>\n</ul>\n<p>after</p>\n", "- one\n\nafter\n");
+        equal("a heading ends a list, and keeps its level",
+                "<ul>\n<li>one</li>\n</ul>\n<h2>after</h2>\n", "- one\n\n## after\n");
+        equal("a code block ends a list",
+                "<ul>\n<li>one</li>\n</ul>\n<pre><code>x\n</code></pre>\n", "- one\n\n```\nx\n```\n");
+        equal("a quote ends a list",
+                "<ul>\n<li>one</li>\n</ul>\n<blockquote>\n<p>x</p>\n</blockquote>\n", "- one\n\n> x\n");
+        equal("a thematic break ends a list",
+                "<ul>\n<li>one</li>\n</ul>\n<hr />\n", "- one\n\n***\n");
+        equal("a list of another marker ends the first",
+                "<ul>\n<li>one</li>\n</ul>\n<ul>\n<li>two</li>\n</ul>\n", "- one\n\n+ two\n");
+        equal("a nested list ends with its parent",
+                "<ul>\n<li>a\n<ul>\n<li>b</li>\n</ul>\n</li>\n</ul>\n<p>after</p>\n", "- a\n  - b\n\nafter\n");
+        equal("a heading after a nested list keeps its level",
+                "<ul>\n<li>a\n<ul>\n<li>b</li>\n</ul>\n</li>\n</ul>\n<h2>after</h2>\n", "- a\n  - b\n\n## after\n");
+        equal("a list that ends does not make the one before it loose",
+                "<ul>\n<li>one</li>\n</ul>\n<p>mid</p>\n<ul>\n<li>two</li>\n</ul>\n<h2>end</h2>\n",
+                "- one\n\nmid\n\n- two\n\n## end\n");
+
+        var document = markdown.Markdown.parse("- one\n\n## after\n");
+        var heading = document.walk()
+                .filter(step -> step.entering() && step.kind() == markdown.Kind.HEADING)
+                .findFirst()
+                .orElseThrow();
+        Check.equal("and the level is right in the tree, not only in the markup",
+                2, document.at(heading.node()).number());
+        var parent = document.at(heading.node());
+        parent.parent();
+        Check.equal("the heading is a child of the document, not of the list",
+                markdown.Kind.DOCUMENT, parent.kind());
     }
 
     private static void paragraphs() {
@@ -457,6 +501,49 @@ public final class MarkdownTest {
                 rendered.contains("<ul>") && rendered.contains("<code>code</code>")
                         && rendered.contains("<a href=\"https://example.com\">link</a>"));
         Check.that("and keeps its paragraphs apart", rendered.indexOf("<p>") != rendered.lastIndexOf("<p>"));
+    }
+
+    /// What a caller can say about a reference the document never defined.
+    ///
+    /// The point of the hook is a doc comment: `[ActorSystem#effect(String,
+    /// Effect.Handler)]` is javadoc's way of naming a symbol and CommonMark's
+    /// way of naming a link definition nobody wrote, so a whole page of
+    /// cross-references was rendering as square brackets. What markdown is
+    /// allowed to know about that is only what is checked here — a label was
+    /// offered, and something came back or did not.
+    private static void offered() {
+        Links known = label -> label.equals("Foo#bar(String, Baz)") || label.equals("Foo") ? "/s/" + label : null;
+
+        Check.equal("a label somebody claims becomes a link",
+                "<p><a href=\"/s/Foo\">Foo</a></p>\n", Markdown.html("[Foo]\n", known));
+        Check.equal("and one nobody claims is still the text that was typed",
+                "<p>[the docs]</p>\n", Markdown.html("[the docs]\n", known));
+        Check.equal("both in one paragraph",
+                "<p><a href=\"/s/Foo\">Foo</a> and [Bar]</p>\n", Markdown.html("[Foo] and [Bar]\n", known));
+
+        Check.equal("a label broken across a line is offered as one",
+                "<p><a href=\"/s/Foo#bar(String,%20Baz)\">Foo#bar(String,\nBaz)</a></p>\n",
+                Markdown.html("[Foo#bar(String,\nBaz)]\n", known));
+        Check.equal("case is kept, because it is a name and not a CommonMark label",
+                "<p>[foo]</p>\n", Markdown.html("[foo]\n", known));
+
+        Check.equal("a full reference links its text and drops the label",
+                "<p><a href=\"/s/Foo\">the system</a></p>\n", Markdown.html("[the system][Foo]\n", known));
+        Check.equal("a collapsed one links its text",
+                "<p><a href=\"/s/Foo\">Foo</a></p>\n", Markdown.html("[Foo][]\n", known));
+        Check.equal("markup inside the text survives inside the link",
+                "<p><a href=\"/s/Foo\"><em>Foo</em></a></p>\n", Markdown.html("[*Foo*][Foo]\n", known));
+
+        Check.equal("the document wins: a definition beats anything a caller knows",
+                "<p><a href=\"/mine\">Foo</a></p>\n", Markdown.html("[Foo]\n\n[Foo]: /mine\n", known));
+        Check.equal("an image reference is not offered, having nowhere to put a link",
+                "<p>![Foo]</p>\n", Markdown.html("![Foo]\n", known));
+
+        Check.equal("a destination is encoded, and the text escaped, the way any other link's is",
+                "<p><a href=\"/s/%22q%22\">&quot;q&quot;</a></p>\n",
+                Markdown.html("[\"q\"]\n", label -> "/s/" + label));
+        Check.equal("nobody knowing anything renders what it always did",
+                Markdown.html("[Foo] and [the docs]\n"), Markdown.html("[Foo] and [the docs]\n", Links.NONE));
     }
 
     // --- helpers ------------------------------------------------------------

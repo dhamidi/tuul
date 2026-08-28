@@ -8,6 +8,7 @@ import java.util.List;
 import java.util.Map;
 import java.util.regex.Pattern;
 import json.Json;
+import markdown.Links;
 import web.dispatch.Router;
 import web.ui.Component;
 import web.ui.Html;
@@ -28,7 +29,7 @@ import web.ui.Ui;
 /// signature's type names are links and only the route table knows where a
 /// symbol lives, and the member itself as JSON, because that is the shape the
 /// index answers in.
-public record Member(Router routes, Props props, Json.Object member) implements Component {
+public record Member(Router routes, Links links, Props props, Json.Object member) implements Component {
 
     /// A qualified name in a signature — something with a dot in it, which is a
     /// type this browser can show, as against a parameter name, which is not.
@@ -39,7 +40,15 @@ public record Member(Router routes, Props props, Json.Object member) implements 
     }
 
     public static Member of(Router routes, Json.Object member, String anchor) {
-        return new Member(routes, Props.of("anchor", anchor), member);
+        return of(routes, Links.NONE, member, anchor);
+    }
+
+    /// The same row, with `links` given the cross-references in the member's
+    /// own prose. A method's comment names other symbols exactly as its type's
+    /// does, and a page where the type's references are links and its methods'
+    /// are brackets is a page that looks broken in the middle.
+    public static Member of(Router routes, Links links, Json.Object member, String anchor) {
+        return new Member(routes, links, Props.of("anchor", anchor), member);
     }
 
     @Override
@@ -70,7 +79,7 @@ public record Member(Router routes, Props props, Json.Object member) implements 
     /// The same rendering the rest of the browser uses, so a code example in a
     /// member's comment looks like one in a type's.
     private Html documentation(String doc) {
-        return Views.documentation(doc);
+        return Views.documentation(links, doc);
     }
 
     private Html tags() {

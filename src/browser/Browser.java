@@ -7,9 +7,11 @@ import java.io.Writer;
 import java.nio.file.Files;
 import java.nio.file.Path;
 import java.util.List;
+import java.util.Map;
 import java.util.concurrent.ExecutorService;
 import java.util.concurrent.Executors;
 import symbols.Index;
+import symbols.References;
 import web.Handler;
 import web.Page;
 import web.Request;
@@ -180,7 +182,25 @@ public final class Browser implements AutoCloseable {
             state.description().write(response.writer());
             return;
         }
-        render(shell(request, state.name(), Search.blank(routes), Views.symbol(routes, state)), status, response);
+        render(shell(request, state.name(), Search.blank(routes),
+                Views.symbol(routes, referencing(state.name()), state)), status, response);
+    }
+
+    /// A doc comment's `[Type#member]` cross-references, pointed at pages.
+    ///
+    /// Three libraries meet on one line here and not one of them could do it
+    /// alone. Markdown knows the reference names a definition the document
+    /// never wrote, and asks rather than guessing — it has no business knowing
+    /// what a method signature is. `symbols` knows that `[Type#member]` is
+    /// javadoc rather than prose, and whether the index has one. And this knows
+    /// the last part, which is the part neither of them can: where a symbol's
+    /// page is.
+    ///
+    /// A name the index does not have stays as the text somebody typed. A dead
+    /// link claims the page exists; brackets only claim the name does.
+    private markdown.Links referencing(String scope) {
+        return References.of(index, scope, (symbol, member) ->
+                routes.path(Routes.SYMBOL, Map.of("name", symbol)) + (member.isEmpty() ? "" : "#" + member));
     }
 
     /// The tree as a page. The sidebar shows it on every page; this is the same
