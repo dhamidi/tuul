@@ -16,7 +16,8 @@ Tuul is to Java what Bun is to JavaScript:
 - the main user of tuul is a developer *through* an agent,
 - there must be exactly one step between user intent and action taken by the system,
 - always code against streaming interfaces (e.g. serialize/write to a writer, not a buffer),
-- use structured concurrency.
+- use structured concurrency,
+- documentation is a deliverable, so that `tuul docs` is self-documenting, and must be written in ASD-STE100, following the diataxis framework.
 
 ## Goals
 
