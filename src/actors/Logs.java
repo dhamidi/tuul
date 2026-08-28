@@ -27,6 +27,15 @@ public interface Logs extends AutoCloseable {
     /// The log of one actor, opened for reading and appending.
     Log open(Address address);
 
+    /// The log of one actor, opened with a durability setting.
+    ///
+    /// A store that has no such setting ignores it and answers with the same
+    /// log. [System] calls this rather than [#open(Address)] so that
+    /// [Spawn#durability()] reaches the store that can honour it.
+    default Log open(Address address, Durability durability) {
+        return open(address);
+    }
+
     /// Every address that has a log.
     Stream<Address> catalogue();
 

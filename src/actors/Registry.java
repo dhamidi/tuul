@@ -39,9 +39,12 @@ public final class Registry {
     /// @param commands  how many entries its log holds
     /// @param mailbox   how many messages are waiting
     /// @param lastAt    when it last handled a message, in epoch milliseconds
+    /// @param settled   whether its definition says it has nothing more to do.
+    ///                  This is a hint for passivation and never a fact: see
+    ///                  [Definition#settled(Object)].
     /// @param health    how its restarts are going
     public record Entry(Address address, boolean durable, boolean loaded, long commands, int mailbox,
-            long lastAt, Health health) {
+            long lastAt, boolean settled, Health health) {
 
         public String type() {
             return address.type();
@@ -57,6 +60,7 @@ public final class Registry {
                     .with("commands", commands)
                     .with("mailbox", mailbox)
                     .with("lastAt", lastAt)
+                    .with("settled", settled)
                     .with("restarts", health.restarts())
                     .with("quarantined", health.quarantined());
         }

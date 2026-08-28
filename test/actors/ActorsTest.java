@@ -39,6 +39,497 @@ public final class ActorsTest {
         fans();
         crossesSystems();
         boundedSteps();
+        owns();
+        passivates();
+        flushes();
+        marksApplied();
+        traces();
+        flies();
+    }
+
+    // ---- the trace bus ---------------------------------------------------
+
+    /// Events reach a subscriber inside the process, as they happen.
+    private static void traces() throws Exception {
+        var root = root();
+        var address = Address.of("counter", "1");
+        var seen = new CopyOnWriteArrayList<Trace>();
+
+        try (var system = System.named("test").rooted(root).define(new Counting(1))) {
+            system.traces().subscribe(collector(seen));
+            system.tell(address, Message.of("add").with("by", Json.of(1)));
+            settle();
+
+            Check.that("a summoned actor is announced",
+                    seen.stream().anyMatch(trace -> trace.kind() == Trace.Kind.summoned
+                            && trace.address().equals(address)));
+            Check.that("and the announcement carries the replay cost, which grows with the log",
+                    seen.stream().filter(trace -> trace.kind() == Trace.Kind.summoned)
+                            .anyMatch(trace -> trace.detail() instanceof Json.Object detail
+                                    && detail.get("millis") instanceof Json.Num));
+            Check.that("a message is not traced unless it is asked for",
+                    seen.stream().noneMatch(trace -> trace.kind() == Trace.Kind.handled));
+
+            system.tell(Address.of("nobody", "1"), Message.of("add"));
+            settle();
+            Check.that("an undeliverable message is announced with its cause",
+                    seen.stream().anyMatch(trace -> trace.kind() == Trace.Kind.undeliverable
+                            && trace.detail() instanceof Json.Object detail
+                            && detail.string("cause", "").equals("unknown")));
+
+            system.evict(address);
+            settle();
+            Check.that("an evicted actor is announced",
+                    seen.stream().anyMatch(trace -> trace.kind() == Trace.Kind.evicted));
+        }
+
+        // Per-message traces only when they are turned on.
+        var chatty = new CopyOnWriteArrayList<Trace>();
+        try (var system = System.named("test").rooted(root()).define(new Counting(1))
+                .tracingMessages(true)) {
+            system.traces().subscribe(collector(chatty));
+            system.tell(Address.of("counter", "2"), Message.of("add"));
+            settle();
+            Check.that("a message is traced once it is asked for",
+                    chatty.stream().anyMatch(trace -> trace.kind() == Trace.Kind.handled));
+        }
+
+        Check.equal("a trace carries the address and the kind it says it does",
+                "counter/1", seen.getFirst().json().string("address", ""));
+        Check.that("and nothing was lost to a slow subscriber in a quiet test", true);
+    }
+
+    private static java.util.concurrent.Flow.Subscriber<Trace> collector(List<Trace> into) {
+        return new java.util.concurrent.Flow.Subscriber<>() {
+
+            @Override
+            public void onSubscribe(java.util.concurrent.Flow.Subscription subscription) {
+                subscription.request(Long.MAX_VALUE);
+            }
+
+            @Override
+            public void onNext(Trace trace) {
+                into.add(trace);
+            }
+
+            @Override
+            public void onError(Throwable throwable) {}
+
+            @Override
+            public void onComplete() {}
+        };
+    }
+
+    // ---- flight recording ------------------------------------------------
+
+    /// The JFR subscriber writes real events into a real recording.
+    private static void flies() throws Exception {
+        var root = root();
+        var file = Files.createTempFile("tuul-actors", ".jfr");
+        file.toFile().deleteOnExit();
+        var address = Address.of("counter", "1");
+
+        try (var system = System.named("test").rooted(root).define(new Counting(1));
+                var flight = Flight.recording(system);
+                var recording = new jdk.jfr.Recording()) {
+            recording.enable("tuul.actors.Summoned");
+            recording.enable("tuul.actors.Evicted");
+            recording.start();
+            system.tell(address, Message.of("add").with("by", Json.of(2)));
+            settle();
+            system.evict(address);
+            settle();
+            recording.dump(file);
+        }
+
+        var events = new ArrayList<String>();
+        try (var read = new jdk.jfr.consumer.RecordingFile(file)) {
+            while (read.hasMoreEvents()) events.add(read.readEvent().getEventType().getName());
+        }
+        Check.that("a summon reaches the recording", events.contains("tuul.actors.Summoned"));
+        Check.that("an eviction reaches the recording", events.contains("tuul.actors.Evicted"));
+        Check.that("and nothing else in the package mentions jdk.jfr", onlyFlightUsesJfr());
+    }
+
+    /// [Flight] is meant to be the only file that names `jdk.jfr`, so that an
+    /// image built without that module still loads the rest of the package.
+    private static boolean onlyFlightUsesJfr() throws IOException {
+        try (var sources = Files.list(Path.of("src/actors"))) {
+            return sources.filter(path -> path.toString().endsWith(".java"))
+                    .filter(path -> !path.getFileName().toString().equals("Flight.java"))
+                    .noneMatch(ActorsTest::mentionsJfr);
+        }
+    }
+
+    /// Whether the *code* of a file depends on `jdk.jfr`.
+    ///
+    /// Doc comments are stripped first. Several files talk about flight
+    /// recording in prose, and prose creates no dependency: what matters is
+    /// whether loading the class needs the module.
+    private static boolean mentionsJfr(Path source) {
+        try {
+            return Files.readAllLines(source).stream()
+                    .map(String::strip)
+                    .filter(line -> !line.startsWith("///") && !line.startsWith("//"))
+                    .anyMatch(line -> line.contains("jdk.jfr"));
+        } catch (IOException e) {
+            return false;
+        }
+    }
+
+    // ---- the applied watermark -------------------------------------------
+
+    /// A counter that also asks for an effect, so a test can see whether the
+    /// effects of a command ran or not.
+    private static final class Acting implements Definition<Counter> {
+
+        @Override
+        public String type() {
+            return "acting";
+        }
+
+        @Override
+        public Application<Counter> instantiate(Address self) {
+            return Application.of(new Counter(0))
+                    .on("add", (state, message) -> Step.of(new Counter(state.total() + amount(message)),
+                            Effect.of("record").with("by", Json.of(amount(message)))));
+        }
+
+        @Override
+        public Json inspect(Counter state) {
+            return Json.Object.of().with("total", state.total());
+        }
+    }
+
+    /// A command that was logged but whose effects did not finish is the tail.
+    /// What happens to it is a spawn option, and the default loses it.
+    private static void marksApplied() throws Exception {
+        // In ordinary running the mark keeps up with the log.
+        var busy = root();
+        var address = Address.of("acting", "1");
+        try (var system = System.named("test").rooted(busy).define(new Acting())
+                .effect("record", (effect, emit) -> {})) {
+            system.tell(address, Message.of("add").with("by", Json.of(2)));
+            system.tell(address, Message.of("add").with("by", Json.of(3)));
+            settle();
+            Check.equal("the state is the fold of the commands", 5.0, total(system, address));
+        }
+        try (var logs = new Journals(busy)) {
+            var log = logs.open(address);
+            Check.equal("every command that was handled is marked applied", log.length(), log.applied());
+            Check.equal("and there were two of them", 2L, log.length());
+        }
+
+        // A command appended with the mark left behind is exactly what a crash
+        // between the append and the effects leaves on disk.
+        Check.equal("by default the tail is advanced into the state and its effects are lost",
+                List.of("total=7.0", "ran=0"), tail(false));
+
+        Check.equal("with redelivery the tail is handled properly, effects and all",
+                List.of("total=7.0", "ran=1"), tail(true));
+
+        // And redelivery happens once: the mark moves up, so a later summon
+        // replays the same command quietly.
+        var settled = root();
+        crashed(settled);
+        var ran = new java.util.concurrent.atomic.AtomicInteger();
+        var redelivering = Spawn.durable().redelivers(true);
+        try (var system = System.named("test").rooted(settled).define(new Acting(), redelivering)
+                .effect("record", (effect, emit) -> ran.incrementAndGet())) {
+            summon(system, tailAddress());
+            settle();
+            Check.equal("the tail runs on the first summon after the crash", 7.0, total(system, tailAddress()));
+        }
+        try (var system = System.named("test").rooted(settled).define(new Acting(), redelivering)
+                .effect("record", (effect, emit) -> ran.incrementAndGet())) {
+            summon(system, tailAddress());
+            settle();
+            Check.equal("and the state is unchanged afterwards", 7.0, total(system, tailAddress()));
+        }
+        Check.equal("a redelivered command is not delivered again on the next summon", 1, ran.get());
+    }
+
+    private static Address tailAddress() {
+        return Address.of("acting", "crashed");
+    }
+
+    /// Writes a log with one command above the applied mark, which is what a
+    /// process that stopped between appending and acting leaves behind.
+    private static void crashed(Path root) {
+        try (var logs = new Journals(root)) {
+            var log = logs.open(tailAddress());
+            log.append(Message.of("add").with("by", Json.of(7)), java.lang.System.currentTimeMillis());
+        }
+    }
+
+    /// Summons an actor whose log has an unapplied tail, and answers with the
+    /// state it reached and how many effects ran.
+    private static List<String> tail(boolean redelivers) throws Exception {
+        var root = root();
+        crashed(root);
+        var ran = new AtomicInteger();
+        var spawn = Spawn.durable().redelivers(redelivers);
+        try (var system = System.named("test").rooted(root).define(new Acting(), spawn)
+                .effect("record", (effect, emit) -> ran.incrementAndGet())) {
+            Check.equal("an unloaded actor inspects to the full fold of its log",
+                    7.0, total(system, tailAddress()));
+            Check.equal("and inspecting it ran no effect, because a shadow replay never redelivers",
+                    0, ran.get());
+            summon(system, tailAddress());
+            settle();
+            return List.of("total=" + total(system, tailAddress()), "ran=" + ran.get());
+        }
+    }
+
+    /// Loads an actor without sending it anything, so that replay runs and the
+    /// log gains no entry the test did not intend.
+    private static void summon(System system, Address address) {
+        system.subscriber(address);
+    }
+
+    // ---- durability ------------------------------------------------------
+
+    /// The `synchronous` setting an actor asks for is the one its log uses.
+    private static void flushes() throws Exception {
+        var root = root();
+        Check.equal("an actor flushes at checkpoints unless it says otherwise",
+                Durability.normal, Spawn.durable().durability());
+
+        try (var logs = new Journals(root)) {
+            var careful = (Journal) logs.open(Address.of("ledger", "1"), Durability.full);
+            Check.equal("an actor that asks for full durability gets it",
+                    Durability.full, careful.synchronous());
+
+            var ordinary = (Journal) logs.open(Address.of("counter", "1"), Durability.normal);
+            Check.equal("and one that does not, does not",
+                    Durability.normal, ordinary.synchronous());
+
+            var changed = (Journal) logs.open(Address.of("counter", "1"), Durability.full);
+            Check.equal("summoning again with a new setting applies it to the open connection",
+                    Durability.full, changed.synchronous());
+        }
+
+        // A durable actor still behaves the same way with either setting.
+        var address = Address.of("counter", "1");
+        try (var system = System.named("test").rooted(root)
+                .define(new Counting(1), Spawn.durable().durability(Durability.full))) {
+            system.tell(address, Message.of("add").with("by", Json.of(4)));
+            settle();
+            Check.equal("an actor with full durability records and replays as usual",
+                    4.0, total(system, address));
+        }
+        try (var system = System.named("test").rooted(root)
+                .define(new Counting(1), Spawn.durable().durability(Durability.full))) {
+            Check.equal("and comes back from the log", 4.0, total(system, address));
+        }
+    }
+
+    // ---- passivation -----------------------------------------------------
+
+    /// An idle actor is evicted, a busy one is not, and a settled one goes
+    /// early.
+    private static void passivates() throws Exception {
+        var root = root();
+        var address = Address.of("counter", "1");
+        var brief = Spawn.durable().idle(Duration.ofMillis(600));
+
+        try (var system = System.named("test").rooted(root)
+                .define(new Counting(1), brief)
+                .sweeping(Duration.ofMillis(40))) {
+            system.tell(address, Message.of("add").with("by", Json.of(3)));
+            Thread.sleep(120);
+            Check.that("the actor is loaded while it is being used", isLoaded(system, address));
+
+            Thread.sleep(1_200);
+            Check.that("an idle actor is evicted", !isLoaded(system, address));
+            Check.that("the log survives passivation",
+                    system.known().anyMatch(entry -> entry.address().equals(address)));
+            Check.equal("and the state comes back from it", 3.0, total(system, address));
+        }
+
+        // An actor that is never idle stays put.
+        try (var system = System.named("test").rooted(root)
+                .define(new Counting(1), brief)
+                .sweeping(Duration.ofMillis(40))) {
+            var busy = Address.of("counter", "busy");
+            for (var round = 0; round < 12; round++) {
+                system.tell(busy, Message.of("add"));
+                Thread.sleep(100);
+            }
+            Check.that("an actor that keeps working is not swept out", isLoaded(system, busy));
+        }
+
+        // Passivation can be turned off for one actor.
+        try (var system = System.named("test").rooted(root)
+                .define(new Counting(1), brief.idle(Duration.ZERO))
+                .sweeping(Duration.ofMillis(40))) {
+            var pinned = Address.of("counter", "pinned");
+            system.tell(pinned, Message.of("add"));
+            Thread.sleep(1_200);
+            Check.that("an actor with no idle timeout is never swept", isLoaded(system, pinned));
+        }
+
+        // A settled actor goes without waiting out its idle period, and the
+        // registry says so before it goes.
+        var patient = Spawn.durable().idle(Duration.ofMinutes(10));
+        try (var system = System.named("test").rooted(root())
+                .define(new Closing(), patient)
+                .sweeping(Duration.ofMillis(40))) {
+            var closing = Address.of("closing", "1");
+            system.tell(closing, Message.of("add").with("by", Json.of(1)));
+            settle();
+            Check.that("an unsettled actor stays loaded", isLoaded(system, closing));
+            Check.that("and the registry reports it as unsettled",
+                    system.known().noneMatch(entry -> entry.address().equals(closing) && entry.settled()));
+
+            system.tell(closing, Message.of("add").with("by", Json.of(20)));
+            Thread.sleep(300);
+            Check.that("a settled actor is evicted although its idle period has not passed",
+                    !isLoaded(system, closing));
+            Check.equal("and it still answers, because settled is a hint and not a closure",
+                    21.0, total(system, closing));
+        }
+
+        // A definition whose settled() throws must not take the actor down.
+        Definition<Counter> broken = new Definition<>() {
+
+            @Override
+            public String type() {
+                return "broken";
+            }
+
+            @Override
+            public Application<Counter> instantiate(Address self) {
+                return Application.of(new Counter(0))
+                        .on("add", (state, message) -> Step.of(new Counter(state.total() + 1)));
+            }
+
+            @Override
+            public Json inspect(Counter state) {
+                return Json.Object.of().with("total", state.total());
+            }
+
+            @Override
+            public boolean settled(Counter state) {
+                throw new IllegalStateException("this hint is broken");
+            }
+        };
+
+        try (var system = System.named("test").rooted(root())
+                .define(broken, Spawn.durable().idle(Duration.ofMinutes(10)))
+                .sweeping(Duration.ofMillis(40))) {
+            var faulty = Address.of("broken", "1");
+            system.tell(faulty, Message.of("add"));
+            settle();
+            Check.equal("a definition whose settled hint throws keeps working", 1.0, total(system, faulty));
+            Check.that("and stays loaded, because a broken hint answers false", isLoaded(system, faulty));
+        }
+    }
+
+    /// A definition that calls itself settled once its total reaches a limit.
+    private static final class Closing implements Definition<Counter> {
+
+        @Override
+        public String type() {
+            return "closing";
+        }
+
+        @Override
+        public Application<Counter> instantiate(Address self) {
+            return Application.of(new Counter(0))
+                    .on("add", (state, message) -> Step.of(new Counter(state.total() + amount(message))));
+        }
+
+        @Override
+        public Json inspect(Counter state) {
+            return Json.Object.of().with("total", state.total());
+        }
+
+        @Override
+        public boolean settled(Counter state) {
+            return state.total() >= 10;
+        }
+    }
+
+    private static boolean isLoaded(System system, Address address) {
+        return system.known().anyMatch(entry -> entry.address().equals(address) && entry.loaded());
+    }
+
+    // ---- ownership -------------------------------------------------------
+
+    /// Two systems over one directory. The second must be refused rather than
+    /// quietly running a second copy of the same actor.
+    private static void owns() throws Exception {
+        var root = root();
+        var address = Address.of("counter", "1");
+
+        try (var first = System.named("test").rooted(root).define(new Counting(1))) {
+            first.tell(address, Message.of("add").with("by", Json.of(2)));
+            settle();
+            Check.equal("the first owner runs the actor", 2.0, total(first, address));
+
+            try (var second = System.named("test").rooted(root).define(new Counting(1))) {
+                var refused = new ArrayList<String>();
+                try {
+                    second.tell(address, Message.of("add").with("by", Json.of(5)));
+                } catch (OwnershipException taken) {
+                    refused.add(taken.getMessage());
+                }
+                Check.equal("a second owner is refused", 1, refused.size());
+                Check.that("and the refusal names the actor",
+                        refused.getFirst().contains("counter/1"));
+                Check.that("and says another owner has it",
+                        refused.getFirst().contains("another owner"));
+                Check.equal("the address of the refusal is the actor",
+                        address, ownershipFailure(second, address).address());
+            }
+
+            settle();
+            Check.equal("the refused message never reached the log", 2.0, total(first, address));
+        }
+
+        // The claim belongs to the actor, not to the log, so a handover works
+        // once the first owner has let go.
+        try (var second = System.named("test").rooted(root).define(new Counting(1))) {
+            second.tell(address, Message.of("add").with("by", Json.of(5)));
+            settle();
+            Check.equal("a later owner takes over and appends to the same history",
+                    7.0, total(second, address));
+        }
+
+        // Eviction releases the claim inside one process too, so the same
+        // system can summon the actor again straight afterwards.
+        try (var system = System.named("test").rooted(root).define(new Counting(1))) {
+            system.tell(address, Message.of("add").with("by", Json.of(1)));
+            settle();
+            system.evict(address);
+            settle();
+            system.tell(address, Message.of("add").with("by", Json.of(1)));
+            settle();
+            Check.equal("evicting and summoning again reclaims cleanly", 9.0, total(system, address));
+        }
+
+        // An actor with no log has no shared history, so nothing is claimed and
+        // two systems can both run one.
+        try (var one = System.named("test").rooted(root).define(definitionOf("free"), Spawn.ephemeral());
+                var two = System.named("test").rooted(root).define(definitionOf("free"), Spawn.ephemeral())) {
+            var free = Address.of("free", "1");
+            one.tell(free, Message.of("nothing"));
+            two.tell(free, Message.of("nothing"));
+            settle();
+            Check.that("an undurable actor is not claimed, because it shares no history", true);
+        }
+    }
+
+    /// Sends to an address this system cannot claim, and answers with the
+    /// refusal.
+    private static OwnershipException ownershipFailure(System system, Address taken) {
+        try {
+            system.tell(taken, Message.of("add"));
+            throw new IllegalStateException("expected the claim on " + taken + " to be refused");
+        } catch (OwnershipException refused) {
+            return refused;
+        }
     }
 
     // ---- the counter every test below talks to ---------------------------

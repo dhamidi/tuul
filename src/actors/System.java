@@ -55,15 +55,23 @@ import json.Json;
 /// is not a new concept — it is the same effect with a system name in the
 /// address, and [Transport] carries it.
 ///
+/// ## Ownership, passivation and watching
+///
+/// A durable actor is claimed before it is summoned and the claim is released
+/// when its thread stops, so two processes cannot run one actor into one log.
+/// An actor idle for [Spawn#idle()] is evicted and summoned again by the next
+/// message. [#traces()] publishes what the system does as it happens, and
+/// [Flight] turns that into JDK Flight Recorder events.
+///
 /// ## What is deliberately not here
 ///
 /// Hot-reload generations and their class loaders, the browser inspector, the
-/// control socket, JFR metrics, log snapshots, supervision trees, and links and
-/// monitors. Each of them is a real feature and none of them is needed to know
-/// whether the core is right. The design leaves room for all of them:
-/// [Definition] is already the unit a reload would swap, [Logs] is already the
-/// seam a snapshot would use, and [#known()] is already what an inspector would
-/// read.
+/// control socket, log snapshots, supervision trees, and links and monitors.
+/// Each of them is a real feature and none of them is needed to know whether the
+/// core is right. The design leaves room for all of them: [Definition] is
+/// already the unit a reload would swap, [Logs] is already the seam a snapshot
+/// would use, [#known()] is already what an inspector would read, and
+/// [#traces()] is already the feed it would subscribe to.
 public final class System implements AutoCloseable {
 
     /// Effect types the system handles for every actor.
@@ -81,15 +89,22 @@ public final class System implements AutoCloseable {
     private final Map<String, Spawn> defaults = new ConcurrentHashMap<>();
     private final Map<Address, Spawn> overrides = new ConcurrentHashMap<>();
     private final Map<Address, Actor> loaded = new ConcurrentHashMap<>();
+    private final Map<Address, Ownership.Claim> claims = new ConcurrentHashMap<>();
     private final Map<Address, CompletableFuture<Message>> asks = new ConcurrentHashMap<>();
     private final Map<String, Effect.Handler> shared = new LinkedHashMap<>();
     private final Registry registry = new Registry();
+    private final Traces traces = new Traces();
     private final AtomicLong dropped = new AtomicLong();
     private final AtomicLong asked = new AtomicLong();
     private final ScheduledExecutorService timers =
             Executors.newScheduledThreadPool(0, Thread.ofVirtual().factory());
     private Logs logs = Logs.none();
+    private Ownership ownership = Ownership.shared();
     private Transport transport;
+    private Duration sweep = Duration.ofSeconds(30);
+    private volatile boolean tracingMessages;
+    private final java.util.concurrent.atomic.AtomicBoolean sweeping =
+            new java.util.concurrent.atomic.AtomicBoolean();
     private volatile boolean closed;
 
     private System(String name) {
@@ -107,16 +122,48 @@ public final class System implements AutoCloseable {
     }
 
     /// Keeps the logs of durable actors under this directory, one SQLite file
-    /// each.
+    /// each, and claims each actor with a file lock before running it.
+    ///
+    /// A directory is something two processes can both open, so this also
+    /// installs [Ownership#files(Path)]. Summoning an actor another process is
+    /// already running raises [OwnershipException] rather than quietly starting
+    /// a second copy of it.
     public System rooted(Path root) {
         logs = Logs.at(root);
+        ownership = Ownership.files(root);
         return this;
     }
 
     /// Uses this store for logs. A test passes [Logs#none()] to make every
     /// actor forgetful without changing a definition.
+    ///
+    /// Ownership is left as it was, because a store that is not a directory
+    /// knows how it arbitrates writers and this class does not. Pair it with
+    /// [#owning(Ownership)] when the store needs claims of its own.
     public System storing(Logs logs) {
         this.logs = logs;
+        return this;
+    }
+
+    /// Decides who is allowed to run each actor.
+    ///
+    /// [#rooted(Path)] already sets this to a file lock. Call this to replace it
+    /// — with a cluster lease, or with [Ownership#shared()] for a store that
+    /// arbitrates writers itself.
+    public System owning(Ownership ownership) {
+        this.ownership = ownership;
+        return this;
+    }
+
+    /// How often the system looks for actors to passivate.
+    ///
+    /// This is the resolution of [Spawn#idle(Duration)] and not a second
+    /// timeout. Sweeping more often than an actor's idle period costs a walk of
+    /// the loaded map and finds nothing; sweeping less often means an actor
+    /// stays loaded for up to one extra period after it went quiet. Neither is
+    /// a correctness question, which is why one period serves every actor.
+    public System sweeping(Duration every) {
+        this.sweep = every;
         return this;
     }
 
@@ -159,6 +206,42 @@ public final class System implements AutoCloseable {
 
     public Registry registry() {
         return registry;
+    }
+
+    /// Events from this system as they happen, for a subscriber inside this
+    /// process.
+    ///
+    /// This is the live feed. [Flight] subscribes to it to write JDK Flight
+    /// Recorder events, and an inspector would subscribe to it to show a system
+    /// working. A subscriber that falls behind loses the oldest events it had
+    /// not read, and [#tracesDropped()] counts what was lost.
+    public java.util.concurrent.Flow.Publisher<Trace> traces() {
+        return traces;
+    }
+
+    /// How many trace events a slow subscriber missed.
+    public long tracesDropped() {
+        return traces.dropped();
+    }
+
+    /// Whether to publish a trace for every message an actor handles.
+    ///
+    /// Off by default. An actor handling ten thousand messages a second would
+    /// bury every other event, and the per-message trace is only worth having
+    /// while somebody is watching one actor closely.
+    public System tracingMessages(boolean tracingMessages) {
+        this.tracingMessages = tracingMessages;
+        return this;
+    }
+
+    boolean tracingMessages() {
+        return tracingMessages;
+    }
+
+    /// Publishes a trace, doing no work when nothing is listening.
+    void trace(Address address, Trace.Kind kind, Json detail) {
+        if (!traces.watched()) return;
+        traces.publish(Trace.of(address, kind, detail));
     }
 
     /// How many `error.communication` notices had nowhere to go. A notice that
@@ -288,6 +371,9 @@ public final class System implements AutoCloseable {
     /// A notice that cannot itself be delivered is counted and dropped. A
     /// notice about a notice is the loop this rule exists to prevent.
     private void refuse(Delivery delivery, Undeliverable.Cause cause) {
+        trace(delivery.to(), Trace.Kind.undeliverable, Json.Object.of()
+                .with("cause", cause.name())
+                .with("type", delivery.command().type()));
         var notice = new Undeliverable(delivery.to(), cause, delivery.command()).notice();
         var waiting = delivery.replyTo() == null ? null : asks.get(delivery.replyTo().here());
         if (waiting != null) {
@@ -319,17 +405,97 @@ public final class System implements AutoCloseable {
     /// Building the instance and opening the log happen here, on the caller's
     /// thread. Replaying the log does not: that runs on the actor's own thread,
     /// so a sender is not made to wait for a history it did not ask about.
+    ///
+    /// A durable actor is claimed before anything is built. The claim fails by
+    /// throwing, and throwing out of the mapping function leaves nothing in the
+    /// loaded map, so a system that cannot own an actor does not half-load it.
+    /// An actor that keeps no log is not claimed, because there is no shared
+    /// history for a second owner to corrupt.
     private Actor summon(Address address) {
+        passivating();
         return loaded.compute(address, (at, existing) -> {
             if (existing != null && !existing.finished()) return existing;
             var definition = definitions.get(at.type());
             var spawn = spawnFor(at);
-            var log = spawn.keepsLog() ? logs.open(at) : Log.none();
+            var log = spawn.keepsLog() ? claim(at, spawn) : Log.none();
             var actor = new Actor(this, at, definition, log, spawn);
             install(actor);
             actor.start();
             return actor;
         });
+    }
+
+    /// Takes the claim on one actor and opens its log.
+    ///
+    /// The order matters. Claiming first means a second owner is refused before
+    /// this one has opened anything, and refreshing after the claim is what
+    /// corrects a log this process cached while another process was appending
+    /// to it.
+    private Log claim(Address address, Spawn spawn) {
+        var claim = ownership.claim(address);
+        try {
+            var log = logs.open(address, spawn.durability());
+            log.refresh();
+            claims.put(address, claim);
+            return log;
+        } catch (RuntimeException opening) {
+            claim.release();
+            throw opening;
+        }
+    }
+
+    /// Gives up the claim on one actor.
+    ///
+    /// The claim's life is the actor's life and not the log's. [Logs] keeps a
+    /// log open after its actor has gone so that an inspector can still read it,
+    /// and holding the claim for that long would stop any other process from
+    /// ever taking over an actor this one has finished with.
+    private void release(Address address) {
+        var claim = claims.remove(address.here());
+        if (claim != null) claim.release();
+    }
+
+    /// Starts the passivation sweep the first time an actor is summoned.
+    ///
+    /// It starts here rather than in the constructor because a system is
+    /// configured after it is built, and [#sweeping(Duration)] would otherwise
+    /// come too late to be read. A system that never summons anything never
+    /// starts a sweeper.
+    private void passivating() {
+        if (closed || !sweeping.compareAndSet(false, true)) return;
+        var period = Math.max(1, sweep.toMillis());
+        timers.scheduleWithFixedDelay(this::passivate, period, period, TimeUnit.MILLISECONDS);
+    }
+
+    /// Evicts the actors that have gone quiet.
+    ///
+    /// An actor is left alone while it is busy: mail waiting or a step in
+    /// flight means a sender has already been told its message was accepted,
+    /// and evicting would throw that message away. A settled actor goes as soon
+    /// as it is idle at all, without waiting out its timeout, because its
+    /// definition has said there is nothing more coming.
+    ///
+    /// Nothing here can throw into the timer thread. A sweep that failed once
+    /// and stopped would turn a passivating system into a leaking one, and the
+    /// failure would be invisible.
+    private void passivate() {
+        if (closed) return;
+        var now = java.lang.System.currentTimeMillis();
+        for (var actor : loaded.values()) {
+            try {
+                if (stale(actor, now)) actor.stop();
+            } catch (RuntimeException e) {
+                // one actor that cannot be examined must not stop the sweep
+            }
+        }
+    }
+
+    private boolean stale(Actor actor, long now) {
+        var spawn = actor.spawn();
+        if (actor.finished() || actor.busy()) return false;
+        if (actor.settled()) return true;
+        if (!spawn.passivates()) return false;
+        return now - actor.lastAt() >= spawn.idle().toMillis();
     }
 
     private Spawn spawnFor(Address address) {
@@ -424,11 +590,18 @@ public final class System implements AutoCloseable {
         var reason = death.getMessage() == null ? death.toString() : death.getMessage();
         var spawn = actor.spawn();
         registry.died(actor.address(), reason, spawn.restarts(), spawn.window());
+        var health = registry.health(actor.address());
+        if (health.quarantined()) {
+            trace(actor.address(), Trace.Kind.quarantined, Json.Object.of()
+                    .with("reason", reason)
+                    .with("restarts", health.restarts()));
+        }
         for (var waiting : actor.abandonedMail()) refuse(waiting, Undeliverable.Cause.died);
     }
 
     void unloaded(Actor actor) {
         loaded.remove(actor.address(), actor);
+        release(actor.address());
     }
 
     @Override
@@ -448,6 +621,13 @@ public final class System implements AutoCloseable {
                 // a transport that will not close cannot stop the system from closing
             }
         }
+        // Every actor that finished released its own claim. This covers the
+        // ones that did not finish inside the deadline above, because a claim
+        // left behind would keep another process out of an actor nobody is
+        // running.
+        ownership.close();
+        claims.clear();
+        traces.close();
         logs.close();
     }
 
@@ -459,9 +639,9 @@ public final class System implements AutoCloseable {
         var seen = new java.util.LinkedHashMap<Address, Registry.Entry>();
         loaded.forEach((address, actor) -> seen.put(address, new Registry.Entry(
                 address, actor.spawn().keepsLog(), true, actor.commands(), actor.depth(),
-                registry.lastAt(address), registry.health(address))));
+                registry.lastAt(address), actor.settled(), registry.health(address))));
         logs.catalogue().forEach(address -> seen.computeIfAbsent(address, at -> new Registry.Entry(
-                at, true, false, 0, 0, registry.lastAt(at), registry.health(at))));
+                at, true, false, 0, 0, registry.lastAt(at), false, registry.health(at))));
         return seen.values().stream();
     }
 

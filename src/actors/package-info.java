@@ -180,12 +180,89 @@
 ///     [System] by name, or write `java.lang.System.out` in the files that need
 ///     both.
 ///
+/// ## One process owns one actor
+///
+/// A durable actor is claimed before it is summoned, and the claim is held until
+/// its thread stops. Two processes over one log directory would otherwise each
+/// replay the same commands and each append to the same file, and neither would
+/// notice: the states diverge and the log ends up holding a sequence no single
+/// actor ever saw.
+///
+/// [System#rooted(java.nio.file.Path)] installs [Ownership#files] for this.
+/// Summoning an actor another process is running raises [OwnershipException],
+/// immediately and without waiting, because a second owner is a deployment
+/// fault rather than congestion. [Ownership] is an interface so that a cluster
+/// lease can replace the file lock without [System] changing.
+///
+/// ## Actors are evicted when they go quiet
+///
+/// An actor idle for [Spawn#idle()] is evicted, and the next message summons it
+/// again from its log. Summoning on demand and evicting when idle are the two
+/// halves of the virtual actor pattern, and a system with only the first half
+/// holds every actor it has ever touched.
+///
+/// A definition may also call an actor [Definition#settled(Object)], which
+/// evicts it without waiting out the timeout. That is a hint and never a fact: a
+/// settled actor still accepts messages, and a later definition is free to
+/// disagree, because a durable actor is always summonable again from the same
+/// commands.
+///
+/// ## What a crash costs
+///
+/// A command is appended before it is handled and its effects run afterwards, so
+/// a process that stops in between leaves a command whose effects never
+/// happened. [Log#applied()] records how far the effects got, and
+/// [Spawn#redelivers()] decides what happens to everything above that mark. The
+/// default carries out an effect at most once, which is what this package has
+/// always done; turning redelivery on makes it at least once and requires every
+/// effect of that actor to be idempotent. [Spawn] carries the table.
+///
+/// [Spawn#durability()] decides how hard the log works to keep a command it has
+/// just appended. [Durability#normal] can lose the newest commands to a power
+/// cut and never corrupts anything; [Durability#full] cannot lose one, and pays
+/// a flush per message.
+///
+/// ## Watching a system work
+///
+/// [System#traces()] publishes a [Trace] for every summon, eviction,
+/// quarantine, undeliverable message, abandoned effect and dropped late
+/// emission, live and in this process. A subscriber that falls behind loses the
+/// oldest events it had not read and [System#tracesDropped()] counts them.
+///
+/// [Flight] is one subscriber, and it writes those events into JDK Flight
+/// Recorder. It is the only file in this package that names `jdk.jfr`, so an
+/// image built without that module keeps working until something asks for a
+/// recording. A live inspector would be another subscriber, and it gets events
+/// as they happen rather than a recording that flushes about once a second.
+///
+/// `jdk.jfr` is outside `java.base`, so a stripped `jlink` image has to add it
+/// explicitly.
+///
+/// ## Changing an actor's state by hand
+///
+/// Send it a command. There is no API for editing a state directly and there
+/// will not be one.
+///
+/// A state is the fold of a log through the definition registered now, so a
+/// state written in from the outside would be erased by the next replay, and a
+/// state that cannot be reproduced from the commands is a state nobody can
+/// explain. Correcting an actor is therefore the same operation as using it:
+/// send the message that says what happened. The correction is recorded, it
+/// replays, and it is visible in [System#history(Address, long, int)] beside
+/// everything else.
+///
 /// ## What is deliberately not built
 ///
 /// Hot-reload generations and their class loaders, a browser inspector, a
-/// control socket, JFR metrics, log snapshots, supervision trees, and links and
-/// monitors. Each is a real feature and none is needed to know whether the core
-/// is right. The seams are there: [Definition] is the unit a reload would swap,
-/// [Logs] is where a snapshot or a tiered store would go, and [System#known()]
-/// is what an inspector would read.
+/// control socket, log snapshots, supervision trees, and links and monitors.
+/// Each is a real feature and none is needed to know whether the core is right.
+/// The seams are there: [Definition] is the unit a reload would swap, [Logs] is
+/// where a snapshot or a tiered store would go, [System#known()] is what an
+/// inspector would read, and [System#traces()] is the live feed it would show.
+///
+/// Log growth is the known limit. Nothing compacts a log and nothing snapshots
+/// one, so replay time grows with history for as long as an actor lives. That is
+/// accepted rather than overlooked: a snapshot has to be keyed to the definition
+/// that produced it, and a snapshot keyed wrongly silently resurrects the bug
+/// the definition was changed to fix.
 package actors;

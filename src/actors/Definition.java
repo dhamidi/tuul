@@ -50,6 +50,31 @@ public interface Definition<S> {
         return Json.of(String.valueOf(state));
     }
 
+    /// Whether this actor has, as today's rules see it, nothing further to do.
+    ///
+    /// **This is a hint and nothing may depend on it.** The system uses it to
+    /// evict a settled actor sooner than its idle timeout would, and the
+    /// registry reports it so that an operator can see what is cold. Nothing
+    /// about correctness changes either way, and it must stay that way, for a
+    /// reason worth stating plainly:
+    ///
+    /// A durable actor is always summonable again. "Settled" is an opinion held
+    /// by the definition that is registered now, and a later definition may
+    /// disagree — a returns policy that lets a closed basket be amended turns a
+    /// settled basket back into a working one, from the same commands. Treating
+    /// this as a fact, by refusing messages or by deleting a log, would make
+    /// that change impossible.
+    ///
+    /// A settled actor still accepts messages. It is evicted, not closed.
+    ///
+    /// The system calls this on the actor's own thread, straight after a message
+    /// is handled, and remembers the answer. It is never called from a sweeper
+    /// or an inspector, so an implementation does not have to be thread-safe. An
+    /// implementation that throws is treated as answering false.
+    default boolean settled(S state) {
+        return false;
+    }
+
     /// The address of one instance of this type, in the local system. This
     /// exists so that no caller ever writes the type name as a string.
     default Address at(String id) {

@@ -117,6 +117,10 @@ final class Actor implements Flow.Subscriber<Message> {
             return definition.inspect(application.state());
         }
 
+        boolean settled() {
+            return definition.settled(application.state());
+        }
+
         Application<S> application() {
             return application;
         }
@@ -132,6 +136,10 @@ final class Actor implements Flow.Subscriber<Message> {
     private volatile Delivery current;
     private volatile Thread thread;
     private volatile boolean finished;
+    private volatile boolean settled;
+    private volatile long lastAt = java.lang.System.currentTimeMillis();
+    private long seenAbandoned;
+    private long seenFenced;
     private Flow.Subscription subscription;
 
     Actor(System system, Address address, Definition<?> definition, Log log, Spawn spawn) {
@@ -182,6 +190,36 @@ final class Actor implements Flow.Subscriber<Message> {
         return finished;
     }
 
+    /// Whether the definition called this actor settled after the last message
+    /// it handled.
+    ///
+    /// The value is computed on the actor's own thread and published here, so a
+    /// sweeper can read it without touching the state. Asking the definition
+    /// from another thread would read a state that the actor thread is
+    /// allowed to be replacing at that moment.
+    boolean settled() {
+        return settled;
+    }
+
+    /// When this actor last finished handling a message, in epoch
+    /// milliseconds. A freshly built actor counts as active, so that summoning
+    /// one and sweeping immediately afterwards cannot evict it before it has
+    /// read its first message.
+    long lastAt() {
+        return lastAt;
+    }
+
+    /// Whether this actor is in the middle of something.
+    ///
+    /// A sweeper must not evict an actor with mail waiting or a step in
+    /// flight. Eviction goes through the mailbox as a control message, so it
+    /// would be handled in order and would not interrupt anything, but it would
+    /// still throw away messages that a sender has already been told were
+    /// accepted.
+    boolean busy() {
+        return current != null || mailbox.depth() > 0;
+    }
+
     /// Starts the thread that owns this actor. Replay happens on that thread
     /// rather than on the caller's, so summoning an actor with a long history
     /// does not block whoever sent the message that summoned it.
@@ -220,7 +258,11 @@ final class Actor implements Flow.Subscriber<Message> {
 
     private void loop() {
         try {
+            var started = java.lang.System.nanoTime();
             replay();
+            system.trace(address, Trace.Kind.summoned, Json.Object.of()
+                    .with("commands", log.length())
+                    .with("millis", (java.lang.System.nanoTime() - started) / 1_000_000.0));
             resume();
             while (true) {
                 var delivery = mailbox.take();
@@ -233,20 +275,54 @@ final class Actor implements Flow.Subscriber<Message> {
             system.died(this, death);
         } finally {
             finished = true;
+            system.trace(address, Trace.Kind.evicted, Json.Object.of()
+                    .with("handled", handled.get())
+                    .with("settled", settled));
             system.unloaded(this);
         }
     }
 
-    /// Rebuilds the state by advancing every logged command through the
-    /// definition that is registered now. Nothing is performed.
+    /// Rebuilds the state from the log.
+    ///
+    /// Everything at or below [Log#applied()] is advanced with its effects
+    /// suppressed, because those effects already happened and running them again
+    /// would send last week's mail a second time. That part is the law of this
+    /// package and it never changes.
+    ///
+    /// The tail above the mark is a command that was written down and whose
+    /// effects may not have finished. What happens to it is
+    /// [Spawn#redelivers()]: by default it is advanced quietly like everything
+    /// else, so its effects are lost; when redelivery is on it is handled
+    /// properly, effects and all, without being appended a second time.
     private void replay() {
+        var quiet = spawn.redelivers() ? log.applied() : java.lang.Long.MAX_VALUE;
         try (var entries = log.replay()) {
             entries.forEach(entry -> {
-                current = Delivery.replayed(address, entry.command(), entry.at());
-                body.advance(entry.command());
-                current = null;
+                if (entry.seq() <= quiet) {
+                    advanceQuietly(entry);
+                    return;
+                }
+                redeliver(entry);
             });
         }
+    }
+
+    private void advanceQuietly(Log.Entry entry) {
+        current = Delivery.replayed(address, entry.command(), entry.at());
+        try {
+            body.advance(entry.command());
+        } finally {
+            current = null;
+        }
+    }
+
+    /// Handles a logged command whose effects did not finish.
+    ///
+    /// The command is already in the log, so this must not append it again.
+    /// Everything else is an ordinary step: the state advances, the effects run,
+    /// what they emit goes into the mailbox, and the mark moves up to cover it.
+    private void redeliver(Log.Entry entry) {
+        apply(Delivery.replayed(address, entry.command(), entry.at()), entry.seq());
     }
 
     /// Delivers `actors.resumed` with effects enabled.
@@ -261,16 +337,87 @@ final class Actor implements Flow.Subscriber<Message> {
     }
 
     private void handle(Delivery delivery) {
+        var seq = delivery.control() ? 0 : log.append(delivery.command(), delivery.at());
+        apply(delivery, seq);
+    }
+
+    /// Advances the state, carries out the effects, and marks the command
+    /// applied.
+    ///
+    /// The order is the whole durability story, so it is worth being exact about
+    /// what each gap costs. `seq` is zero for a control message, which is never
+    /// logged and so never marked.
+    ///
+    ///   1. The command is already appended when this runs. A crash before that
+    ///      point loses it completely, and no mark can help, because the mailbox
+    ///      is in memory and a message it accepted was never written anywhere.
+    ///   2. The state advances. A crash here leaves the command above the mark.
+    ///   3. The effects run. A crash part way through leaves some of them done
+    ///      and the command still above the mark, which is why redelivery
+    ///      demands idempotent effects: it repeats all of them, including the
+    ///      ones that finished.
+    ///   4. What the effects emitted goes into the mailbox. Those messages are
+    ///      in memory and nowhere else until they are themselves handled and
+    ///      appended, so a crash here loses them. Redelivery recovers this case
+    ///      by running the effect again; the default mode does not, and the loss
+    ///      leaves no trace.
+    ///   5. The mark moves up. From here the command is settled and a later
+    ///      summon replays it quietly.
+    private void apply(Delivery delivery, long seq) {
         current = delivery;
         try {
-            if (!delivery.control()) log.append(delivery.command(), delivery.at());
             var step = body.advance(delivery.command());
             var emitted = body.perform(step.effects());
             for (var message : emitted) mailbox.self(new Delivery(message, address, address, null, null, clock()));
+            if (seq > 0) log.applied(seq);
             handled.incrementAndGet();
+            lastAt = clock();
+            settled = asks();
             system.registry().handled(address, delivery.at());
+            losses();
+            if (system.tracingMessages()) {
+                system.trace(address, Trace.Kind.handled, Json.Object.of()
+                        .with("type", delivery.command().type())
+                        .with("seq", seq));
+            }
         } finally {
             current = null;
+        }
+    }
+
+    /// Publishes a trace when the application has abandoned an effect or thrown
+    /// away a late one since the last message.
+    ///
+    /// [application.Application] counts both and has no callback, so this reads
+    /// the counters after each step and reports the difference. An abandoned
+    /// effect is therefore seen as soon as the step that abandoned it ends. A
+    /// fenced emission is seen later, because an effect that was abandoned may
+    /// finish minutes afterwards and there is no step in progress when it does.
+    /// It is picked up by the next message, or by the periodic gauge.
+    private void losses() {
+        var stopped = body.application().abandoned();
+        if (stopped > seenAbandoned) {
+            seenAbandoned = stopped;
+            system.trace(address, Trace.Kind.abandoned, Json.Object.of().with("total", stopped));
+        }
+        var late = body.application().fenced();
+        if (late > seenFenced) {
+            seenFenced = late;
+            system.trace(address, Trace.Kind.fenced, Json.Object.of().with("total", late));
+        }
+    }
+
+    /// Asks the definition whether this actor is settled, on the thread that
+    /// owns the state.
+    ///
+    /// A definition that throws here answers false. The value is a hint for
+    /// passivation, so a broken hint must not be able to kill an actor that is
+    /// otherwise working.
+    private boolean asks() {
+        try {
+            return body.settled();
+        } catch (Exception e) {
+            return false;
         }
     }
 

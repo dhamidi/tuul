@@ -56,6 +56,46 @@ public interface Log extends AutoCloseable {
     /// How many entries this log holds.
     long length();
 
+    /// The highest sequence number whose effects have finished.
+    ///
+    /// Everything at or below this mark was appended, advanced through the
+    /// state, and had its effects carried out. Everything above it was appended
+    /// and may or may not have got any further, because the process stopped
+    /// somewhere in between. That upper part is the *tail*, and
+    /// [Spawn#redelivers()] decides what happens to it on the next summon.
+    ///
+    /// A log that records nothing has no tail and answers zero.
+    default long applied() {
+        return 0;
+    }
+
+    /// Records that everything up to `seq` has been applied.
+    ///
+    /// The mark only ever moves forward. It is one value rather than a flag on
+    /// every entry because a single mailbox thread applies commands strictly in
+    /// order, so a high-water mark says exactly what a column of flags would say
+    /// and costs one row instead of one per command.
+    default void applied(long seq) {
+        // there is nothing to remember
+    }
+
+    /// Re-reads whatever this log caches about itself.
+    ///
+    /// A store may hand the same open log back for the whole life of a process,
+    /// because reopening a SQLite file for every summon costs more than keeping
+    /// it. That caching is safe while this process is the only writer, and a
+    /// handover breaks it: an actor evicted here releases its claim, another
+    /// process runs it and appends, and this process summons it again. The
+    /// cached sequence number is then behind the file, and the next append would
+    /// collide with a row that already exists.
+    ///
+    /// [System] calls this immediately after taking a claim, which is exactly
+    /// the moment the cache may be stale and the only moment it can be corrected
+    /// safely. A log that caches nothing does nothing here.
+    default void refresh() {
+        // there is nothing cached
+    }
+
     @Override
     void close();
 

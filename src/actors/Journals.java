@@ -35,15 +35,22 @@ final class Journals implements Logs {
 
     @Override
     public Log open(Address address) {
-        return open.computeIfAbsent(address.here(), at -> {
+        return open(address, Durability.normal);
+    }
+
+    @Override
+    public Log open(Address address, Durability durability) {
+        var journal = open.computeIfAbsent(address.here(), at -> {
             var file = at.path(root);
             try {
                 Files.createDirectories(file.getParent());
             } catch (IOException e) {
                 throw new UncheckedIOException("cannot make the log directory for " + at, e);
             }
-            return new Journal(file, at);
+            return new Journal(file, at, durability);
         });
+        journal.synchronous(durability);
+        return journal;
     }
 
     @Override
