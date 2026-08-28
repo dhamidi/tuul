@@ -195,7 +195,7 @@ public final class HandlerTest {
             Check.equal("the update stream answers", 200, open.status());
             Check.that("as an event stream",
                     open.headers().first("Content-Type").orElse("").startsWith("text/event-stream"));
-            Check.equal("with one page listening", 1, browser.cable().subscribers());
+            Check.equal("with one page listening", 1, listening(browser, 1));
 
             browser.cable().broadcast(Browser.INDEX, web.ui.Turbo.refresh());
             var reader = new BufferedReader(open.reader());
@@ -208,6 +208,20 @@ public final class HandlerTest {
             Check.that("as something Turbo acts on rather than a message to read",
                     lines.toString().contains("refresh"));
         }
+    }
+
+    /// How many pages the cable has, once it has them.
+    ///
+    /// The handler runs on a thread of its own, so a subscription appears a
+    /// moment after the response does. Sampling the count the instant the
+    /// response arrives is a check on the scheduler rather than on the cable —
+    /// it passes on an idle machine and fails on a busy one, which is the worst
+    /// way for a test to be wrong. Waiting for the number still fails when
+    /// nobody ever subscribes.
+    private static int listening(Browser browser, int wanted) throws InterruptedException {
+        var deadline = System.nanoTime() + java.time.Duration.ofSeconds(2).toNanos();
+        while (System.nanoTime() < deadline && browser.cable().subscribers() != wanted) Thread.sleep(5);
+        return browser.cable().subscribers();
     }
 
     /// What the answer says it describes, or nothing when the answer was not

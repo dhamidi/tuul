@@ -15,6 +15,7 @@ public final class UiTest {
     private UiTest() {}
 
     public static void run() throws IOException {
+        ComponentsTest.run();
         escaping();
         rawText();
         elements();

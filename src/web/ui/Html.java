@@ -22,12 +22,16 @@ import java.util.function.Function;
 /// abstraction: `Html card(User user)` composes by being called, and there is no
 /// registry, no lifecycle and no base class to extend.
 ///
+/// The cases are closed, with one exception: [Component], which is how a design
+/// system adds names to markup without adding kinds of it.
+///
 /// The point of building markup out of values rather than out of string
 /// concatenation is that the broken cases cannot be written down. Text is
 /// escaped for the place it lands in, a name that is not a name is refused, a
 /// void element cannot have children, and the text inside a `<script>` cannot
 /// end the script.
-public sealed interface Html extends Node {
+public sealed interface Html extends Node permits
+        Html.Text, Html.Unsafe, Html.Element, Html.RawText, Html.Fragment, Html.Deferred, Component {
 
     /// Elements that are their whole tag. HTML gives them no closing tag, so
     /// children would have nowhere to go.

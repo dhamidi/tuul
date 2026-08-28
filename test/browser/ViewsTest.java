@@ -115,10 +115,11 @@ public final class ViewsTest {
 
         var empty = markup(Views.symbol(routes, Symbol.nothing().asking("json.Empty")
                 .describing(Json.Object.of().with("class", "json.Empty").with("kind", "class"))));
-        Check.that("a type with no members has no section for them", !empty.contains("<h2>"));
+        Check.that("a type with no members has no section for them",
+                !empty.contains("Constructors and methods") && !empty.contains("Fields"));
         Check.that("a type with no supertype says nothing about one", !empty.contains("extends"));
         Check.that("nor about cases it does not have", !empty.contains("permits"));
-        Check.that("and one with nothing to say says nothing", !empty.contains("class=\"doc\""));
+        Check.that("and one with nothing to say says nothing", !empty.contains("itemprop=\"doc\""));
     }
 
     /// The members, which are what a search result points into.
@@ -127,10 +128,10 @@ public final class ViewsTest {
 
         Check.that("a member is a resource of its own", page.contains("itemtype=\"/Member\""));
         Check.that("with the signature it was declared with", page.contains("itemprop=\"signature\""));
-        Check.that("a member has the id a result links to", page.contains("<li id=\"write\""));
+        Check.that("a member has the id a result links to", page.contains("id=\"write\""));
         Check.that("an overload gets an id of its own, because two cannot share one",
-                page.contains("<li id=\"write-2\""));
-        Check.equal("and a third gets a third", 1, count(page, "<li id=\"write-3\""));
+                page.contains("id=\"write-2\""));
+        Check.equal("and a third gets a third", 1, count(page, "id=\"write-3\""));
 
         Check.that("a type named in a signature is a link, so a return type can be followed",
                 page.contains("href=\"/symbols/java.io.Writer\""));

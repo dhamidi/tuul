@@ -6,8 +6,11 @@ import static web.ui.Tags.*;
 import browser.Symbols.Found;
 import browser.Symbols.Symbol;
 import java.util.ArrayList;
+import java.util.HashMap;
 import java.util.List;
+import java.util.Locale;
 import java.util.Map;
+import java.util.regex.Pattern;
 import json.Json;
 import web.assets.Assets;
 import web.assets.Importmap;
@@ -18,14 +21,19 @@ import web.forms.Submission;
 import web.ui.Html;
 import web.ui.Microdata;
 import web.ui.Node;
+import web.ui.Props;
 import web.ui.Stimulus;
 import web.ui.Turbo;
+import web.ui.Ui;
 
-/// The pages, as components.
+/// The pages, written in components.
 ///
-/// Every one of them renders from the same JSON description `tuul docs --json`
-/// prints, so a page cannot say something about a type that the command would
-/// not. Every link is a route asked for by name, so no page here contains a URL.
+/// Every one renders from the same JSON description `tuul docs --json` prints,
+/// so a page cannot say something about a type that the command would not.
+/// Every link is a route asked for by name, so no page here contains a URL. And
+/// every piece of it is a component from [Ui], so what a page *looks* like is
+/// decided in one stylesheet rather than in the markup of whichever view
+/// happened to need it.
 public final class Views {
 
     /// The frame search results land in. Naming it once matters more than it
@@ -34,48 +42,51 @@ public final class Views {
     /// updating.
     public static final String RESULTS = "results";
 
-    /// A qualified type name, which is what can be linked: dotted, and ending
-    /// in a segment that begins with a capital. `java.lang.String` is one and
-    /// the parameter name after it is not.
-    private static final java.util.regex.Pattern QUALIFIED =
-            java.util.regex.Pattern.compile("[a-zA-Z_$][\\w$]*(?:\\.[a-zA-Z_$][\\w$]*)*\\.[A-Z][\\w$]*");
-
     /// The icon, by its logical name — the one place it is spelled, so the
     /// page's link and the conventional path cannot point at different files.
     public static final String ICON = "favicon.svg";
+
+    /// A qualified type name, which is what can be linked: dotted, and ending
+    /// in a segment that begins with a capital. `java.lang.String` is one and
+    /// the parameter name after it is not.
+    private static final Pattern QUALIFIED =
+            Pattern.compile("[a-zA-Z_$][\\w$]*(?:\\.[a-zA-Z_$][\\w$]*)*\\.[A-Z][\\w$]*");
 
     private Views() {}
 
     /// A whole page. The import map and the module that starts Turbo and
     /// Stimulus are here rather than in each page, since a page that forgot
     /// them would be a page that quietly stopped being interactive.
-    public static Html page(Router routes, Assets assets, Importmap modules, String title, Submission search,
+    public static Html page(Router routes, Assets assets, Importmap modules, String heading, Submission search,
                             Node... content) {
         return document(
                 lang("en"),
-                        head(
-                                meta(charset("utf-8")),
-                                meta(name("viewport"), content("width=device-width, initial-scale=1")),
-                                title(text(title + " — tuul")),
-                                link(rel("icon"), type("image/svg+xml"), href(assets.url(ICON))),
-                                link(rel("stylesheet"), href(assets.url("browser.css"))),
-                                Html.deferred(out -> modules.write(assets, out)),
-                                script(BOOT, type("module"))),
-                        body(
-                                Cable.source(routes.path(Routes.UPDATES)),
-                                header(classes("bar"),
-                                        a(classes("brand"), href(routes.path(Routes.HOME)), text("tuul")),
-                                        search(search)),
-                                main(content)));
+                head(
+                        meta(charset("utf-8")),
+                        meta(name("viewport"), content("width=device-width, initial-scale=1")),
+                        title(text(heading + " — tuul")),
+                        link(rel("icon"), type("image/svg+xml"), href(assets.url(ICON))),
+                        link(rel("stylesheet"), href(assets.url("ui.css"))),
+                        link(rel("stylesheet"), href(assets.url("browser.css"))),
+                        Html.deferred(out -> modules.write(assets, out)),
+                        script(BOOT, type("module"))),
+                body(
+                        Cable.source(routes.path(Routes.UPDATES)),
+                        header(classes("bar"),
+                                Ui.group(Props.of("gap", "lg"),
+                                        Ui.anchor(Props.of("href", routes.path(Routes.HOME)), classes("brand"),
+                                                text("tuul")),
+                                        search(search))),
+                        main(content)));
     }
 
     /// The search form, which lives in the bar on every page — one form, so
     /// that a search from a symbol page is the same search as one from the
     /// front page, and nothing has to decide which of two boxes was meant.
     ///
-    /// It targets the results frame and asks Stimulus to
-    /// submit it as somebody types — the debounce is the controller's, because
-    /// a keystroke is not a question worth asking the index.
+    /// It targets the results frame and asks Stimulus to submit it as somebody
+    /// types — the debounce is the controller's, because a keystroke is not a
+    /// question worth asking the index.
     ///
     /// The search advances the history, so a search has a URL: it can be
     /// shared, reloaded, and undone with Back. A frame that updates without
@@ -87,23 +98,22 @@ public final class Views {
                 Stimulus.controller("search"),
                 Stimulus.action(Stimulus.on("input", "search", "ask")),
                 Turbo.targetFrame(RESULTS),
-                Turbo.advance(),
-                button(type("submit"), text("Search")));
+                Turbo.advance());
     }
 
     /// The results, always inside their frame: Turbo takes the frame out of
     /// whatever page it arrives in, so the same markup answers a search whether
     /// it was typed or asked for directly.
     public static Html results(Router routes, Found found) {
-        if (!found.problem().isEmpty()) return Turbo.frame(RESULTS, problem(found.problem()));
-        if (!found.asked()) {
-            return Turbo.frame(RESULTS, p(classes("hint"), text("Type to search the index.")));
-        }
-        if (found.matches().isEmpty()) {
-            return Turbo.frame(RESULTS, p(classes("hint"), text("Nothing matches " + found.query() + ".")));
-        }
-        return Turbo.frame(RESULTS,
-                ol(classes("matches"), Html.each(found.matches(), match -> match(routes, match))));
+        return Turbo.frame(RESULTS, panel(routes, found));
+    }
+
+    private static Html panel(Router routes, Found found) {
+        if (!found.problem().isEmpty()) return problem(found.problem());
+        if (!found.asked()) return Ui.blank(text("Type to search the index."));
+        if (found.matches().isEmpty()) return Ui.blank(text("Nothing matches " + found.query() + "."));
+        return Ui.items(Props.of().on("divided"),
+                Html.each(found.matches(), match -> match(routes, match)));
     }
 
     /// One result. The link leaves the frame it is in: a result is a
@@ -113,10 +123,12 @@ public final class Views {
     private static Html match(Router routes, Json match) {
         if (!(match instanceof Json.Object entry)) return Html.nothing();
         var symbol = entry.string("symbol", "");
-        return li(Microdata.scope(), Microdata.type("/Symbol"),
-                a(href(symbolHref(routes, symbol)), Turbo.targetFrame(Turbo.TOP),
-                        code(Microdata.of("name"), text(symbol))),
-                span(classes("kind"), Microdata.of("kind"), text(kind(entry.string("kind", "")))),
+        return Ui.item(Microdata.scope(), Microdata.type("/Symbol"),
+                Ui.group(Props.of("gap", "sm", "align", "baseline"),
+                        Ui.anchor(Props.of("href", symbolHref(routes, symbol), "frame", Turbo.TOP),
+                                Ui.mono(Microdata.of("name"), text(symbol))),
+                        Ui.badge(Props.of("tone", "muted"), Microdata.of("kind"),
+                                text(kind(entry.string("kind", ""))))),
                 documentation(entry.string("doc", "")));
     }
 
@@ -129,62 +141,82 @@ public final class Views {
     /// catch. Saying it is a problem makes `expect no item problem` mean
     /// something, and it meant nothing while this was a bare paragraph.
     private static Html problem(String message) {
-        return p(classes("problem"), Microdata.scope(), Microdata.type("/Problem"),
-                span(Microdata.of("message"), text(message)));
+        return Ui.notice(Props.of("tone", "error"), Microdata.scope(), Microdata.type("/Problem"),
+                Ui.prose(Microdata.of("message"), text(message)));
     }
 
-    /// One symbol: what it is, what it says about itself, and what it declares.
+    /// One symbol: where it sits, what it is, what it says about itself, and
+    /// what it declares.
     public static Html symbol(Router routes, Symbol state) {
-        if (!state.problem().isEmpty()) return section(h1(text(state.name())), problem(state.problem()));
+        if (!state.problem().isEmpty()) {
+            return section(Ui.stack(Ui.heading(Props.of("level", "1"), text(state.name())),
+                    problem(state.problem())));
+        }
 
         var description = state.description();
-        var content = new ArrayList<Node>();
-        content.add(Microdata.scope());
-        content.add(Microdata.type("/Symbol"));
-        content.add(h1(
-                span(classes("kind"), Microdata.of("kind"), text(description.string("kind", "class"))),
-                text(" "),
-                code(Microdata.of("name"), text(description.string("class", "")))));
-        content.add(modifiers(description));
-        content.add(documentation(description.string("doc", "")));
-        content.add(inherits(routes, "extends", one(description, "extends")));
-        content.add(inherits(routes, "implements", strings(description, "implements")));
-        content.add(relates(routes, "permits", "case", strings(description, "permits")));
-        content.add(relates(routes, "declares", "declares", strings(description, "nested")));
-        content.add(tags(description));
-        content.add(members(routes, "Constructors and methods", description, "methods"));
-        content.add(members(routes, "Fields", description, "fields"));
-        return article(content.toArray(new Node[0]));
+        var qualified = description.string("class", "");
+        return Ui.stack(Props.of("gap", "lg"), Microdata.scope(), Microdata.type("/Symbol"),
+                where(routes, qualified),
+                Ui.stack(Props.of("gap", "sm"),
+                        Ui.group(Props.of("gap", "sm", "align", "baseline"),
+                                Ui.heading(Props.of("level", "1"),
+                                        Ui.mono(Microdata.of("name"), text(qualified))),
+                                Ui.badge(Microdata.of("kind"), text(description.string("kind", "class")))),
+                        modifiers(description),
+                        documentation(description.string("doc", ""))),
+                relations(routes, description),
+                tags(description),
+                members(routes, "Constructors and methods", description, "methods"),
+                members(routes, "Fields", description, "fields"));
+    }
+
+    /// The package a type is in, as a trail. It is the only hierarchy this page
+    /// can show today — a package has no page of its own yet — so the last
+    /// crumb is the type and the ones before it are where it lives.
+    private static Html where(Router routes, String qualified) {
+        var dot = qualified.lastIndexOf('.');
+        if (dot < 0) return Html.nothing();
+        return Ui.breadcrumbs(
+                Ui.crumb(Props.of("href", routes.path(Routes.HOME)), text("tuul")),
+                Ui.crumb(Props.of(), text(qualified.substring(0, dot))),
+                Ui.crumb(Props.of(), text(qualified.substring(dot + 1))));
     }
 
     private static Html modifiers(Json.Object description) {
         var modifiers = strings(description, "modifiers");
         if (modifiers.isEmpty()) return Html.nothing();
-        return p(classes("modifiers"), text(String.join(" ", modifiers)));
+        return Ui.prose(Props.of("tone", "muted"), text(String.join(" ", modifiers)));
     }
 
     private static Html documentation(String doc) {
-        return doc.isBlank() ? Html.nothing() : p(classes("doc"), Microdata.of("doc"), text(doc));
+        if (doc.isBlank()) return Html.nothing();
+        return Ui.prose(Props.of("tone", "muted").on("wrap"), Microdata.of("doc"), text(doc));
     }
 
-    /// `extends` and `implements`, with every named type a link — following a
-    /// type to its supertype is the whole reason somebody opens a page like
-    /// this.
-    private static Html inherits(Router routes, String label, List<String> types) {
-        return relates(routes, label, "supertype", types);
+    /// What a type extends, implements, permits and declares — one list of
+    /// labelled values, because they are the same shape and a reader reads them
+    /// together.
+    private static Html relations(Router routes, Json.Object description) {
+        var facts = new ArrayList<Node>();
+        fact(routes, facts, "extends", "supertype", one(description, "extends"));
+        fact(routes, facts, "implements", "supertype", strings(description, "implements"));
+        fact(routes, facts, "permits", "case", strings(description, "permits"));
+        fact(routes, facts, "declares", "declares", strings(description, "nested"));
+        if (facts.isEmpty()) return Html.nothing();
+        return Ui.facts(facts.toArray(new Node[0]));
     }
 
-    /// The types a type names, each a link and each said to be what it is: a
-    /// supertype, a case of a sealed type, a type declared inside this one. A
-    /// spec asking for a case should not have to accept a supertype.
-    private static Html relates(Router routes, String label, String property, List<String> types) {
-        if (types.isEmpty()) return Html.nothing();
+    /// One relation, with every named type a link and each said to be what it
+    /// is: a supertype, a case of a sealed type, a type declared inside this
+    /// one. A spec asking for a case should not have to accept a supertype.
+    private static void fact(Router routes, List<Node> facts, String label, String property, List<String> types) {
+        if (types.isEmpty()) return;
         var linked = new ArrayList<Html>();
         for (var type : types) {
             if (!linked.isEmpty()) linked.add(text(", "));
             linked.add(reference(routes, type, property));
         }
-        return p(classes("inherits"), span(classes("label"), text(label + " ")), Html.fragment(linked));
+        facts.add(Ui.fact(Props.of("label", label), Html.fragment(linked)));
     }
 
     /// A type name as a link, when it is a name this browser could show. A
@@ -193,18 +225,20 @@ public final class Views {
     private static Html reference(Router routes, String type, String property) {
         var base = type.contains("<") ? type.substring(0, type.indexOf('<')) : type;
         var rest = type.substring(base.length());
-        if (!base.contains(".")) return code(Microdata.of(property), text(type));
-        return code(Microdata.of(property),
-                a(href(symbolPath(routes, base)), text(base)),
+        if (!base.contains(".")) return Ui.mono(Microdata.of(property), text(type));
+        return Ui.mono(Microdata.of(property),
+                Ui.anchor(Props.of("href", symbolPath(routes, base)), text(base)),
                 text(rest));
     }
 
     private static Html tags(Json.Object description) {
         var tags = objects(description, "tags");
         if (tags.isEmpty()) return Html.nothing();
-        return ul(classes("tags"), Html.each(tags, tag -> li(
-                span(classes("tag"), text("@" + tag.string("tag", ""))),
-                text(" " + (tag.string("name", "") + " " + tag.string("text", "")).strip()))));
+        return Ui.items(Html.each(tags, tag -> Ui.item(
+                Ui.group(Props.of("gap", "sm", "align", "baseline"),
+                        Ui.badge(Props.of("tone", "plain"), text("@" + tag.string("tag", ""))),
+                        Ui.prose(Props.of("tone", "muted"),
+                                text((tag.string("name", "") + " " + tag.string("text", "")).strip()))))));
     }
 
     /// The members, each with an id, so that a search result for one can link
@@ -214,20 +248,21 @@ public final class Views {
     private static Html members(Router routes, String heading, Json.Object description, String key) {
         var members = objects(description, key);
         if (members.isEmpty()) return Html.nothing();
-        var taken = new java.util.HashMap<String, Integer>();
+        var taken = new HashMap<String, Integer>();
         var written = new ArrayList<Html>();
         for (var member : members) {
             var name = member.string("name", "");
             var seen = taken.merge(name, 1, Integer::sum);
-            written.add(member(routes, member, seen == 1 ? anchor(name) : anchor(name) + "-" + seen));
+            written.add(member(routes, member, seen == 1 ? name : name + "-" + seen));
         }
-        return section(classes("members"), h2(text(heading)), ul(Html.fragment(written)));
+        return Ui.stack(Props.of("gap", "sm"),
+                Ui.heading(Props.of("level", "2"), text(heading)),
+                Ui.items(Props.of().on("divided"), Html.fragment(written)));
     }
 
     private static Html member(Router routes, Json.Object member, String anchor) {
-        return li(id(anchor), Microdata.scope(), Microdata.type("/Member"),
-                code(classes("signature"), Microdata.of("signature"),
-                        signature(routes, member.string("signature", ""))),
+        return Ui.item(id(anchor), Microdata.scope(), Microdata.type("/Member"),
+                Ui.mono(Microdata.of("signature"), signature(routes, member.string("signature", ""))),
                 documentation(member.string("doc", "")),
                 tags(member));
     }
@@ -244,7 +279,7 @@ public final class Views {
         var written = 0;
         while (names.find()) {
             if (names.start() > written) parts.add(text(signature.substring(written, names.start())));
-            parts.add(a(href(symbolPath(routes, names.group())), text(names.group())));
+            parts.add(Ui.anchor(Props.of("href", symbolPath(routes, names.group())), text(names.group())));
             written = names.end();
         }
         if (written < signature.length()) parts.add(text(signature.substring(written)));
@@ -254,7 +289,7 @@ public final class Views {
     /// The index files a kind as the enum spells it. A page is read by a
     /// person, and `RECORD` is shouting.
     private static String kind(String kind) {
-        return kind.toLowerCase(java.util.Locale.ROOT);
+        return kind.toLowerCase(Locale.ROOT);
     }
 
     private static String symbolPath(Router routes, String symbol) {
@@ -267,14 +302,7 @@ public final class Views {
     private static String symbolHref(Router routes, String symbol) {
         var member = symbol.indexOf('#');
         if (member < 0) return symbolPath(routes, symbol);
-        return symbolPath(routes, symbol.substring(0, member)) + "#" + anchor(symbol.substring(member + 1));
-    }
-
-    /// The id a member is given on its type's page. Overloads share a name, so
-    /// the later ones are numbered — an id has to be unique, and the plain name
-    /// lands on the first, which is what a link to `#of` should do.
-    private static String anchor(String member) {
-        return member;
+        return symbolPath(routes, symbol.substring(0, member)) + "#" + symbol.substring(member + 1);
     }
 
     private static List<String> one(Json.Object description, String key) {

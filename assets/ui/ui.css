@@ -1,0 +1,157 @@
+/* The design system: what the ui- class names mean.
+ *
+ * Tokens first, components second. A component never writes a colour or a
+ * length of its own — it spends a token — so changing the scale changes the
+ * whole design rather than one corner of it, and two things that should look
+ * alike cannot drift apart. */
+
+:root {
+  /* Space, on a scale, so gaps relate to each other instead of being guessed. */
+  --ui-space-0: 0;
+  --ui-space-1: 0.25rem;
+  --ui-space-2: 0.5rem;
+  --ui-space-3: 0.75rem;
+  --ui-space-4: 1rem;
+  --ui-space-6: 1.5rem;
+  --ui-space-8: 2rem;
+
+  /* Type, likewise. */
+  --ui-text-sm: 0.85rem;
+  --ui-text-base: 1rem;
+  --ui-text-lg: 1.15rem;
+  --ui-text-xl: 1.4rem;
+
+  --ui-ink: #1a1a1a;
+  --ui-paper: #fdfdfc;
+  --ui-surface: #ffffff;
+  --ui-muted: #6b6b66;
+  --ui-rule: #e2e2dd;
+  --ui-link: #1b5e9c;
+  --ui-accent: #7a3e00;
+  --ui-warn: #8a5a00;
+  --ui-error: #9c2c1b;
+  --ui-wash: #f4f4f1;
+
+  --ui-radius: 6px;
+  --ui-mono: ui-monospace, SFMono-Regular, Menlo, monospace;
+  --ui-sans: system-ui, -apple-system, "Segoe UI", sans-serif;
+}
+
+/* The same design after dark. Only the tokens change; no component knows. */
+@media (prefers-color-scheme: dark) {
+  :root {
+    --ui-ink: #e8e8e4;
+    --ui-paper: #17171a;
+    --ui-surface: #1d1d21;
+    --ui-muted: #9a9a94;
+    --ui-rule: #2e2e33;
+    --ui-link: #79b8f3;
+    --ui-accent: #e0a76a;
+    --ui-warn: #d8a866;
+    --ui-error: #f0907f;
+    --ui-wash: #202024;
+  }
+}
+
+/* Layout ------------------------------------------------------------------ */
+
+.ui-stack { display: flex; flex-direction: column; }
+.ui-group { display: flex; flex-wrap: wrap; }
+.ui-group--grow > * { flex: 1; }
+
+.ui-gap-none { gap: var(--ui-space-0); }
+.ui-gap-sm { gap: var(--ui-space-2); }
+.ui-gap-md { gap: var(--ui-space-4); }
+.ui-gap-lg { gap: var(--ui-space-6); }
+
+.ui-align-center { align-items: center; }
+.ui-align-start { align-items: flex-start; }
+.ui-align-end { align-items: flex-end; }
+.ui-align-baseline { align-items: baseline; }
+
+.ui-card {
+  background: var(--ui-surface);
+  border: 1px solid var(--ui-rule);
+  border-radius: var(--ui-radius);
+}
+.ui-pad-sm { padding: var(--ui-space-2); }
+.ui-pad-md { padding: var(--ui-space-4); }
+.ui-pad-lg { padding: var(--ui-space-6); }
+
+.ui-divider { border: 0; border-top: 1px solid var(--ui-rule); margin: var(--ui-space-4) 0; }
+
+/* Typography -------------------------------------------------------------- */
+
+.ui-heading { margin: 0; font-weight: 600; line-height: 1.25; }
+.ui-heading--1 { font-size: var(--ui-text-xl); }
+.ui-heading--2 {
+  font-size: var(--ui-text-sm);
+  text-transform: uppercase;
+  letter-spacing: 0.06em;
+  color: var(--ui-muted);
+}
+.ui-heading--3 { font-size: var(--ui-text-lg); }
+
+.ui-prose { margin: 0; }
+.ui-tone-muted { color: var(--ui-muted); }
+/* Doc comments arrive with their line structure intact, so an example in one
+   stays on its own lines instead of running into the prose around it. */
+.ui-prose--pre { white-space: pre-wrap; }
+
+.ui-mono { font-family: var(--ui-mono); font-size: 0.92em; }
+
+.ui-link { color: var(--ui-link); text-decoration: none; }
+.ui-link:hover { text-decoration: underline; }
+/* Focus is visible, and visible in the same place a click would land. */
+.ui-link:focus-visible,
+.ui-crumb a:focus-visible {
+  outline: 2px solid var(--ui-link);
+  outline-offset: 2px;
+  border-radius: 2px;
+}
+
+/* Data display ------------------------------------------------------------ */
+
+.ui-badge {
+  font-size: var(--ui-text-sm);
+  font-weight: 500;
+  padding: 0.05em 0.45em;
+  border-radius: var(--ui-radius);
+}
+.ui-badge--accent { color: var(--ui-accent); background: var(--ui-wash); }
+.ui-badge--muted { color: var(--ui-muted); background: var(--ui-wash); }
+.ui-badge--plain { color: var(--ui-muted); }
+
+.ui-items { list-style: none; padding: 0; margin: 0; }
+.ui-item { padding: var(--ui-space-2) 0; }
+.ui-items--divided > .ui-item + .ui-item { border-top: 1px solid var(--ui-rule); }
+
+.ui-facts { margin: 0; display: grid; grid-template-columns: auto 1fr; gap: 0 var(--ui-space-2); }
+.ui-fact-label { color: var(--ui-muted); }
+.ui-fact-value { margin: 0; }
+
+.ui-crumbs {
+  list-style: none;
+  display: flex;
+  flex-wrap: wrap;
+  gap: var(--ui-space-1);
+  padding: 0;
+  margin: 0;
+  color: var(--ui-muted);
+  font-size: var(--ui-text-sm);
+}
+.ui-crumb + .ui-crumb::before { content: "›"; margin-right: var(--ui-space-1); }
+
+.ui-blank { color: var(--ui-muted); padding: var(--ui-space-4) 0; }
+
+/* Feedback ---------------------------------------------------------------- */
+
+.ui-notice {
+  border: 1px solid var(--ui-rule);
+  border-left-width: 3px;
+  border-radius: var(--ui-radius);
+  padding: var(--ui-space-2) var(--ui-space-3);
+}
+.ui-notice--info { border-left-color: var(--ui-link); }
+.ui-notice--warn { border-left-color: var(--ui-warn); color: var(--ui-warn); }
+.ui-notice--error { border-left-color: var(--ui-error); color: var(--ui-error); }
