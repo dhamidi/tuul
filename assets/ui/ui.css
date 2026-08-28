@@ -22,11 +22,21 @@
   --ui-text-base: 1rem;
   --ui-text-lg: 1.2rem;
   --ui-text-xl: 1.44rem;
+  /* One more step, because the scale ran out before the page did. A title, its
+     sections and its prose are three ranks and there were two sizes for them,
+     so the name of the thing you are reading was the same size as every
+     heading under it. */
+  --ui-text-2xl: 1.728rem;
 
   /* How wide prose is allowed to get. A column can be wide enough for a
      signature and still too wide to read a sentence in, so the measure is a
-     count of characters rather than a share of the page. */
-  --ui-measure: 70ch;
+     count of characters rather than a share of the page.
+
+     `ch` is the width of a zero, not of an average letter, so in a
+     proportional face it buys more characters than it names: 70ch measured
+     out at 84 characters a line, half again the 45-75 that reads comfortably.
+     58ch measures 70. */
+  --ui-measure: 58ch;
 
   --ui-ink: #1a1a1a;
   --ui-paper: #fdfdfc;
@@ -42,6 +52,12 @@
   --ui-warn: #8a5a00;
   --ui-error: #9c2c1b;
   --ui-wash: #f4f4f1;
+  /* Code needs a surface of its own. The wash is the faintest possible fill —
+     a row under the pointer, the face of a button — and a sample of code has
+     to read as a panel from across the page, which is a different job and a
+     different value. Borrowing the wash for it made a code block on paper a
+     one-percent difference: invisible. */
+  --ui-code: #eeede8;
 
   --ui-radius: 6px;
   --ui-mono: ui-monospace, SFMono-Regular, Menlo, monospace;
@@ -62,6 +78,7 @@
     --ui-warn: #d8a866;
     --ui-error: #f0907f;
     --ui-wash: #202024;
+    --ui-code: #1e1e26;
   }
 }
 
@@ -98,7 +115,7 @@
 /* Typography -------------------------------------------------------------- */
 
 .ui-heading { margin: 0; font-weight: 600; line-height: 1.25; }
-.ui-heading--1 { font-size: var(--ui-text-xl); }
+.ui-heading--1 { font-size: var(--ui-text-2xl); }
 /* A section heading is bigger and darker than what it introduces. It was
    smaller and dimmer, which reads as a caption on the thing above it rather
    than a title for the sixty things below — and on a page that long the rule

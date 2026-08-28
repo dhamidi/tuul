@@ -154,39 +154,83 @@ turbo-frame { display: block; }
  *
  * The pieces are ordinary elements — the renderer emits p, pre, code, h2, ul —
  * so they are styled here rather than by a component: the markup is the
- * author's, not this application's. Everything is capped at the measure and
- * every block that could be wider than the column scrolls inside itself, which
- * is what a code sample in a comment does when nothing stops it. */
-.ui-doc { max-width: var(--ui-measure); color: var(--ui-muted); }
+ * author's, not this application's. Prose is capped at the measure and every
+ * block that could be wider than the column scrolls inside itself, which is
+ * what a code sample in a comment does when nothing stops it. */
+/* Body text is ink, not muted. Muted is for what sits beside the writing — a
+ * label, a count — and a whole documentation page set in it inverts the page:
+ * the headings and the bold lead-ins are the only ink on it, so emphasis reads
+ * louder than the sentences it is emphasising. Long-form reading wants the
+ * prose at full contrast and the furniture quiet. */
+/* One column, and everything in it. Capping the sentences at the measure and
+ * letting code samples run wider gave the page three different left-to-right
+ * extents — prose, the rule under a heading, and the code — and three edges
+ * read as a mistake rather than as an intention, whatever the reason for each
+ * of them. A sample that does not fit scrolls inside itself instead. */
+.ui-doc { max-width: var(--ui-measure); color: var(--ui-ink); line-height: 1.65; }
 .ui-doc > :first-child { margin-top: 0; }
 .ui-doc > :last-child { margin-bottom: 0; }
 .ui-doc p { margin: var(--ui-space-3) 0; overflow-wrap: anywhere; }
-.ui-doc h1, .ui-doc h2, .ui-doc h3, .ui-doc h4 {
-  margin: var(--ui-space-5) 0 var(--ui-space-2);
-  font-size: var(--ui-text-base);
+
+/* A heading that is the size of what it introduces is not a heading. These
+ * were --ui-text-base with a margin-top of var(--ui-space-5) — a token that
+ * does not exist, which is invalid at computed-value time and so silently
+ * dropped the whole margin: same size as the body, and no air above it. A bold
+ * lead-in outranked a section title.
+ *
+ * h1 and h2 take --ui-heading--2's rule for the same reason it has one: on a
+ * page this long the line under a heading is the only landmark a scrolling
+ * reader gets. They stop at --ui-text-lg rather than going bigger because the
+ * page title above them is --ui-text-2xl, and a heading inside a doc comment
+ * is subordinate to the name of the thing being documented. */
+.ui-doc :is(h1, h2, h3, h4) {
+  margin: var(--ui-space-8) 0 var(--ui-space-3);
   font-weight: 600;
+  line-height: 1.25;
   color: var(--ui-ink);
 }
+.ui-doc :is(h1, h2) {
+  font-size: var(--ui-text-lg);
+  padding-bottom: var(--ui-space-2);
+  border-bottom: 1px solid var(--ui-rule);
+}
+.ui-doc :is(h3, h4) { font-size: var(--ui-text-base); margin-top: var(--ui-space-6); }
+
+/* Inline and block code share one surface, because they are one thing. The
+ * chip carries no colour of its own: --ui-accent on a fill is what a badge is
+ * here, and `interface` and `public` are badges on the same page. */
 .ui-doc code {
   font-family: var(--ui-mono);
   font-size: 0.92em;
-  background: var(--ui-wash);
+  background: var(--ui-code);
   border-radius: var(--ui-radius);
-  padding: 0.1em 0.3em;
+  padding: 0.05em 0.3em;
 }
 .ui-doc pre {
-  margin: var(--ui-space-3) 0;
-  padding: var(--ui-space-2) var(--ui-space-3);
-  background: var(--ui-wash);
+  margin: var(--ui-space-4) 0;
+  padding: var(--ui-space-3) var(--ui-space-4);
+  background: var(--ui-code);
+  border: 1px solid var(--ui-rule);
   border-radius: var(--ui-radius);
   max-width: 100%;
   overflow-x: auto;
 }
 .ui-doc pre code { background: none; padding: 0; }
-.ui-doc a { color: var(--ui-link); text-decoration: none; }
-.ui-doc a:hover { text-decoration: underline; }
-.ui-doc ul, .ui-doc ol { margin: var(--ui-space-3) 0; padding-left: var(--ui-space-5); }
+
+/* Underlined, because prose is where a link has no other tell. A signature
+ * elsewhere on the page is a list of links and underlining all of them would
+ * be a thicket; one reference inside a sentence has only its colour, and
+ * colour alone is not something every reader has. */
+.ui-doc a { color: var(--ui-link); text-decoration: underline; text-underline-offset: 0.15em; }
+
+/* padding-left was var(--ui-space-5) — undefined, so it computed to nothing
+ * and every bullet hung outside the text it belonged to. Markdown hands us
+ * loose lists, whose items wrap their text in a p carrying full paragraph
+ * margins, so four bullets read as four separate thoughts until the margin
+ * inside an item is taken back. */
+.ui-doc ul, .ui-doc ol { margin: var(--ui-space-3) 0; padding-left: var(--ui-space-6); }
 .ui-doc li { margin: var(--ui-space-1) 0; }
+.ui-doc li > p { margin: var(--ui-space-1) 0; }
 .ui-doc blockquote {
   margin: var(--ui-space-3) 0;
   padding-left: var(--ui-space-3);
