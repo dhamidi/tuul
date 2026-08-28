@@ -4,15 +4,17 @@ import java.io.IOException;
 import json.Json;
 import json.JsonWriter;
 
-/// Why a call did not produce a result.
+/// A failure says why a call produced no result.
 ///
-/// `code` says what went wrong and `message` says it in one short line. `data`
-/// is whatever else helps, and this record writes it only when it holds
-/// something. A `"data":null` field tells the reader nothing and costs bytes.
+/// The `code` field says what went wrong and `message` says it in one short
+/// line. The `data` field carries anything else that helps. This record writes
+/// `data` only when it holds something, because a `"data":null` field tells a
+/// reader nothing and still costs bytes.
 ///
-/// The factory methods below use the message text the protocol gives, and put
-/// the detail in `data`. A client that switches on the message therefore keeps
-/// working, and a person who reads the message still learns which call broke.
+/// The factory methods below use the message text that the protocol prints in
+/// its own tables, and they put the detail in `data`. A client that switches
+/// on the message text keeps working, and a person reading the message still
+/// learns which call broke.
 public record Failure(int code, String message, Json data) {
 
     /// The text was not JSON.
@@ -27,7 +29,7 @@ public record Failure(int code, String message, Json data) {
     /// The server has the method, but not for these arguments.
     public static final int INVALID_PARAMS = -32602;
 
-    /// The method broke, and the break is the server's fault.
+    /// The method threw an exception that the server did not plan for.
     public static final int INTERNAL_ERROR = -32603;
 
     /// The lowest code an application may define for itself.
@@ -45,7 +47,7 @@ public record Failure(int code, String message, Json data) {
         return new Failure(code, message, Json.NULL);
     }
 
-    /// The same failure, carrying more.
+    /// Returns this failure with `data` attached.
     public Failure with(Json data) {
         return new Failure(code, message, data);
     }

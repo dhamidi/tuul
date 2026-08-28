@@ -13,18 +13,18 @@ import java.util.Optional;
 import jsonrpc2.Server;
 import jsonrpc2.Transport;
 
-/// A transport that is not one.
+/// An in-memory [Transport] that moves documents inside one process.
 ///
 /// Documents arrive and documents leave. There is no socket, no port, no
-/// thread, and nothing to start or stop. This exists because it is the proof
-/// that [Transport] is an interface: everything the protocol needs from the
-/// outside world is here, and what is not here is not needed.
+/// thread, and nothing to start or stop. It also shows how little a transport
+/// has to do: everything the protocol needs from the outside world is in this
+/// file.
 ///
-/// It is also what the tests use. A test of a [Server] or a [jsonrpc2.Client]
-/// should use this. A test that binds a port can fail because the port was
+/// The tests use it, and a test of a [Server] or a [jsonrpc2.Client] should
+/// use it too. A test that binds a real port can fail because the port was
 /// busy.
 ///
-/// Two shapes, one class:
+/// It has two shapes:
 ///
 /// - [#of(Server)] answers every document itself. Give it to a
 ///   [jsonrpc2.Client], and the client's call reaches the server directly, and
@@ -33,8 +33,8 @@ import jsonrpc2.Transport;
 ///   server writes lands in [#sent()].
 ///
 /// This transport holds whole documents in memory, which is the one thing the
-/// rest of the package refuses to do. That is the transport's business. Framing
-/// is what a transport is for, and here the frame is a string.
+/// rest of the package refuses to do. That is a transport's business. Framing
+/// is exactly what a transport exists for, and here a frame is one string.
 public final class Memory implements Transport {
 
     private final Optional<Server> server;

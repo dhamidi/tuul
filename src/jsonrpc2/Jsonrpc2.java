@@ -9,16 +9,17 @@ import json.JsonException;
 import json.JsonReader;
 import json.JsonWriter;
 
-/// JSON-RPC 2.0, at the level of one document.
+/// This class reads and writes one JSON-RPC document.
 ///
-/// The protocol has two layers, and this file is the lower one. A document is
-/// one JSON value that arrives or leaves as a unit. It holds one call, or one
-/// response, or an array of them. [Server] and [Client] are the upper layer.
-/// They decide what the members mean.
+/// The package has two layers and this file is the lower one. A document is
+/// one JSON value that arrives or leaves as a unit. It holds one call, one
+/// response, or an array of either. [Server] and [Client] sit above and decide
+/// what the members mean.
 ///
-/// A batch is the reason this layer exists. The members of a batch must all be
-/// read before any of them runs, and all of their answers go into one array.
-/// Both directions need that, so neither owns it.
+/// Batches are why this layer exists. Every member of a batch has to be read
+/// before any member runs, and every answer goes into one array. The server
+/// and the client both need that, so it lives here instead of in either of
+/// them.
 public final class Jsonrpc2 {
 
     /// What every call and every response declares. A call or a response that
@@ -27,11 +28,11 @@ public final class Jsonrpc2 {
 
     private Jsonrpc2() {}
 
-    /// One document, and how it arrived.
+    /// One document that was read, and the shape it arrived in.
     ///
-    /// `batched` is true only when the document was a JSON array. The
-    /// difference is not cosmetic. A server answers a batch with an array, and
-    /// a single call with an object. The answer must therefore remember the
+    /// The `batched` field is true only when the document was a JSON array.
+    /// That difference is not cosmetic. A server answers a batch with an array
+    /// and a single call with an object, so the answer has to remember the
     /// shape of the question.
     ///
     /// An empty batch is a document with `batched` true and no members. The
@@ -69,10 +70,10 @@ public final class Jsonrpc2 {
     /// Writes the answer to one document. Answers with `true` when it wrote a
     /// document, and with `false` when it wrote nothing.
     ///
-    /// No responses means no document. This is the rule that makes a batch of
-    /// notifications silent, and it is a rule about bytes, not about empty
-    /// arrays. An empty array is a document, and the protocol forbids sending
-    /// one here.
+    /// No responses means no document. This rule is what keeps a batch of
+    /// notifications silent, and it is a rule about bytes rather than about
+    /// empty arrays. An empty array is itself a document, and the protocol
+    /// forbids sending one here.
     ///
     /// This method flushes the writer and leaves it open. Whoever opened it
     /// closes it, and on most transports that close is what ends the

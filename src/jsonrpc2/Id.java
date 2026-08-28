@@ -3,18 +3,19 @@ package jsonrpc2;
 import java.util.Optional;
 import json.Json;
 
-/// The name of one call, and how a client recognises its answer.
+/// An id names one call so that a client can recognise the answer to it.
 ///
 /// The protocol allows three kinds of id: a string, a number, and null. This
 /// interface keeps all three apart. The id `"1"` and the id `1` belong to
-/// different calls, and a client that compares ids as text would confuse
+/// different calls, and a client that compared ids as text would confuse
 /// them.
 ///
-/// Each case is a record, so equality comes free and an id works as a map key.
-/// That is how a client matches a batch answer to the call that asked for
-/// it.
+/// Each case is a record, so the language supplies equality and hashing and an
+/// id works as a map key. A client matches a batch answer to its call that
+/// way.
 ///
-/// A call with no id at all is not an [Id]. It is a [Call.Notification].
+/// A call that carries no id at all does not have the id [#NOTHING]. It is a
+/// [Call.Notification], and no response to it exists.
 public sealed interface Id {
 
     /// The id `null`. The protocol permits it, and a call that uses it is still

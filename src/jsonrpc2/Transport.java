@@ -6,13 +6,13 @@ import java.io.Reader;
 import java.io.Writer;
 import java.util.Optional;
 
-/// Where documents arrive from, and where they go.
+/// A transport carries JSON-RPC documents into and out of this process.
 ///
 /// This is the only thing `jsonrpc2` knows about the outside world. The
 /// protocol names no transport and depends on none, so neither does this
 /// package. A socket, a pipe, an HTTP body, a `Content-Length` header, a
-/// heartbeat, a reconnect: all of it lives behind this interface. None of it
-/// lives in front.
+/// heartbeat and a reconnect all live behind this interface, and the protocol
+/// layer in front of it sees none of them.
 ///
 /// Framing belongs to the transport. The protocol layer reads one JSON value
 /// and writes one JSON value. Only the transport knows where one document stops

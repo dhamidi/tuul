@@ -9,7 +9,7 @@ import json.Json;
 import json.JsonWriter;
 import java.io.Writer;
 
-/// The other end of a [Transport].
+/// A client sends calls over a [Transport] and reads the answers.
 ///
 /// ```
 /// var client = Client.of(transport);
@@ -21,9 +21,9 @@ import java.io.Writer;
 /// is not one. [#batch(List)] returns the responses instead, since one member
 /// of a batch can fail while the rest succeed.
 ///
-/// Ids are numbers, and they start at one and increase. Nothing else in this
-/// package depends on that. A caller that wants its own ids builds a
-/// [Call.Request] and passes it to [#batch(List)].
+/// A client numbers its own ids, starting at one. Nothing else in this package
+/// depends on that. A caller that wants ids of its own builds a [Call.Request]
+/// and passes it to [#batch(List)].
 public final class Client implements Closeable {
 
     private final Transport transport;

@@ -11,11 +11,11 @@ import java.util.concurrent.ConcurrentSkipListMap;
 import java.util.concurrent.Executors;
 import json.Json;
 
-/// A set of methods, and the rules for answering calls to them.
+/// A server holds named methods and answers the calls that name them.
 ///
-/// This is not a socket and it does not listen to one. It reads a document from
-/// a [Reader] and writes the answer to a [Writer]. Give it a [Transport] and it
-/// keeps doing that until the transport is finished.
+/// A server is not a socket and it does not listen to one. It reads a document
+/// from a [Reader] and writes the answer to a [Writer]. Give it a [Transport]
+/// and it repeats that until the transport is finished.
 ///
 /// ```
 /// var server = Server.of()

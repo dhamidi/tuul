@@ -1,15 +1,14 @@
 package jsonrpc2;
 
-/// A [Failure], thrown.
+/// A method throws a rejection to choose the error that the caller sees.
 ///
-/// A method reports a specific error by throwing this. Every other exception a
-/// method throws becomes error -32603, because the server cannot know what an
-/// arbitrary exception means to a client. A [Rejection] is the method saying it
-/// does know.
+/// Every other exception a method throws becomes error -32603, because the
+/// server cannot know what an arbitrary exception should mean to a client.
+/// Throwing a rejection is how a method says that it does know.
 ///
-/// It is unchecked. A method that refuses a call does not meet an exceptional
-/// condition. It answers. To make every caller declare that would be ceremony
-/// for nothing.
+/// This exception is unchecked on purpose. A method that refuses a call has
+/// not met an exceptional condition. It has produced an answer. Requiring
+/// every caller to declare that would add ceremony without adding safety.
 public final class Rejection extends RuntimeException {
 
     private final transient Failure failure;

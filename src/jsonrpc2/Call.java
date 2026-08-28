@@ -4,29 +4,31 @@ import java.io.IOException;
 import json.Json;
 import json.JsonWriter;
 
-/// Something a client asks a server to do.
+/// A client sends a call to ask a server to run a method.
 ///
-/// The protocol has one word for this and two behaviours, so this has two
-/// cases. A [Request] carries an id and gets an answer. A [Notification]
-/// carries no id and gets none, whatever happens while it runs. The difference
-/// is a type here rather than a null field, so no code has to remember to check
-/// it.
+/// The protocol uses one name for this and gives it two behaviours, so this
+/// interface has two cases. A [Request] carries an id and the server must
+/// answer it. A [Notification] carries no id and the server must not answer
+/// it, whatever happens while the method runs. Making that difference a type
+/// rather than a nullable field means no code has to remember to check for
+/// null.
 ///
-/// `params` is an array for positional arguments and an object for named ones.
-/// [json.Json#NULL] means the call has no arguments, and this interface then
-/// omits the field from the document.
+/// The `params` value is an array when the caller passed arguments by
+/// position and an object when the caller named them. [json.Json#NULL] means
+/// the call has no arguments, and `write` then leaves the field out of the
+/// document.
 public sealed interface Call {
 
     String method();
 
     Json params();
 
-    /// A call that expects an answer.
+    /// A call the server must answer. The response carries this id back.
     record Request(Id id, String method, Json params) implements Call {}
 
-    /// A call that expects nothing. The server runs it and stays silent, even
-    /// when it fails. A client that needs to know the outcome must send a
-    /// [Request].
+    /// A call the server must not answer. The server runs the method and stays
+    /// silent, even when the method fails. A client that needs to know the
+    /// outcome has to send a [Request] instead.
     record Notification(String method, Json params) implements Call {}
 
     static Request of(Id id, String method, Json params) {
