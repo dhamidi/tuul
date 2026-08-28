@@ -8,6 +8,7 @@ import java.util.stream.Stream;
 import java.util.stream.StreamSupport;
 import json.Json;
 import sqlite3.Database;
+import sqlite3.Migrations;
 import sqlite3.Statement;
 
 /// One actor's log, kept in one SQLite file.
@@ -19,11 +20,26 @@ import sqlite3.Statement;
 /// create table meta     (name text primary key, value text);
 /// ```
 ///
-/// The `type` column repeats what is already inside `body`, and it earns its
-/// place. `select type, count(*) from commands group by 1` is the first thing
-/// anybody types when an actor misbehaves, and it should not need a JSON parser
-/// to answer. The `meta` table holds the address, because a file name is
-/// percent-encoded and an inspector needs the id a person wrote.
+/// The `type` column is where a question about types is answered.
+/// `select type, count(*) from commands group by 1` is the first thing anybody
+/// types when an actor misbehaves, and it must not need a JSON parser to
+/// answer. That is the whole reason for the column, and it does not depend on
+/// what `body` holds: a message that carried its type only in its payload, or
+/// only in an envelope, would leave this column doing the same job. The `meta`
+/// table holds the address, because a file name is percent-encoded and an
+/// inspector needs the id a person wrote.
+///
+/// ## Versions
+///
+/// The file is *durable*. It is the only copy of what an actor was told, so it
+/// is migrated and never rebuilt — [sqlite3.Migrations#durable(int)] is that
+/// rule, and [#COMMANDS] is the shape it applies.
+///
+/// Before this, a log carried no `application_id` and no `user_version`. It
+/// opened whatever file it was given and added its tables to it, so a log and
+/// somebody else's database were indistinguishable, and a change to the shape
+/// had nowhere to be recorded. The file now says that it is a `tlog` and which
+/// version of one.
 ///
 /// ## Why one file per actor
 ///
@@ -52,17 +68,40 @@ public final class Journal implements Log {
     private long length;
     private long applied;
 
+    /// `tlog` as four bytes, so a hex dump says what the file is.
+    ///
+    /// A log had no `application_id` and no `user_version` at all, so it opened
+    /// any SQLite file it was handed and added its tables to it. Stamping the
+    /// file is what makes that impossible, and what gives the shape somewhere
+    /// to record that it changed.
+    static final int APPLICATION = 0x746c6f67;
+
+    /// The shape, one step at a time.
+    ///
+    /// A log is *durable*: it is the only copy of what happened, so it is
+    /// migrated and never rebuilt. [Migrations#durable(int)] is that rule.
+    ///
+    /// The first step keeps `if not exists` because it has to run on journals
+    /// written before any of this existed. Those files hold real commands, are
+    /// stamped with nothing, and are adopted by running this step over the
+    /// tables they already have — which changes nothing and then records that
+    /// they are at version 1. A later step is an ordinary `alter table` and
+    /// needs no such care.
+    private static final String COMMANDS = """
+            create table if not exists commands (
+                seq  integer primary key,
+                at   integer not null,
+                type text    not null,
+                body text    not null);
+            create table if not exists meta (name text primary key, value text not null);
+            """;
+
     Journal(java.nio.file.Path file, Address address, Durability durability) {
-        database = Database.open(file);
-        database.script("""
-                pragma journal_mode = wal;
-                create table if not exists commands (
-                    seq  integer primary key,
-                    at   integer not null,
-                    type text    not null,
-                    body text    not null);
-                create table if not exists meta (name text primary key, value text not null);
-                """);
+        try {
+            database = Migrations.durable(APPLICATION).step(COMMANDS).open(file);
+        } catch (java.io.IOException unopenable) {
+            throw new java.io.UncheckedIOException("cannot open the log at " + file, unopenable);
+        }
         synchronous(durability);
         database.execute("insert or replace into meta (name, value) values ('address', ?)", address.toString());
         insert = Statement.of(database, "insert into commands (seq, at, type, body) values (?, ?, ?, ?)");

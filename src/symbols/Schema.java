@@ -1,11 +1,9 @@
 package symbols;
 
 import java.io.IOException;
-import java.nio.file.Files;
 import java.nio.file.Path;
-import java.util.Optional;
 import sqlite3.Database;
-import sqlite3.SqliteException;
+import sqlite3.Migrations;
 
 /// What a tuul index file *is*: an application file format, in the sense SQLite
 /// means it — a schema a person can read and query, not a cache of blobs.
@@ -179,80 +177,23 @@ final class Schema {
 
     /// Opens the index, building it if there is nothing usable there.
     ///
+    /// An index is *derived*, so a file at any other version is thrown away
+    /// rather than migrated: the sources it describes are the truth, and
+    /// rebuilding costs time while reading a shape you guessed at costs
+    /// correctness. [Migrations#derived(int, int)] is that rule, and this says
+    /// which rule it wants rather than working it out again.
+    ///
     /// Foreign keys are on, because the schema leans on cascades to forget a
-    /// type completely. The journal is write-ahead so that one tuul reading the
-    /// index does not block another writing it, and `synchronous` is relaxed
-    /// because the worst a lost write costs is the work of doing it again.
+    /// type completely. `synchronous` is relaxed because the worst a lost write
+    /// costs is the work of doing it again. The busy timeout is the one that
+    /// matters in practice: two tuuls started at once both want to write the
+    /// index, and the second should wait for the first rather than give up on a
+    /// question it can still answer.
     static Database open(Path file) throws IOException {
-        if (file.getParent() != null) Files.createDirectories(file.getParent());
-        var kept = recognised(file);
-        if (kept.isPresent()) return kept.get();
-
-        discard(file);
-        var fresh = connect(file);
-        try {
-            create(fresh);
-        } catch (RuntimeException broken) {
-            fresh.close();
-            discard(file);
-            throw broken;
-        }
-        return fresh;
-    }
-
-    /// Ours, and this version of ours. Anything else — somebody else's file, an
-    /// older idea of what an index looks like, or a note that happens to have
-    /// the right name — is not an index, and saying so is the whole job of this
-    /// method. Even the first statement has to read the file to find out.
-    private static Optional<Database> recognised(Path file) {
-        Database database = null;
-        try {
-            database = connect(file);
-            if (number(database, "pragma application_id") == APPLICATION
-                    && number(database, "pragma user_version") == VERSION) {
-                return Optional.of(database);
-            }
-        } catch (SqliteException notAnIndex) {
-            return Optional.empty();
-        }
-        database.close();
-        return Optional.empty();
-    }
-
-    /// The settings that belong to the connection rather than the file. The
-    /// busy timeout is the one that matters in practice: two tuuls started at
-    /// once both want to write the index, and the second should wait for the
-    /// first rather than give up on a question it can still answer.
-    private static Database connect(Path file) {
-        var database = Database.open(file);
-        try {
-            database.script(
-                    "pragma foreign_keys = on; pragma synchronous = normal; pragma busy_timeout = 5000;");
-            return database;
-        } catch (RuntimeException notADatabase) {
-            database.close();
-            throw notADatabase;
-        }
-    }
-
-    /// The journal mode is written into the file, so it is set once, here.
-    private static void create(Database database) {
-        database.script("pragma journal_mode = wal");
-        database.transaction(() -> database.script(TABLES + SEARCH));
-        database.script("pragma application_id = " + APPLICATION + "; pragma user_version = " + VERSION + ";");
-    }
-
-    /// The write-ahead log and its shared memory belong to the file; leaving
-    /// them behind would attach the old index to the new one.
-    private static void discard(Path file) throws IOException {
-        Files.deleteIfExists(file);
-        Files.deleteIfExists(file.resolveSibling(file.getFileName() + "-wal"));
-        Files.deleteIfExists(file.resolveSibling(file.getFileName() + "-shm"));
-    }
-
-    private static long number(Database database, String pragma) {
-        try (var rows = database.query(pragma)) {
-            return rows.next() ? rows.integer(0) : 0;
-        }
+        return Migrations.derived(APPLICATION, VERSION)
+                .connecting("pragma foreign_keys = on; pragma synchronous = normal; pragma busy_timeout = 5000;")
+                .step(TABLES)
+                .step(SEARCH)
+                .open(file);
     }
 }
