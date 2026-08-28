@@ -253,18 +253,11 @@ public final class Views {
         for (var member : members) {
             var name = member.string("name", "");
             var seen = taken.merge(name, 1, Integer::sum);
-            written.add(member(routes, member, seen == 1 ? name : name + "-" + seen));
+            written.add(Member.of(routes, member, seen == 1 ? name : name + "-" + seen));
         }
         return Ui.stack(Props.of("gap", "sm"),
                 Ui.heading(Props.of("level", "2"), text(heading)),
                 Ui.items(Props.of().on("divided"), Html.fragment(written)));
-    }
-
-    private static Html member(Router routes, Json.Object member, String anchor) {
-        return Ui.item(id(anchor), Microdata.scope(), Microdata.type("/Member"),
-                Ui.mono(Microdata.of("signature"), signature(routes, member.string("signature", ""))),
-                documentation(member.string("doc", "")),
-                tags(member));
     }
 
     /// A signature with every type in it a link.
