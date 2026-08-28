@@ -6,10 +6,14 @@ import java.io.IOException;
 import java.io.OutputStream;
 import java.io.StringWriter;
 import java.nio.charset.StandardCharsets;
+import java.net.URI;
+import java.nio.file.FileSystems;
 import java.nio.file.Files;
 import java.nio.file.Path;
 import java.util.ArrayList;
 import java.util.List;
+import java.util.Map;
+import java.util.Set;
 
 public final class AssetsTest {
 
@@ -28,6 +32,7 @@ public final class AssetsTest {
         streams(assets);
         overrides(root);
         hotwired();
+        archived();
     }
 
     private static void digests(Path root, Assets assets) throws IOException {
@@ -175,6 +180,11 @@ public final class AssetsTest {
 
     private static void hotwired() {
         var assets = Assets.standard(List.of());
+        for (var mine : List.of("browser.css", "search.js", "kind.js", "favicon.svg")) {
+            Check.that("an application that ships nothing does not get " + mine
+                            + ", which belongs to whoever wrote it",
+                    assets.find(mine).isEmpty());
+        }
         Check.that("Turbo is on the standard load path", assets.find(Hotwired.TURBO_FILE).isPresent());
         Check.that("so is Stimulus", assets.find(Hotwired.STIMULUS_FILE).isPresent());
         Check.that("and the standard import map pins them both",
@@ -185,6 +195,38 @@ public final class AssetsTest {
                         .headers()
                         .get("Content-Type")
                         .startsWith("text/javascript"));
+    }
+
+    /// A load path does not have to be on the disk the program started from.
+    ///
+    /// This is what lets an application keep its assets beside its code: the
+    /// build copies them next to the classes, a jar keeps that arrangement,
+    /// and the same [Assets] reads either. Nothing here says `jar` — the
+    /// pipeline only ever asked for a [Path], and a [Path] in an archive is
+    /// still a [Path].
+    private static void archived() throws IOException {
+        var jar = Files.createTempFile("tuul-assets", ".jar");
+        Files.delete(jar);
+        try (var archive = FileSystems.newFileSystem(
+                URI.create("jar:" + jar.toUri()), Map.of("create", "true"))) {
+            var inside = archive.getPath("/app/assets");
+            Files.createDirectories(inside);
+            Files.writeString(inside.resolve("app.css"), "body { color: red }\n");
+            Files.writeString(inside.resolve("app.js"), "// packed\n");
+        }
+        jar.toFile().deleteOnExit();
+
+        try (var archive = FileSystems.newFileSystem(URI.create("jar:" + jar.toUri()), Map.<String, Object>of())) {
+            var assets = Assets.of(List.of(archive.getPath("/app/assets")));
+            Check.equal("a load path inside an archive is scanned like any other",
+                    Set.of("app.css", "app.js"), assets.names());
+            Check.that("and what it holds is served from there",
+                    assets.serve(assets.url("app.css")).status() == 200);
+            var bytes = new ByteArrayOutputStream();
+            assets.find("app.css").orElseThrow().writeTo(bytes);
+            Check.equal("with the bytes the archive holds",
+                    "body { color: red }\n", bytes.toString(StandardCharsets.UTF_8));
+        }
     }
 
     /// What sits inside the importmap script element, which is the only part

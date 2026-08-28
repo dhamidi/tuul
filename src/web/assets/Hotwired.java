@@ -1,14 +1,9 @@
 package web.assets;
 
-import java.io.IOException;
-import java.net.URISyntaxException;
-import java.nio.file.Files;
 import java.nio.file.Path;
-import java.util.ArrayList;
-import java.util.List;
-import java.util.Optional;
 
-/// Where Turbo and Stimulus live.
+/// Turbo and Stimulus: the names an application imports them by, and the files
+/// they are in.
 ///
 /// They are vendored — the files are in the repository, with their licences and
 /// an `ORIGIN.md` saying which versions and where they came from — for the same
@@ -16,9 +11,10 @@ import java.util.Optional;
 /// to reach the network, and an application should not have to install a
 /// package manager to get the two libraries its framework assumes.
 ///
-/// They are found the way a native library is found: by asking the code where
-/// it is, rather than asking the shell. An installed tuul runs in a directory
-/// that knows nothing about it, and what it ships travels with it.
+/// Where they are is [Bundled]'s question, not this one. This used to answer it
+/// for every package that ships assets, so `Hotwired.shipped()` meant "every
+/// directory tuul carries" — a name that told a reader the opposite of what the
+/// method did.
 public final class Hotwired {
 
     /// The bare specifiers an application imports, which are the names npm uses
@@ -38,57 +34,8 @@ public final class Hotwired {
 
     private Hotwired() {}
 
-    /// The load path holding them. When nothing is found, the last candidate is
-    /// answered anyway: an import map that cannot resolve a pin says which
-    /// directories it looked in, and a path that does not exist is more use in
-    /// that message than no path at all.
+    /// The load path holding them.
     public static Path path() {
-        var candidates = candidates();
-        return candidates.stream().filter(Files::isDirectory).findFirst().orElse(candidates.getLast());
-    }
-
-    /// Every directory of vendored assets that travels with tuul: Turbo and
-    /// Stimulus, the cable's Stimulus controller, and whatever ships later.
-    ///
-    /// They are enumerated rather than named, so a package that ships assets
-    /// does not have to be known here — `web.assets` would otherwise have to
-    /// import `web.cable` to put its one file on the load path, which is
-    /// backwards.
-    public static List<Path> shipped() {
-        var here = path();
-        var root = here.getParent();
-        if (root == null || !Files.isDirectory(root)) return List.of(here);
-        try (var directories = Files.list(root)) {
-            var found = directories.filter(Files::isDirectory).sorted().toList();
-            return found.isEmpty() ? List.of(here) : found;
-        } catch (IOException e) {
-            return List.of(here);
-        }
-    }
-
-    private static List<Path> candidates() {
-        var override = System.getProperty("tuul.assets");
-        if (override != null) return List.of(Path.of(override).resolve(DIRECTORY));
-        var candidates = new ArrayList<Path>();
-        beside().ifPresent(candidates::add);
-        candidates.add(Path.of("assets", DIRECTORY));
-        return List.copyOf(candidates);
-    }
-
-    /// A jar has them under `assets` beside it, which is where an installed tuul
-    /// and a vendored one both put what they ship. A classes directory is
-    /// `build/classes` in a checkout, and the vendored files are at the root of
-    /// it — two levels up, not beside, because they are source rather than
-    /// something the build produced.
-    private static Optional<Path> beside() {
-        try {
-            var code = Path.of(Hotwired.class.getProtectionDomain().getCodeSource().getLocation().toURI())
-                    .toAbsolutePath()
-                    .normalize();
-            var root = Files.isDirectory(code) ? code.getParent().getParent() : code.getParent();
-            return Optional.of(root.resolve("assets").resolve(DIRECTORY));
-        } catch (URISyntaxException | RuntimeException e) {
-            return Optional.empty();
-        }
+        return Bundled.shipped(DIRECTORY);
     }
 }

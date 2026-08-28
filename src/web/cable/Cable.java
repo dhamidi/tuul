@@ -18,7 +18,7 @@ import web.Handler;
 import web.Request;
 import web.Responses;
 import web.Status;
-import web.assets.Hotwired;
+import web.assets.Bundled;
 import web.ui.Attributes;
 import web.ui.Html;
 import web.ui.Stimulus;
@@ -174,11 +174,10 @@ public final class Cable implements AutoCloseable {
     }
 
     /// Where the client half lives, so an application can put it on its asset
-    /// load path. It sits beside the vendored Hotwired files and is found the
-    /// same way — by asking the code where it is, rather than the shell — which
-    /// is why this asks [Hotwired] rather than working it out again.
+    /// load path. It is one of the directories tuul ships, and it asks for it
+    /// by name rather than working out where tuul keeps what it carries.
     public static Path assets() {
-        return Hotwired.path().resolveSibling("cable");
+        return Bundled.shipped("cable");
     }
 
     /// Ends every subscription and waits for them. A cable that returned from

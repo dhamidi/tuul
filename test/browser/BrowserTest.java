@@ -7,6 +7,8 @@ import java.nio.file.Files;
 import java.nio.file.Path;
 import java.util.List;
 import symbols.Index;
+import web.assets.Bundled;
+import web.assets.Hotwired;
 import web.hyperspec.Hyperspec;
 import web.hyperspec.Outcome;
 import web.serve.Http;
@@ -30,8 +32,30 @@ public final class BrowserTest {
             ViewsTest.run(browser.routes());
             ResultsTest.run(browser.routes());
             HandlerTest.run(browser);
+            assets(browser);
             answers(browser);
         }
+    }
+
+    /// The application's own assets reach the pipeline from beside its own
+    /// code, and tuul's reach it too.
+    ///
+    /// The point of the first check is the second half of it: `browser.css`
+    /// used to be found because it sat in the tree tuul ships, so every
+    /// application written with the framework was handed the stylesheet for
+    /// browsing a symbol index. It is here now because this application put it
+    /// here.
+    private static void assets(Browser browser) {
+        var assets = browser.assets();
+        Check.equal("the application's own assets come first, from beside its own code",
+                Bundled.of(Browser.class, Browser.ASSETS), assets.loadPaths().getFirst());
+        for (var mine : List.of("browser.css", "search.js", "kind.js", Views.ICON)) {
+            Check.that(mine + " is on the load path", assets.find(mine).isPresent());
+        }
+        Check.that("and Turbo still is, without this application asking for it",
+                assets.find(Hotwired.TURBO_FILE).isPresent());
+        Check.that("the stylesheet the page links to is really served",
+                assets.serve(assets.url("browser.css")).status() == 200);
     }
 
     /// One of the specs in `cases`, by name — a resource, so it is found the

@@ -68,12 +68,17 @@ public final class Assets {
         return new Assets(loadPaths, prefix, scan(loadPaths));
     }
 
-    /// The application's own assets, and then the ones tuul ships — Turbo and
-    /// Stimulus. An application gets Hotwired without asking for it, and can
-    /// still replace either by putting a file of that name in its own load path.
+    /// The application's own assets, and then the ones tuul ships — Turbo,
+    /// Stimulus, the cable's controller and the components' stylesheet. An
+    /// application gets Hotwired without asking for it, and can still replace
+    /// any of it by putting a file of that name in its own load path.
+    ///
+    /// The application's own go first because first wins, and they are the
+    /// application's: they belong beside its code, and [Bundled#of(Class,
+    /// String)] is how they get here from there.
     public static Assets standard(List<Path> loadPaths) {
         var all = new ArrayList<>(loadPaths);
-        all.addAll(Hotwired.shipped());
+        all.addAll(Bundled.shipped());
         return of(all);
     }
 

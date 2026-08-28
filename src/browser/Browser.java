@@ -20,6 +20,7 @@ import web.Responses;
 import web.Routing;
 import web.Status;
 import web.assets.Assets;
+import web.assets.Bundled;
 import web.assets.Importmap;
 import web.cable.Cable;
 import web.cable.Topics;
@@ -44,6 +45,14 @@ public final class Browser implements AutoCloseable {
     /// How many matches a search answers with. A page of results is a page,
     /// not everything the index knows.
     public static final int MATCHES = 25;
+
+    /// This application's own assets, beside this application's own code.
+    ///
+    /// They are not tuul's: a stylesheet for browsing a symbol index has no
+    /// business on the load path of every application anybody writes with the
+    /// framework. [Bundled#of(Class, String)] finds them in a checkout and
+    /// inside the jar, so where they are read from is not this file's problem.
+    public static final String ASSETS = "assets";
 
     /// The topic pages listen to. There is one, because there is one thing
     /// worth saying: what you are reading has been rebuilt.
@@ -78,7 +87,7 @@ public final class Browser implements AutoCloseable {
     public static Browser of(Index index, Path watched) {
         var cable = Cable.of();
         var watching = watch(cable, watched);
-        return new Browser(index, Routes.of(), Assets.standard(List.of()),
+        return new Browser(index, Routes.of(), Assets.standard(List.of(Bundled.of(Browser.class, ASSETS))),
                 Importmap.standard()
                         .pin(Cable.MODULE, Cable.FILE)
                         .pin(web.ui.Ui.MODULE, web.ui.Ui.FILE)
