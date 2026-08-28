@@ -13,6 +13,7 @@ import java.util.Locale;
 import java.util.Map;
 import java.util.regex.Pattern;
 import json.Json;
+import markdown.Markdown;
 import symbols.Index;
 import web.assets.Assets;
 import web.assets.Importmap;
@@ -418,44 +419,21 @@ public final class Views {
         return Html.each(modifiers, modifier -> Ui.badge(Props.of("tone", "muted"), text(modifier)));
     }
 
-    /// A doc comment, with the code in it rendered as code.
+    /// A doc comment, rendered as the markdown it is.
     ///
-    /// The flattener keeps the line structure a comment was written with, so an
-    /// example inside one arrives indented — and indentation was the only thing
-    /// saying it was code, because it was set in the prose face at prose size.
-    /// A run of indented lines becomes a block; everything else stays prose.
+    /// A `///` comment is markdown by language rule since JDK 23, and this
+    /// repository writes them everywhere; the older kind arrives as prose with
+    /// blank lines between paragraphs and its examples indented, which markdown
+    /// reads the same way. So one renderer serves both, and the heuristic that
+    /// used to guess where a code block began is gone — it guessed wrong on a
+    /// fenced block, putting its first line in the prose and the rest in a box.
+    ///
+    /// It renders into the page's own writer rather than building a string,
+    /// which is what keeps a long comment from being held twice.
     static Html documentation(String doc) {
         if (doc.isBlank()) return Html.nothing();
-        var parts = new ArrayList<Html>();
-        var prose = new StringBuilder();
-        var code = new StringBuilder();
-        for (var line : doc.split("\n", -1)) {
-            var indented = line.startsWith("    ") || line.startsWith("\t");
-            if (indented || (!code.isEmpty() && line.isBlank())) {
-                flush(parts, prose, false);
-                code.append(line).append('\n');
-                continue;
-            }
-            flush(parts, code, true);
-            prose.append(line).append('\n');
-        }
-        flush(parts, prose, false);
-        flush(parts, code, true);
-        if (parts.isEmpty()) return Html.nothing();
-
-        // The property is on the whole comment rather than on each piece of it:
-        // a comment is one thing a symbol says, whether it came out as one
-        // paragraph or as three paragraphs around an example.
-        return Html.element("div", Microdata.of("doc"), Html.fragment(parts));
-    }
-
-    private static void flush(List<Html> parts, StringBuilder held, boolean asCode) {
-        var content = asCode ? strip(held.toString()) : held.toString().strip();
-        held.setLength(0);
-        if (content.isBlank()) return;
-        parts.add(asCode
-                ? Ui.mono(Props.of().on("block"), text(content))
-                : Ui.prose(Props.of("tone", "muted").on("wrap"), text(content)));
+        return Html.element("div", classes("ui-doc"), Microdata.of("doc"),
+                Html.deferred(out -> Markdown.render(doc, out)));
     }
 
     /// Code keeps its shape but not the indentation that marked it as code, so

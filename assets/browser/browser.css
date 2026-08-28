@@ -40,7 +40,7 @@ body {
   display: inline-flex;
   align-items: center; font-weight: 600; letter-spacing: 0.02em; color: var(--ui-ink); }
 
-main { max-width: var(--page); margin: 0 auto; padding: var(--ui-space-6); }
+main { max-width: var(--page); margin: 0; padding: var(--ui-space-6); }
 
 /* The way past the bar and the breadcrumb for somebody using a keyboard. It is
    the first thing focusable and invisible until it is focused, which is the
@@ -122,9 +122,16 @@ turbo-frame { display: block; }
  * pane; two above it, where the tree is worth the width it costs. The bar sits
  * in the same grid as the content so the page reads as one design rather than
  * a header stacked on something else. */
+/* The shell is not centred, and the sidebar therefore does not move.
+ *
+ * Centring a two-column shell means both columns slide right as the window
+ * widens — the sidebar's right edge went 304, 380, 580 across three widths
+ * while the content column stayed exactly 784 wide. Nothing was resizing; the
+ * whole page was drifting, which is what reading it as "the content jumps"
+ * amounts to. A reader of documentation wants the tree where they left it and
+ * the prose starting where it always starts, so the left edge is pinned and
+ * the width beyond the content is simply space. */
 .shell {
-  max-width: 78rem;
-  margin: 0 auto;
   padding: 0 var(--ui-space-4);
 }
 
@@ -142,3 +149,47 @@ turbo-frame { display: block; }
 /* The tree is rows and disclosures from web.ui now; what is left here is only
    what is particular to this application. */
 .ui-sidebar .ui-mono { font-size: var(--ui-text-sm); }
+
+/* A doc comment, rendered from markdown.
+ *
+ * The pieces are ordinary elements — the renderer emits p, pre, code, h2, ul —
+ * so they are styled here rather than by a component: the markup is the
+ * author's, not this application's. Everything is capped at the measure and
+ * every block that could be wider than the column scrolls inside itself, which
+ * is what a code sample in a comment does when nothing stops it. */
+.ui-doc { max-width: var(--ui-measure); color: var(--ui-muted); }
+.ui-doc > :first-child { margin-top: 0; }
+.ui-doc > :last-child { margin-bottom: 0; }
+.ui-doc p { margin: var(--ui-space-3) 0; overflow-wrap: anywhere; }
+.ui-doc h1, .ui-doc h2, .ui-doc h3, .ui-doc h4 {
+  margin: var(--ui-space-5) 0 var(--ui-space-2);
+  font-size: var(--ui-text-base);
+  font-weight: 600;
+  color: var(--ui-ink);
+}
+.ui-doc code {
+  font-family: var(--ui-mono);
+  font-size: 0.92em;
+  background: var(--ui-wash);
+  border-radius: var(--ui-radius);
+  padding: 0.1em 0.3em;
+}
+.ui-doc pre {
+  margin: var(--ui-space-3) 0;
+  padding: var(--ui-space-2) var(--ui-space-3);
+  background: var(--ui-wash);
+  border-radius: var(--ui-radius);
+  max-width: 100%;
+  overflow-x: auto;
+}
+.ui-doc pre code { background: none; padding: 0; }
+.ui-doc a { color: var(--ui-link); text-decoration: none; }
+.ui-doc a:hover { text-decoration: underline; }
+.ui-doc ul, .ui-doc ol { margin: var(--ui-space-3) 0; padding-left: var(--ui-space-5); }
+.ui-doc li { margin: var(--ui-space-1) 0; }
+.ui-doc blockquote {
+  margin: var(--ui-space-3) 0;
+  padding-left: var(--ui-space-3);
+  border-left: 2px solid var(--ui-rule);
+}
+.ui-doc table { display: block; overflow-x: auto; max-width: 100%; }

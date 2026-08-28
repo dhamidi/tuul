@@ -26,6 +26,7 @@ public final class ViewsTest {
         members(routes);
         problems(routes);
         form(routes);
+        navigates();
     }
 
     /// The four things the results panel can be, all of them inside the panel.
@@ -226,5 +227,24 @@ public final class ViewsTest {
 
     private static int count(String text, String part) {
         return text.split(java.util.regex.Pattern.quote(part), -1).length - 1;
+    }
+
+    /// A tree row navigates: it swaps the pane *and* moves the address bar.
+    ///
+    /// Those two have traded places twice. First the pane swap was broken by a
+    /// duplicate id, so the link fell back to a whole-page visit that did move
+    /// the URL; then the row component dropped the attribute that moves the
+    /// URL, so the pane swapped in silence and a reader could not link to what
+    /// they were looking at. Both halves are checked here because fixing one
+    /// has twice broken the other.
+    private static void navigates() {
+        var tree = Views.tree(Routes.of(), List.of(
+                new symbols.Index.Root("project", "This project", List.of("json")))).markup();
+        Check.that("a tree row targets the content pane",
+                tree.contains("data-turbo-frame=\"content\""));
+        Check.that("and advances the address bar",
+                tree.contains("data-turbo-action=\"advance\""));
+        Check.that("and both are on the anchor, where Turbo reads them",
+                tree.contains("<a class=\"ui-row\" data-turbo-action=\"advance\""));
     }
 }

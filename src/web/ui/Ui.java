@@ -385,6 +385,7 @@ public final class Ui {
             var body = Html.element("div", classes("ui-sidebar-body"), Html.fragment(children(content)));
 
             var nodes = new java.util.ArrayList<Node>(List.of(Component.rooted("ui-sidebar", new Node[] {head, body})));
+            nodes.addAll(List.of(attributes(content)));
             nodes.add(Attributes.id(props.text("id", SIDEBAR)));
             nodes.add(Attribute.flag("open"));
             nodes.add(Attributes.aria("label", name));
@@ -447,9 +448,11 @@ public final class Ui {
 
             var classes = "ui-row" + (here ? " ui-row--current" : "");
             if (target.isEmpty()) {
+                inside.addAll(List.of(attributes(content)));
                 return Html.element("span", Component.rooted(classes, inside.toArray(new Node[0])));
             }
             var link = new java.util.ArrayList<Node>(inside);
+            link.addAll(List.of(attributes(content)));
             link.add(href(target));
             if (here) link.add(Attributes.aria("current", "true"));
             var frame = props.text("frame", "");
@@ -481,6 +484,7 @@ public final class Ui {
                     Html.element("span", classes("ui-disclosure-mark"), Attributes.aria("hidden", "true")),
                     Html.element("span", classes("ui-disclosure-label"), Tags.text(props.text("label", "")))));
             nodes.add(Html.element("div", classes("ui-disclosure-body"), Html.fragment(children(content))));
+            nodes.addAll(List.of(attributes(content)));
             if (props.flag("open")) nodes.add(Attribute.flag("open"));
             return Html.element("details", Component.rooted("ui-disclosure", nodes.toArray(new Node[0])));
         }
@@ -628,6 +632,26 @@ public final class Ui {
 
     private static String gap(Props props) {
         return props.one("gap", "md", "none", "sm", "md", "lg");
+    }
+
+    /// The attributes a caller wrote among the children.
+    ///
+    /// A component that wraps its children in an inner element cannot pass them
+    /// all inward: markup belongs inside, but an attribute — `Microdata.of`,
+    /// `Turbo.advance()` — was addressed to the thing the component *is*, and
+    /// putting it on an inner span loses it as surely as dropping it. So
+    /// [#children] takes the markup, this takes the rest, and the root gets
+    /// what was meant for it.
+    ///
+    /// Dropping them silently is what stopped a tree link advancing the URL:
+    /// the caller passed `Turbo.advance()`, the row filtered it out, and
+    /// nothing anywhere said so.
+    private static Node[] attributes(Node[] content) {
+        var attributes = new java.util.ArrayList<Node>();
+        for (var node : content) {
+            if (node instanceof Attribute attribute) attributes.add(attribute);
+        }
+        return attributes.toArray(new Node[0]);
     }
 
     private static Html[] children(Node[] content) {

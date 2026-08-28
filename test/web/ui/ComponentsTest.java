@@ -57,6 +57,21 @@ public final class ComponentsTest {
                 badged.contains("itemprop=\"kind\""));
 
         Check.that("and an id does too", Ui.item(id("write")).markup().contains("id=\"write\""));
+
+        // A component that wraps its children in an inner element used to keep
+        // the markup and drop the attributes, silently. Nothing said so, and a
+        // tree link stopped advancing the URL twice before anybody looked at
+        // where the attribute had gone: onto a span nobody reads, or nowhere.
+        var row = Ui.row(Props.of("href", "/x", "frame", "content"),
+                Turbo.advance(), Microdata.of("name"), text("json")).markup();
+        Check.that("a wrapping component keeps an attribute on its root, not on the label",
+                row.startsWith("<a ") && row.contains("data-turbo-action=\"advance\""));
+        Check.that("and it keeps more than one", row.contains("itemprop=\"name\""));
+        Check.that("while the markup still goes inside", row.contains("ui-row-label"));
+
+        Check.that("a disclosure keeps one too",
+                Ui.disclosure(Props.of("label", "L"), Microdata.of("thing"), text("body"))
+                        .markup().startsWith("<details class=\"ui-disclosure\" itemprop=\"thing\""));
     }
 
     /// A prop nobody understands is a typo, and a design system that ignores

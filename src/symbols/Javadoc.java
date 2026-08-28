@@ -57,8 +57,6 @@ public final class Javadoc {
     private static final Pattern ANNOTATIONS = Pattern.compile("@\\w+(\\.\\w+)*");
     private static final Pattern GENERICS = Pattern.compile("<[^<>]*>");
     private static final Pattern QUALIFIERS = Pattern.compile("(\\w+\\.)+");
-    private static final Pattern LINKS = Pattern.compile("\\[#?([^\\]]+)\\](\\([^)]*\\))?");
-    private static final Pattern FENCES = Pattern.compile("(?m)^\\s*```.*$");
 
     /// HTML that stands a block apart from what surrounds it.
     private static final Set<String> PARAGRAPH = Set.of(
@@ -243,6 +241,7 @@ public final class Javadoc {
     private static String flatten(List<? extends DocTree> parts) {
         var text = new StringBuilder();
         write(parts, text);
+        if (markdown(parts)) return text.toString().strip();
         return text.toString()
                 .strip()
                 .replaceAll("(?<=\\S)[ \t]{2,}", " ")
@@ -266,7 +265,7 @@ public final class Javadoc {
                 case LiteralTree tree -> text.append(tree.getBody().getBody());
                 case LinkTree tree -> text.append(reference(tree));
                 case EntityTree tree -> text.append(entity(tree));
-                case RawTextTree tree -> text.append(markdown(tree.getContent()));
+                case RawTextTree tree -> text.append(tree.getContent());
                 case ReferenceTree tree -> text.append(tree.getSignature());
                 case SummaryTree tree -> write(tree.getSummary(), text);
                 case IndexTree tree -> write(List.of(tree.getSearchTerm()), text);
@@ -304,10 +303,15 @@ public final class Javadoc {
         return signature.startsWith("#") ? signature.substring(1) : signature;
     }
 
-    /// Markdown comments keep their line structure — an example in a doc
-    /// comment is worth more with its line breaks than without.
-    private static String markdown(String text) {
-        return FENCES.matcher(LINKS.matcher(text).replaceAll("$1").replace("`", "")).replaceAll("");
+    /// Whether the comment was written in markdown — the `///` kind, which
+    /// JDK 23 made first class and which this repository writes everywhere.
+    ///
+    /// It decides whether the tidying below runs. That tidying exists to undo
+    /// the ` * ` a javadoc comment wraps its lines with; a markdown comment has
+    /// no such margin, and running it over one squeezes the indentation that
+    /// says where a code block is.
+    private static boolean markdown(List<? extends DocTree> parts) {
+        return parts.stream().anyMatch(part -> part instanceof RawTextTree);
     }
 
     private static String entity(EntityTree tree) {
