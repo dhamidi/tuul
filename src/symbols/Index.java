@@ -53,8 +53,13 @@ public final class Index implements AutoCloseable {
     public static final String PLATFORM = "platform";
 
     /// A symbol the search found: what it is called, what kind of thing it is,
-    /// and what it says about itself.
-    public record Match(String symbol, String kind, String doc) {}
+    /// how it was declared, and what it says about itself.
+    ///
+    /// `modifiers` is the space-separated list the index holds, and is empty for
+    /// a symbol that was declared with none. It is here so that a result can say
+    /// `static` without the page being opened; it can never say `private`,
+    /// because a private member is not indexed.
+    public record Match(String symbol, String kind, String modifiers, String doc) {}
 
     private final List<Path> roots;
     private final Vendor vendor;

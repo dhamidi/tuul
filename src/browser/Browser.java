@@ -82,7 +82,8 @@ public final class Browser implements AutoCloseable {
                 Importmap.standard()
                         .pin(Cable.MODULE, Cable.FILE)
                         .pin(web.ui.Ui.MODULE, web.ui.Ui.FILE)
-                        .pin("@tuul/browser-search", "search.js"),
+                        .pin("@tuul/browser-search", "search.js")
+                        .pin(ResultItemKind.MODULE, ResultItemKind.FILE),
                 cable, watching);
     }
 

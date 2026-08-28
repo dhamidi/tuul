@@ -5,11 +5,9 @@ import static web.ui.Tags.*;
 
 import browser.Symbols.Found;
 import browser.Symbols.Symbol;
-import java.text.BreakIterator;
 import java.util.ArrayList;
 import java.util.HashMap;
 import java.util.List;
-import java.util.Locale;
 import java.util.Map;
 import java.util.regex.Pattern;
 import json.Json;
@@ -63,10 +61,6 @@ public final class Views {
     /// The icon, by its logical name — the one place it is spelled, so the
     /// page's link and the conventional path cannot point at different files.
     public static final String ICON = "favicon.svg";
-
-    /// How much of a comment a result shows before it stops being a row in a
-    /// list and starts being a paragraph.
-    private static final int SUMMARY = 160;
 
     /// A qualified type name, which is what can be linked: dotted, and ending
     /// in a segment that begins with a capital. `java.lang.String` is one and
@@ -230,56 +224,18 @@ public final class Views {
         if (!found.asked()) return Ui.blank(text("Type to search the index."));
         if (found.matches().isEmpty()) return Ui.blank(text("Nothing matches " + found.query() + "."));
         return Ui.items(Props.of().on("divided"),
-                Html.each(found.matches(), match -> match(routes, match)));
+                Html.each(found.matches(), match -> row(routes, match)));
     }
 
-    /// One result. The link leaves the frame it is in: a result is a
-    /// navigation, and a link inside a Turbo Frame drives that frame by
-    /// default — which would ask a symbol page for a frame it does not have and
-    /// replace the results with `Content missing`.
-    private static Html match(Router routes, Json match) {
+    /// One result, as the component that is one.
+    ///
+    /// Something in the list that is not a match is left out rather than drawn
+    /// as an empty row: the matches arrive as JSON in a message, so a value of
+    /// the wrong shape is possible and a row that names nothing is worse than
+    /// no row.
+    private static Html row(Router routes, Json match) {
         if (!(match instanceof Json.Object entry)) return Html.nothing();
-        var symbol = entry.string("symbol", "");
-        return Ui.item(Microdata.scope(), Microdata.type("/Symbol"),
-                Ui.group(Props.of("gap", "sm", "align", "baseline"),
-                        Ui.anchor(Props.of("href", symbolHref(routes, symbol), "frame", Turbo.TOP),
-                                Ui.mono(Microdata.of("name"), text(symbol))),
-                        Ui.badge(Props.of("tone", "muted"), Microdata.of("kind"),
-                                text(kind(entry.string("kind", ""))))),
-                summary(entry.string("doc", "")));
-    }
-
-    /// The first sentence of what a symbol says about itself.
-    ///
-    /// A result list is scanned, and a row is scannable when it is the same
-    /// shape as the row above it. One entry dumping a whole multi-paragraph
-    /// class comment made rows run from 41 to 191 pixels, which defeats the
-    /// scan the list exists for. The page it links to has the rest.
-    private static Html summary(String doc) {
-        if (doc.isBlank()) return Html.nothing();
-        var first = shorten(doc);
-        if (first.isBlank()) return Html.nothing();
-        return Ui.prose(Props.of("tone", "muted"), Microdata.of("doc"), text(first));
-    }
-
-    /// The first sentence of the first paragraph, and no more than a line of
-    /// it.
-    ///
-    /// The paragraph comes first because a comment's opening sentence is
-    /// followed as often as not by an example, and a sentence boundary after
-    /// `Router.of()` is not one a sentence breaker will find. The length cap is
-    /// the backstop for a comment written as one long sentence — a row that is
-    /// four times its neighbour is not a row in a list.
-    private static String shorten(String doc) {
-        var paragraph = doc.strip().split("\n\\s*\n", 2)[0];
-        var flat = paragraph.replace('\n', ' ').replaceAll("\\s+", " ").strip();
-        var sentences = BreakIterator.getSentenceInstance(Locale.ROOT);
-        sentences.setText(flat);
-        var end = sentences.next();
-        var first = end == BreakIterator.DONE ? flat : flat.substring(0, end).strip();
-        if (first.length() <= SUMMARY) return first;
-        var cut = first.lastIndexOf(' ', SUMMARY);
-        return first.substring(0, cut < 40 ? SUMMARY : cut).strip() + "…";
+        return ResultRow.of(routes, entry);
     }
 
     /// A failure the reader can see, described as a resource rather than left
@@ -554,23 +510,8 @@ public final class Views {
         return Html.fragment(parts);
     }
 
-    /// The index files a kind as the enum spells it. A page is read by a
-    /// person, and `RECORD` is shouting.
-    private static String kind(String kind) {
-        return kind.toLowerCase(Locale.ROOT);
-    }
-
     private static String symbolPath(Router routes, String symbol) {
         return routes.path(Routes.SYMBOL, Map.of("name", symbol));
-    }
-
-    /// Where a search result goes. A member is not a page — it is a place on
-    /// its type's page — so `json.Json#of` is the `json.Json` page and the
-    /// anchor `of`, which is the only URL that exists for it.
-    private static String symbolHref(Router routes, String symbol) {
-        var member = symbol.indexOf('#');
-        if (member < 0) return symbolPath(routes, symbol);
-        return symbolPath(routes, symbol.substring(0, member)) + "#" + symbol.substring(member + 1);
     }
 
     private static List<String> one(Json.Object description, String key) {
@@ -603,10 +544,12 @@ public final class Views {
             import CableStream from "@tuul/cable-stream";
             import Sidebar from "@tuul/ui-sidebar";
             import Search from "@tuul/browser-search";
+            import ResultKind from "@tuul/result-kind";
 
             const stimulus = Application.start();
             stimulus.register("cable-stream", CableStream);
             stimulus.register("ui-sidebar", Sidebar);
             stimulus.register("search", Search);
+            stimulus.register("result-kind", ResultKind);
             """;
 }

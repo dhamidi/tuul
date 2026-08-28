@@ -154,6 +154,7 @@ public final class Symbols {
                     .map(match -> (Json) Json.Object.of()
                             .with("symbol", match.symbol())
                             .with("kind", match.kind())
+                            .with("modifiers", match.modifiers())
                             .with("doc", match.doc()))
                     .toList();
             emit.emit(Message.of(MATCHED).with("matches", Json.Array.of(matches)));

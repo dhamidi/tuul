@@ -166,7 +166,7 @@ final class Store implements AutoCloseable {
 
         var found = new ArrayList<Index.Match>();
         try (var rows = database.query("""
-                select symbol, kind, doc from search
+                select symbol, kind, modifiers, doc from search
                 where search match ?
                 order by case
                     when lower(replace(symbol, '$', '.')) = lower(?) then 0
@@ -177,7 +177,8 @@ final class Store implements AutoCloseable {
                 limit ?
                 """, match, text.strip(), text.strip(), limit)) {
             while (rows.next()) {
-                found.add(new Index.Match(rows.text(0).replace('$', '.'), rows.text(1), rows.text(2)));
+                found.add(new Index.Match(
+                        rows.text(0).replace('$', '.'), rows.text(1), rows.text(2), rows.text(3)));
             }
         }
         return List.copyOf(found);

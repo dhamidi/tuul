@@ -24,8 +24,9 @@ final class Schema {
     /// Bumped when the shape below changes in a way that would make an older
     /// file answer differently — version 2 stopped indexing private members,
     /// version 4 added where a symbol is written and made packages and modules
-    /// symbols in their own right.
-    static final int VERSION = 4;
+    /// symbols in their own right, and version 5 carries a symbol's modifiers
+    /// into search, so a result can say `static` without the page being opened.
+    static final int VERSION = 5;
 
     /// The whole format. Types, the members they declare, the parameters those
     /// take, the tags on either, and the origin each type was learned from.
@@ -133,26 +134,33 @@ final class Schema {
     /// declares is *stored*, because `tuul docs --all` asks for it, but a
     /// private field offered by search is a result that leads nowhere: the page
     /// does not show it and cannot, so search and `docs` would disagree about
-    /// what exists.
+    /// what exists. One consequence is worth stating: `modifiers` on a search
+    /// row can say `static`, `final`, `abstract` or `sealed`, and can never say
+    /// `private`, because the row would not be here.
+    ///
+    /// `modifiers` is carried but not indexed, for the reason `kind` is: a
+    /// result has to be able to say what it is without a second query, and
+    /// nobody searching for a symbol means to find every static method there is.
     private static final String SEARCH = """
             create virtual table search using fts5 (
                 symbol,
                 doc,
-                kind   unindexed,
-                owner  unindexed,
-                member unindexed,
+                kind      unindexed,
+                modifiers unindexed,
+                owner     unindexed,
+                member    unindexed,
                 tokenize = 'porter unicode61'
             );
 
             create trigger type_indexed after insert on type begin
-                insert into search (symbol, doc, kind, owner, member)
-                values (new.name, new.doc, new.kind, new.id, null);
+                insert into search (symbol, doc, kind, modifiers, owner, member)
+                values (new.name, new.doc, new.kind, new.modifiers, new.id, null);
             end;
 
             create trigger member_indexed after insert on member
             when new.modifiers like '%public%' or new.modifiers like '%protected%' begin
-                insert into search (symbol, doc, kind, owner, member)
-                select type.name || '#' || new.name, new.doc, new.kind, new.type, new.id
+                insert into search (symbol, doc, kind, modifiers, owner, member)
+                select type.name || '#' || new.name, new.doc, new.kind, new.modifiers, new.type, new.id
                 from type where type.id = new.type;
             end;
 

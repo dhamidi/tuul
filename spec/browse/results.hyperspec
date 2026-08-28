@@ -57,3 +57,27 @@ client private {
         expect no link sqlite3.Database#arena
     }
 }
+
+client kinds {
+    visit /
+    fill q sqlite3.Database#execute
+    submit
+    within results {
+        # A result says what kind of thing it is, and says it in the word a
+        # person reads rather than the way the index files it. The chip that
+        # shows this draws a letter and expands to the word, so the word has to
+        # be somewhere a reader that does not run scripts can still find it —
+        # which is the machine-readable value on the chip itself.
+        expect item symbol
+        expect attribute symbol kind method
+    }
+}
+
+client types {
+    visit /
+    fill q json.JsonWriter
+    submit
+    within results {
+        expect attribute symbol kind class
+    }
+}

@@ -237,3 +237,177 @@ turbo-frame { display: block; }
   border-left: 2px solid var(--ui-rule);
 }
 .ui-doc table { display: block; overflow-x: auto; max-width: 100%; }
+
+/* A search result -------------------------------------------------------- */
+
+/* One result: a kind chip, the symbol's name, and the first sentence of what it
+ * says about itself. The chip and the name share a line because they name one
+ * thing between them; the sentence goes under, where a wrapped sentence does not
+ * push the name around. */
+.result-head {
+  display: flex;
+  align-items: center;
+  gap: var(--ui-space-3);
+  min-width: 0;
+}
+
+/* The gap above is not decoration. The chip's hit area is 44px wide around a
+ * 28px square, so it reaches 8px past the square on each side, and a smaller
+ * gap would put the chip's target on top of the link's text. */
+
+.result-doc { margin-top: var(--ui-space-1); }
+
+/* The kind chip ---------------------------------------------------------- */
+
+/* Colour by family, so that two kinds which share a colour never share a
+ * letter. The ink is the letter and the outline; the fill is what the letter
+ * sits on. Every pair below was measured rather than chosen: letter on fill is
+ * at least 7.4:1 where WCAG 1.4.3 asks 4.5:1, and outline on paper at least
+ * 9.7:1 where 1.4.11 asks 3:1 for the boundary of something you can operate.
+ * The fill alone is a tint at about 1.35:1, which is why the outline and not the
+ * fill is what makes the chip a control you can see. */
+.kind--type      { --kind-ink: #173f6e; --kind-fill: #c9dcf0; }
+.kind--contract  { --kind-ink: #57256f; --kind-fill: #e2cef2; }
+.kind--value     { --kind-ink: #194c2b; --kind-fill: #c6e6d1; }
+.kind--container { --kind-ink: #5f3a05; --kind-fill: #f0dcbc; }
+.kind--member    { --kind-ink: #0f474b; --kind-fill: #c2e3e5; }
+/* A kind this tuul has never heard of. An index is a file on disk and another
+ * tuul may have written it, so an unknown kind is drawn rather than dropped. */
+.kind--plain     { --kind-ink: #4a4a45; --kind-fill: #e8e8e3; }
+
+@media (prefers-color-scheme: dark) {
+  .kind--type      { --kind-ink: #bcd9f7; --kind-fill: #26374b; }
+  .kind--contract  { --kind-ink: #e0c3f5; --kind-fill: #382a44; }
+  .kind--value     { --kind-ink: #aee3bf; --kind-fill: #1f3a29; }
+  .kind--container { --kind-ink: #f0c88f; --kind-fill: #3d3018; }
+  .kind--member    { --kind-ink: #a6e0e4; --kind-fill: #1d383a; }
+  .kind--plain     { --kind-ink: #cfcfc9; --kind-fill: #33333a; }
+}
+
+/* The root is a `data` element, which is an inline box by default and would sit
+ * on the text baseline rather than on the centre of the line. */
+.kind { display: inline-flex; flex: none; }
+
+/* The control. It carries no fill of its own until it is open, so a closed chip
+ * is the square and nothing else, and an open one is a badge the square sits
+ * inside. */
+.kind-chip {
+  position: relative;
+  display: inline-flex;
+  align-items: center;
+  margin: 0;
+  padding: 0;
+  border: 0;
+  background: none;
+  font: inherit;
+  color: var(--kind-ink);
+  cursor: pointer;
+  border-radius: var(--ui-radius);
+  transition: background-color 160ms ease, padding 180ms ease;
+}
+
+/* 44 by 44, without making the row 44 tall.
+ *
+ * The square is 28px because a bigger one would be a button in a list of names
+ * rather than a mark beside one, and 28 is under the 44 a thumb needs. So the
+ * target is a layer of its own, centred on the square and laid over the row's
+ * own padding, which is 16px above and below — the row does not grow by a
+ * pixel, and the thing you press is the size WCAG 2.5.5 asks for. Two chips in
+ * neighbouring rows stay 12px apart. */
+.kind-chip::before {
+  content: "";
+  position: absolute;
+  left: 50%;
+  top: 50%;
+  translate: -50% -50%;
+  width: max(100%, 2.75rem);
+  height: 2.75rem;
+}
+
+.kind-chip:focus-visible { outline: 2px solid var(--ui-link); outline-offset: 2px; }
+
+.kind-mark {
+  position: relative;
+  flex: none;
+  display: inline-grid;
+  place-items: center;
+  width: 1.75rem;
+  height: 1.75rem;
+  font-family: var(--ui-mono);
+  font-size: 0.75rem;
+  font-weight: 700;
+  line-height: 1;
+  /* The letter is the one thing on this chip that has to be read, so the mark
+     is its own stacking context and the shape below is pushed behind the text
+     inside it. Without the negative z-index the shape is a positioned box and
+     the letter is inline content, which paints under it: coloured squares with
+     nothing in them. */
+  z-index: 0;
+  isolation: isolate;
+}
+
+/* The shape, as a layer under the letter. It is separate so that `static` can
+ * turn the square 45 degrees into a rhombus while the letter stays upright — a
+ * letter on its side is a letter nobody reads. The scale keeps the turned square
+ * inside about the same space the unturned one took. */
+.kind-mark::before {
+  content: "";
+  position: absolute;
+  inset: 0;
+  z-index: -1;
+  border: 1px solid var(--kind-ink);
+  border-radius: 3px;
+  background: var(--kind-fill);
+}
+
+.kind--static .kind-mark::before { rotate: 45deg; scale: 0.86; border-radius: 2px; }
+
+/* An abstract declaration is one with a piece missing, so its outline has
+   pieces missing. */
+.kind--abstract .kind-mark::before { border-style: dashed; }
+
+/* Dulled, not hidden: something you were shown and are not meant to reach for.
+ * The opacity is on the shape and never on the letter, so the letter keeps its
+ * full contrast — measured at 8.2:1 or better on the washed-out fill — and the
+ * outline stays at 3.8:1 against paper, above the 3:1 a control's boundary
+ * needs.
+ *
+ * Nothing in `tuul browse` renders this today: search does not index a private
+ * member and a symbol page does not list one. It is here because it is what a
+ * private symbol should look like the day something shows one. */
+.kind--private .kind-mark::before { opacity: 0.65; }
+
+/* The word, which is not there until it is asked for. `max-width` rather than
+ * `display` or `visibility`, because those two take the word out of the
+ * accessibility tree as well as off the screen — and because neither of them
+ * animates. */
+.kind-word {
+  max-width: 0;
+  overflow: hidden;
+  white-space: nowrap;
+  opacity: 0;
+  font-size: var(--ui-text-sm);
+  font-weight: 500;
+  line-height: 1;
+  transition: max-width 180ms ease, opacity 120ms ease, margin-inline-start 180ms ease;
+}
+
+/* Open, the chip is a badge with the mark sitting inside it. The left padding
+   is not symmetry for its own sake: a rhombic mark is a turned square, so its
+   left point reaches past where a square's edge would be, and without the
+   padding it pokes out of the badge it is supposed to be inside. */
+.kind-chip[aria-expanded="true"] {
+  background: var(--kind-fill);
+  padding: 0 var(--ui-space-2) 0 var(--ui-space-1);
+}
+.kind-chip[aria-expanded="true"] .kind-word {
+  max-width: 8rem;
+  opacity: 1;
+  margin-inline-start: var(--ui-space-1);
+}
+
+/* Somebody who has asked for less motion gets the same states and none of the
+   travel between them. */
+@media (prefers-reduced-motion: reduce) {
+  .kind-chip, .kind-word { transition: none; }
+}

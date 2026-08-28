@@ -28,6 +28,7 @@ public final class BrowserTest {
              var browser = Browser.of(index, null)) {
             UpdatesTest.run(index);
             ViewsTest.run(browser.routes());
+            ResultsTest.run(browser.routes());
             HandlerTest.run(browser);
             answers(browser);
         }
