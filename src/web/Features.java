@@ -34,6 +34,21 @@ import web.dispatch.Router;
 /// The order features are named is the order their files are searched, and the
 /// first answer wins — so an application that ships a file of the same name as
 /// a feature replaces it by naming itself first.
+///
+/// **That order is also document order.** [#head()] and [#body()] write each
+/// feature's contributions in the order the features were named, and each
+/// feature's own in the order it declared them. This is not an accident of how
+/// they are stored: stylesheets cascade, so a design system named before an
+/// application is a design system whose rules the application can override, and
+/// the reverse silently is not.
+///
+/// The two uses of that one order pull opposite ways, and an application has to
+/// choose. Naming yourself **first** means your file wins when a feature ships
+/// one of the same name. Naming yourself **last** means your stylesheet cascades
+/// over theirs. You cannot have both from one list, and pretending otherwise
+/// would mean an application that reads correctly and renders wrong. Replacing a
+/// whole shipped file is rare and overriding some of its rules is not, so name
+/// yourself last unless you have a reason.
 public final class Features {
 
     /// The route that answers for a file. Named so that it can be replaced by
@@ -105,6 +120,40 @@ public final class Features {
 
     public Importmap importmap() {
         return modules;
+    }
+
+    /// Everything the features put in the document head, and then the import
+    /// map.
+    ///
+    /// The import map is last because nothing may import through it before it
+    /// is read, and because the module that starts an application is written
+    /// after this and has to come after the map. It is here at all rather than
+    /// left to the application for the same reason the stylesheets are: it is
+    /// built out of the features' own pins, and a page that forgot it would be
+    /// a page that quietly stopped being interactive.
+    ///
+    /// See the note on order above: this is the order the features were named.
+    public Markup head() {
+        return out -> {
+            for (var feature : features) {
+                for (var contribution : feature.head()) contribution.write(assets, routes, out);
+            }
+            modules.write(assets, out);
+        };
+    }
+
+    /// Everything the features put at the top of the document body.
+    ///
+    /// An application writes its own layout and puts this at the start of it.
+    /// What lands here is what a package needs present before anything scripts
+    /// against it — the element the cable listens through — and not anything an
+    /// application would recognise as its own page.
+    public Markup body() {
+        return out -> {
+            for (var feature : features) {
+                for (var contribution : feature.body()) contribution.write(assets, routes, out);
+            }
+        };
     }
 
     public List<Feature> features() {

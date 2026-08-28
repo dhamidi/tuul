@@ -56,6 +56,18 @@ public record Importmap(Map<String, String> pins) {
     /// anything imports through it, then a preload for each module so the
     /// browser can start fetching them without waiting to be asked.
     ///
+    /// An attribute value, escaped.
+    ///
+    /// The JSON below is escaped for the element it sits inside, and these
+    /// hrefs were not escaped at all: the reasoning stopped at the inline
+    /// document and did not reach the two attributes beside it. A logical name
+    /// comes from a file on a load path rather than from a request, so this
+    /// closes a shape rather than a hole — but a rule that holds for one
+    /// attribute and not the one under it is a rule nobody can rely on.
+    private static String attribute(String value) {
+        return value.replace("&", "&amp;").replace("\"", "&quot;").replace("<", "&lt;");
+    }
+
     /// The JSON has its angle brackets escaped. Inside a `script` element the
     /// bytes `</script` end the element wherever they appear, including in the
     /// middle of a string, and a file name is not something this package gets to
@@ -65,7 +77,7 @@ public record Importmap(Map<String, String> pins) {
         out.write(inline(json(assets)));
         out.write("</script>\n");
         for (var pin : pins.values()) {
-            out.write("<link rel=\"modulepreload\" href=\"" + assets.url(pin) + "\">\n");
+            out.write("<link rel=\"modulepreload\" href=\"" + attribute(assets.url(pin)) + "\">\n");
         }
         out.flush();
     }

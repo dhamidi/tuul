@@ -16,6 +16,7 @@ public final class FeaturesTest {
 
     public static void run() throws Exception {
         parts();
+        page();
         serving();
         mounting();
         refusing();
@@ -49,6 +50,56 @@ public final class FeaturesTest {
 
         Check.equal("a feature with no routes adds none", 0, quiet.routes().routes().size());
         Check.that("and still contributes what it ships", wiring.assets().find("design.css").isPresent());
+    }
+
+    /// What a feature puts in the document, and in what order.
+    ///
+    /// The order is the whole point of these checks. Stylesheets cascade, so a
+    /// feature named after another is a feature whose rules win — and if that
+    /// followed the iteration order of a map rather than the order somebody
+    /// wrote, a page would render with the right files and the wrong design,
+    /// which nothing else here can see.
+    private static void page() throws Exception {
+        var files = tree();
+        var design = Feature.named("design").from(files).stylesheet("design.css");
+        var app = Feature.named("app")
+                .from(files)
+                .stylesheet("live.css")
+                .head((assets, routes, out) -> out.write("<meta name=\"app\">"))
+                .body((assets, routes, out) -> out.write("<div data-live=\"" + routes.path("live.stream") + "\"></div>"))
+                .get("live.stream", "/live", (request, response) -> Responses.text("streaming", response));
+        var quiet = Feature.named("quiet").from(files).pin("@app/live", "live.js");
+
+        var wiring = Features.of(Router.of(), design, app, quiet);
+        var head = written(wiring.head());
+        var body = written(wiring.body());
+
+        Check.that("a stylesheet a feature ships is linked",
+                head.contains("<link rel=\"stylesheet\" href=\"" + wiring.assets().url("design.css") + "\">"));
+        Check.that("and the link carries the digest, so it is the file that was read",
+                wiring.assets().url("design.css").contains("-"));
+        Check.that("a head contribution is written too", head.contains("<meta name=\"app\">"));
+        Check.that("a body contribution lands in the body", body.contains("data-live="));
+        Check.equal("and resolves its own route through the composed table",
+                "<div data-live=\"/live\"></div>", body);
+
+        Check.that("features are written in the order they were named",
+                head.indexOf("design-") < head.indexOf("live-"));
+        Check.that("and a feature's own contributions in the order it declared them",
+                head.indexOf("live-") < head.indexOf("<meta name=\"app\">"));
+        Check.that("the import map comes after every feature, since nothing may import before it",
+                head.indexOf("<meta name=\"app\">") < head.indexOf("importmap"));
+
+        Check.that("a feature that contributes nothing to the page writes nothing",
+                written(Features.of(Router.of(), quiet).body()).isEmpty());
+        Check.that("and still has its pin in the map",
+                written(Features.of(Router.of(), quiet).head()).contains("@app/live"));
+    }
+
+    private static String written(Markup markup) throws Exception {
+        var out = new java.io.StringWriter();
+        markup.write(out);
+        return out.toString();
     }
 
     /// The pipeline serves its own URL, and the route agrees with the prefix
@@ -112,6 +163,7 @@ public final class FeaturesTest {
         root.toFile().deleteOnExit();
         Files.writeString(root.resolve("live.js"), "// live\n");
         Files.writeString(root.resolve("design.css"), "body { color: red }\n");
+        Files.writeString(root.resolve("live.css"), "body { color: blue }\n");
         return root;
     }
 }

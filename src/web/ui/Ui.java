@@ -43,6 +43,11 @@ public final class Ui {
 
     public static final String FILE = "sidebar.js";
 
+    /// The stylesheet that says what every `ui-` class name means. Named here
+    /// because [#feature()] both ships it and links it, and an application that
+    /// had to write the `link` itself could ship the design without wearing it.
+    public static final String STYLESHEET = "ui.css";
+
     /// The directory holding [#FILE] and the stylesheet, beside this package's
     /// own code.
     public static final String ASSETS = "assets";
@@ -56,14 +61,19 @@ public final class Ui {
     /// controller, and the name a page imports the controller by.
     ///
     /// Every component here writes a `ui-` prefixed class name and nothing
-    /// else, so a page that does not serve `ui.css` renders the right markup
-    /// with none of the design on it. An application says it wants this the
-    /// same way it says it wants the cable: by naming it.
+    /// else, so a page without [#STYLESHEET] renders the right markup with none
+    /// of the design on it. That is why the stylesheet is declared here and not
+    /// in a layout: shipping the file and linking it are one statement, and an
+    /// application says it wants both the same way it says it wants the cable —
+    /// by naming this.
     ///
     /// There are no routes here, and that is the point of a feature being able
     /// to have none: a design system serves no URL of its own.
     public static Feature feature() {
-        return Feature.named("web.ui").from(Bundled.of(Ui.class, ASSETS)).pin(MODULE, FILE);
+        return Feature.named("web.ui")
+                .from(Bundled.of(Ui.class, ASSETS))
+                .stylesheet(STYLESHEET)
+                .pin(MODULE, FILE);
     }
 
     private Ui() {}

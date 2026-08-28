@@ -47,10 +47,14 @@ public final class BrowserTest {
     /// here.
     private static void assets(Browser browser) {
         var assets = browser.assets();
-        Check.equal("the application's own assets come first, from beside its own code",
-                Bundled.of(Browser.class, Browser.ASSETS), assets.loadPaths().getFirst());
-        for (var mine : List.of("browser.css", "search.js", "kind.js", Views.ICON)) {
-            Check.that(mine + " is on the load path", assets.find(mine).isPresent());
+        var mine = Bundled.of(Browser.class, Browser.ASSETS);
+        Check.that("the application's own assets are on the load path, from beside its own code",
+                assets.loadPaths().contains(mine));
+        Check.that("after the components', so this application's stylesheet cascades over theirs",
+                assets.loadPaths().indexOf(Bundled.of(web.ui.Ui.class, web.ui.Ui.ASSETS))
+                        < assets.loadPaths().indexOf(mine));
+        for (var file : List.of("browser.css", "search.js", "kind.js", Views.ICON)) {
+            Check.that(file + " is on the load path", assets.find(file).isPresent());
         }
         Check.that("and Turbo still is, without this application asking for it",
                 assets.find(Hotwired.TURBO_FILE).isPresent());

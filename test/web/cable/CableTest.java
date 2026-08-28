@@ -219,12 +219,29 @@ public final class CableTest {
         }
     }
 
-    private static void markup() {
-        var source = Cable.source("/updates").markup();
+    /// What the feature puts in every page's body.
+    ///
+    /// Rendered through [web.Features] rather than by calling the element
+    /// directly, because that is the only way an application gets one: the
+    /// element is this package's and a page that rendered a second would have
+    /// two with the same id. Going through the wiring also proves the URL comes
+    /// from the composed route table rather than from a string somebody typed.
+    private static void markup() throws Exception {
+        String source;
+        try (var cable = Cable.of()) {
+            var wiring = web.Features.of(web.dispatch.Router.of(), cable.feature(Topics.fixed("symbols")));
+            var written = new StringWriter();
+            wiring.body().write(written);
+            source = written.toString();
+        }
         Check.equal("the element a page renders to start listening",
                 "<div id=\"cable-stream-source\" data-turbo-permanent"
                         + " data-controller=\"cable-stream\" data-cable-stream-url-value=\"/updates\"></div>",
                 source);
+        Check.that("and it is the feature that puts it there, not the application",
+                java.util.Arrays.stream(Cable.class.getDeclaredMethods())
+                        .noneMatch(method -> method.getName().equals("source")
+                                && java.lang.reflect.Modifier.isPublic(method.getModifiers())));
         Check.that("it is permanent, so a Turbo navigation does not reconnect it",
                 source.contains("data-turbo-permanent"));
         Check.equal("and the identifier it writes is the one an application registers",

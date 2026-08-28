@@ -59,6 +59,10 @@ public final class Browser implements AutoCloseable {
     /// application uses them, and one that does not should not carry them.
     public static final String ASSETS = "assets";
 
+    /// This application's own stylesheet. It cascades over the components' one,
+    /// which is why the feature that ships it is named last.
+    public static final String STYLESHEET = "browser.css";
+
     /// The topic pages listen to. There is one, because there is one thing
     /// worth saying: what you are reading has been rebuilt.
     public static final String INDEX = "index";
@@ -87,20 +91,25 @@ public final class Browser implements AutoCloseable {
     public static Browser of(Index index, Path watched) {
         var cable = Cable.of();
         var watching = watch(cable, watched);
-        return new Browser(index, Features.of(Routes.of(), own(), Ui.feature(),
-                cable.feature(Topics.fixed(INDEX))), cable, watching);
+        return new Browser(index, Features.of(Routes.of(), Ui.feature(),
+                cable.feature(Topics.fixed(INDEX)), own()), cable, watching);
     }
 
     /// What this application ships to the browser.
     ///
-    /// Its own files, and the two controllers it wrote. Everything else on the
-    /// page — the components' stylesheet, the cable's controller, Turbo and
-    /// Stimulus — comes from the package that ships it, which is why this list
-    /// is short and why nothing here repeats a file name that a framework
-    /// package already knows.
+    /// Its own files, its own stylesheet and icon, and the two controllers it
+    /// wrote. Everything else on the page — the components' stylesheet, the
+    /// cable's controller and element, Turbo and Stimulus — comes from the
+    /// package that ships it, which is why this list is short and why nothing
+    /// here repeats a file name that a framework package already knows.
+    ///
+    /// It is named last in [#of(Index, Path)] so that [#STYLESHEET] cascades
+    /// over the components' one. See [Features] on what that order costs.
     private static Feature own() {
         return Feature.named("browser")
                 .from(Bundled.of(Browser.class, ASSETS))
+                .stylesheet(STYLESHEET)
+                .head(Views.icon())
                 .pin("@tuul/browser-search", "search.js")
                 .pin(ResultItemKind.MODULE, ResultItemKind.FILE);
     }
@@ -252,7 +261,7 @@ public final class Browser implements AutoCloseable {
     /// bytes.
     private Html shell(Request request, String heading, Submission search, Html content) {
         if (Views.CONTENT.equals(frame(request))) return Views.pane(content);
-        return Views.page(wiring.routes(), wiring.assets(), wiring.importmap(), heading, search,
+        return Views.page(wiring, heading, search,
                 index.roots(), content);
     }
 

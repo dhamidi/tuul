@@ -14,9 +14,8 @@ import json.Json;
 import markdown.Links;
 import markdown.Markdown;
 import symbols.Index;
-import web.assets.Assets;
-import web.assets.Importmap;
-import web.cable.Cable;
+import web.Contribution;
+import web.Features;
 import web.dispatch.Router;
 import web.forms.Forms;
 import web.forms.Submission;
@@ -88,24 +87,39 @@ public final class Views {
         return nodes.toArray(new Node[0]);
     }
 
-    /// A whole page. The import map and the module that starts Turbo and
-    /// Stimulus are here rather than in each page, since a page that forgot
-    /// them would be a page that quietly stopped being interactive.
-    public static Html page(Router routes, Assets assets, Importmap modules, String heading, Submission search,
+    /// The link that says where the icon is.
+    ///
+    /// A contribution rather than a line in [#page]: it is this application's
+    /// own file, and a mechanism an application opts out of for its own files
+    /// is half a mechanism. The URL is resolved when the page is written,
+    /// because it carries the digest of the file.
+    public static Contribution icon() {
+        return (assets, routes, out) ->
+                link(rel("icon"), type("image/svg+xml"), href(assets.url(ICON))).write(out);
+    }
+
+    /// A whole page.
+    ///
+    /// Nothing here names a file. The stylesheets, the icon, the import map and
+    /// the element the cable listens through all arrive through
+    /// [Features#head()] and [Features#body()], from the packages that ship
+    /// them — so this cannot link a stylesheet that is not served, or serve one
+    /// it forgot to link. What is left is the module that starts the
+    /// application, which is this application's own and has to come after the
+    /// import map it imports through.
+    public static Html page(Features wiring, String heading, Submission search,
                             List<Index.Root> roots, Node... content) {
+        var routes = wiring.routes();
         return document(
                 lang("en"),
                 head(
                         meta(charset("utf-8")),
                         meta(name("viewport"), content("width=device-width, initial-scale=1")),
                         title(text(heading + " — tuul")),
-                        link(rel("icon"), type("image/svg+xml"), href(assets.url(ICON))),
-                        link(rel("stylesheet"), href(assets.url("ui.css"))),
-                        link(rel("stylesheet"), href(assets.url("browser.css"))),
-                        Html.deferred(out -> modules.write(assets, out)),
+                        Html.deferred(wiring.head()::write),
                         script(BOOT, type("module"))),
                 body(
-                        Cable.source(routes.path(Cable.UPDATES)),
+                        Html.deferred(wiring.body()::write),
                         a(classes("skip"), href("#" + MAIN), text("Skip to content")),
                         Html.element("div", classes("shell"), Stimulus.controller(Ui.CONTROLLER),
                                 header(classes("bar"),

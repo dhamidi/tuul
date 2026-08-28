@@ -172,8 +172,14 @@ public final class Cable implements AutoCloseable {
         }
     }
 
-    /// The element that makes a page listen. Render it once, in the layout.
-    public static Html source(String url) {
+    /// The element that makes a page listen.
+    ///
+    /// [#feature(Topics)] puts this in the body of every page, which is why
+    /// nothing outside this class renders it. An application that rendered one
+    /// as well would have two elements with the same id, and the second is the
+    /// one a browser ignores — so the page would listen through whichever came
+    /// first and look correct either way.
+    private static Html source(String url) {
         return Html.element("div",
                 Attributes.id("cable-stream-source"),
                 Turbo.permanent(),
@@ -182,10 +188,15 @@ public final class Cable implements AutoCloseable {
     }
 
     /// Everything an application needs to use the cable: the controller, its
-    /// pin, the route a page connects to, and the handler behind it.
+    /// pin, the element every page listens through, the route it connects to,
+    /// and the handler behind it.
     ///
     /// The controller sits beside this package's own code and travels with it,
     /// into a jar and out of one.
+    ///
+    /// The element resolves its URL when the page is written rather than now,
+    /// so an application that mounts the cable at `/live` gets an element
+    /// pointing there without saying so twice.
     ///
     /// `topics` stays the application's, because what is worth broadcasting is
     /// the application's business and nothing here can guess it. Everything
@@ -198,6 +209,7 @@ public final class Cable implements AutoCloseable {
         return Feature.named("web.cable")
                 .from(Bundled.of(Cable.class, ASSETS))
                 .pin(MODULE, FILE)
+                .body((assets, routes, out) -> source(routes.path(UPDATES)).write(out))
                 .get(UPDATES, "/updates", stream(topics));
     }
 
