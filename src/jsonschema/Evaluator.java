@@ -180,6 +180,12 @@ final class Evaluator {
         }
 
         @Override
+        public void explain(Output failed) {
+            if (failed.valid()) return;
+            errors.addAll(failed.errors());
+        }
+
+        @Override
         public void error(String message) {
             valid = false;
             errors.add(new Unit.Error(here(), message));

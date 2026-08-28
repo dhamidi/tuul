@@ -20,6 +20,11 @@ import json.Json;
 /// `not` keeps nothing. Annotations from a branch that failed must not survive,
 /// because `unevaluatedProperties` would then see properties that nothing
 /// really evaluated.
+///
+/// Dropping a branch does not have to mean losing what it said.
+/// [#explain(Output)] takes the errors of a failed result and leaves its
+/// annotations behind, so a keyword can report why each branch failed without
+/// breaking the rule above.
 public interface Context {
 
     /// The store the schema was compiled from.
@@ -53,6 +58,16 @@ public interface Context {
     /// annotations when it passed. A failure taken here makes this schema
     /// object fail.
     void keep(Output output);
+
+    /// Takes the errors of a result that failed, and none of its annotations.
+    ///
+    /// A keyword that decides for itself what a failed subschema means uses
+    /// this to pass on why that subschema failed. `anyOf` calls it for every
+    /// branch once it knows that no branch passed, so the output carries both
+    /// the summary and what each branch wanted. The verdict is untouched, so a
+    /// keyword that means to fail must still call [#error(String)]. A result
+    /// that passed contributes nothing here.
+    void explain(Output failed);
 
     /// This keyword failed, and this is why.
     void error(String message);

@@ -20,6 +20,7 @@ public final class JsonschemaTest {
         objects();
         booleans();
         applicators();
+        explanations();
         references();
         dynamic();
         unevaluated();
@@ -153,6 +154,67 @@ public final class JsonschemaTest {
                 !valid("{\"if\":{\"type\":\"string\"},\"else\":{\"type\":\"number\"}}", "null"));
         Check.that("if on its own never fails an instance",
                 valid("{\"if\":{\"type\":\"string\"}}", "null"));
+    }
+
+    /// What a failing applicator leaves in the output, and where it points.
+    private static void explanations() {
+        var choice = result("""
+                {"anyOf":[{"required":["card"]},
+                          {"required":["bank"]},
+                          {"properties":{"cash":{"const":true}},"required":["cash"]}]}""",
+                "{\"paypal\":\"a@b.c\",\"cash\":\"maybe\"}");
+        Check.equal("a failing anyOf reports the summary and one unit for every branch",
+                4, choice.errors().size());
+        Check.that("the summary counts the schemas the value matched none of",
+                messageAt(choice, "/anyOf").contains("none of the 3 schemas in anyOf"));
+        Check.that("the first branch says what it wanted",
+                messageAt(choice, "/anyOf/0/required").contains("\"card\""));
+        Check.that("the second branch says what it wanted",
+                messageAt(choice, "/anyOf/1/required").contains("\"bank\""));
+        Check.that("a branch reports the keyword that failed inside it, however deep it sits",
+                errorAt(choice, "/anyOf/2/properties/cash/const", "/cash"));
+
+        var overlap = result(
+                "{\"oneOf\":[{\"type\":\"number\"},{\"type\":\"integer\"},{\"type\":\"string\"}]}", "1");
+        Check.equal("a oneOf that matched too much reports the summary alone", 1, overlap.errors().size());
+        Check.that("the summary names every branch that matched",
+                messageAt(overlap, "/oneOf").contains("/oneOf/0")
+                        && messageAt(overlap, "/oneOf").contains("/oneOf/1"));
+
+        var neither = result("{\"oneOf\":[{\"type\":\"string\"},{\"type\":\"boolean\"}]}", "1");
+        Check.equal("a oneOf that matched nothing reports every branch", 3, neither.errors().size());
+        Check.that("each branch says which type it allowed",
+                messageAt(neither, "/oneOf/0/type").contains("string")
+                        && messageAt(neither, "/oneOf/1/type").contains("boolean"));
+
+        var missed = result("{\"contains\":{\"type\":\"number\",\"minimum\":10}}", "[\"a\",3]");
+        Check.equal("a failing contains reports the summary and one unit for every item",
+                3, missed.errors().size());
+        Check.that("the first item says it was the wrong type", errorAt(missed, "/contains/type", "/0"));
+        Check.that("the second item says it was too small", errorAt(missed, "/contains/minimum", "/1"));
+
+        var hidden = result("""
+                {"anyOf":[{"properties":{"a":{"type":"string"}},"required":["z"]}],
+                 "unevaluatedProperties":false}""",
+                "{\"a\":\"x\"}");
+        Check.that("a property that only a failed branch matched is still unevaluated",
+                errorAt(hidden, "/unevaluatedProperties", "/a"));
+        Check.that("the failed branch still says why it failed", errorAt(hidden, "/anyOf/0/required", ""));
+        Check.that("no annotation of a failed branch reaches the output",
+                hidden.annotations().stream()
+                        .noneMatch(unit -> unit.at().keywordLocation().startsWith("/anyOf")));
+
+        var tooLong = result("{\"if\":{\"type\":\"string\"},\"then\":{\"maxLength\":1}}", "\"ab\"");
+        Check.equal("a conditional reports what then found and nothing else", 1, tooLong.errors().size());
+        Check.that("the error points at the keyword inside then", errorAt(tooLong, "/then/maxLength", ""));
+
+        var otherwise = result("{\"if\":{\"type\":\"string\"},\"else\":{\"type\":\"number\"}}", "null");
+        Check.equal("a conditional reports what else found and nothing else", 1, otherwise.errors().size());
+        Check.that("the error points at the keyword inside else", errorAt(otherwise, "/else/type", ""));
+
+        var untaken = result("{\"if\":{\"type\":\"string\"},\"then\":true}", "1");
+        Check.that("an if that fails is not an error and reports none",
+                untaken.valid() && untaken.errors().isEmpty());
     }
 
     private static void references() {
@@ -413,7 +475,29 @@ public final class JsonschemaTest {
     }
 
     private static boolean valid(String schema, String instance) {
-        return SHARED.compile(Json.parse(schema)).validate(Json.parse(instance)).valid();
+        return result(schema, instance).valid();
+    }
+
+    private static Output result(String schema, String instance) {
+        return SHARED.compile(Json.parse(schema)).validate(Json.parse(instance));
+    }
+
+    /// True when the output holds an error produced by the keyword at
+    /// `keywordLocation` about the part of the instance at `instanceLocation`.
+    private static boolean errorAt(Output output, String keywordLocation, String instanceLocation) {
+        return output.errors().stream()
+                .anyMatch(unit -> unit.at().keywordLocation().equals(keywordLocation)
+                        && unit.at().instanceLocation().equals(instanceLocation));
+    }
+
+    /// The message of the first error at `keywordLocation`, or an empty string
+    /// when there is none, so that a check reads as one expression.
+    private static String messageAt(Output output, String keywordLocation) {
+        return output.errors().stream()
+                .filter(unit -> unit.at().keywordLocation().equals(keywordLocation))
+                .findFirst()
+                .map(unit -> ((Unit.Error) unit).message())
+                .orElse("");
     }
 
     private static String flag(Output output) throws IOException {

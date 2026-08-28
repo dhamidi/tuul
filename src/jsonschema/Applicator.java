@@ -53,25 +53,51 @@ public final class Applicator {
     ///
     /// Stopping early would be faster and wrong. A later branch that also
     /// passes produces annotations, and `unevaluatedProperties` needs them.
+    ///
+    /// A failure reports the summary and then the errors of every branch. The
+    /// summary says what shape the failure has, and the branch errors say what
+    /// each branch asked for, which is what somebody needs in order to fix the
+    /// value. Only the errors travel: the annotations of a branch that failed
+    /// are still dropped.
     private static void anyOf(Json value, Json instance, Context context) {
         if (!(value instanceof Json.Array(var branches))) return;
+        var failed = new ArrayList<Output>();
         var passed = 0;
         for (var i = 0; i < branches.size(); i++) {
             var result = context.probe(branches.get(i), "/anyOf/" + i);
-            if (!result.valid()) continue;
+            if (!result.valid()) {
+                failed.add(result);
+                continue;
+            }
             passed++;
             context.keep(result);
         }
         if (passed > 0) return;
         context.error("the value matches none of the " + branches.size() + " schemas in anyOf");
+        for (var result : failed) context.explain(result);
     }
 
+    /// Every branch runs, because the number of branches that pass is the
+    /// assertion.
+    ///
+    /// The two ways this fails need different reports. When no branch passed,
+    /// the errors of every branch follow the summary, as in `anyOf`. When more
+    /// than one passed, there are no errors to report and the summary names
+    /// the branches that matched instead, because a count on its own does not
+    /// say which schemas overlap.
     private static void oneOf(Json value, Json instance, Context context) {
         if (!(value instanceof Json.Array(var branches))) return;
         var passed = new ArrayList<Output>();
+        var matched = new ArrayList<String>();
+        var failed = new ArrayList<Output>();
         for (var i = 0; i < branches.size(); i++) {
             var result = context.probe(branches.get(i), "/oneOf/" + i);
-            if (result.valid()) passed.add(result);
+            if (!result.valid()) {
+                failed.add(result);
+                continue;
+            }
+            passed.add(result);
+            matched.add("/oneOf/" + i);
         }
         if (passed.size() == 1) {
             context.keep(passed.getFirst());
@@ -79,10 +105,11 @@ public final class Applicator {
         }
         if (passed.isEmpty()) {
             context.error("the value matches none of the " + branches.size() + " schemas in oneOf");
+            for (var result : failed) context.explain(result);
             return;
         }
         context.error("the value matches " + passed.size() + " of the " + branches.size()
-                + " schemas in oneOf, and exactly one is allowed");
+                + " schemas in oneOf, and exactly one is allowed: " + String.join(", ", matched));
     }
 
     /// The subschema must fail. Nothing it produced is kept: the annotations of
@@ -98,6 +125,10 @@ public final class Applicator {
     /// there is nothing for them to do on their own. Running them from here
     /// also means the verdict of `if` never has to travel through an
     /// annotation. The annotations of `if` are kept only when it passed.
+    ///
+    /// An `if` that failed reports nothing at all. It chose `else`, and that
+    /// is not a failure of the instance. `then` and `else` are applied rather
+    /// than probed, so whatever they say reaches the output.
     private static void conditional(Json value, Json instance, Context context) {
         var result = context.probe(value, "/if");
         if (result.valid()) {
@@ -150,12 +181,20 @@ public final class Applicator {
     ///
     /// `contains` on its own asks for at least one match. `minContains: 0`
     /// takes that rule away, so the assertion here looks at its neighbour.
+    ///
+    /// When the assertion fails, every item was rejected and the errors of
+    /// every item follow the summary, each one at the instance location of the
+    /// item it is about.
     private static void contains(Json value, Json instance, Context context) {
         if (!(instance instanceof Json.Array(var items))) return;
         var matched = new ArrayList<Json>();
+        var failed = new ArrayList<Output>();
         for (var i = 0; i < items.size(); i++) {
             var result = context.probe(value, "/contains", items.get(i), "/" + i);
-            if (!result.valid()) continue;
+            if (!result.valid()) {
+                failed.add(result);
+                continue;
+            }
             matched.add(Json.of(i));
             context.keep(result);
         }
@@ -163,6 +202,7 @@ public final class Applicator {
         var least = context.schema().get("minContains") instanceof Json.Num(var minimum) ? minimum : 1;
         if (least == 0 || !matched.isEmpty()) return;
         context.error("no item of the array matches the schema in contains");
+        for (var result : failed) context.explain(result);
     }
 
     private static void properties(Json value, Json instance, Context context) {
