@@ -13,8 +13,8 @@ import json.JsonWriter;
 /// it.
 ///
 /// `params` is an array for positional arguments and an object for named ones.
-/// [json.Json#NULL] means the call has no arguments, and the field is then left
-/// out of the document.
+/// [json.Json#NULL] means the call has no arguments, and this interface then
+/// omits the field from the document.
 public sealed interface Call {
 
     String method();

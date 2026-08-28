@@ -7,10 +7,10 @@ import json.JsonWriter;
 /// Why a call did not produce a result.
 ///
 /// `code` says what went wrong and `message` says it in one short line. `data`
-/// is whatever else helps, and it is written only when there is something in
-/// it. A `"data":null` field tells the reader nothing and costs bytes.
+/// is whatever else helps, and this record writes it only when it holds
+/// something. A `"data":null` field tells the reader nothing and costs bytes.
 ///
-/// The factory methods below use the message text of the specification, and put
+/// The factory methods below use the message text the protocol gives, and put
 /// the detail in `data`. A client that switches on the message therefore keeps
 /// working, and a person who reads the message still learns which call broke.
 public record Failure(int code, String message, Json data) {
@@ -24,7 +24,7 @@ public record Failure(int code, String message, Json data) {
     /// The call named a method that this server does not have.
     public static final int METHOD_NOT_FOUND = -32601;
 
-    /// The method has the call but not these arguments.
+    /// The server has the method, but not for these arguments.
     public static final int INVALID_PARAMS = -32602;
 
     /// The method broke, and the break is the server's fault.
@@ -73,9 +73,9 @@ public record Failure(int code, String message, Json data) {
     /// A failure an application defines for itself.
     ///
     /// The protocol reserves -32768 to -32000 and leaves -32099 to -32000 of
-    /// that block to the server. This method refuses any other code, and it
-    /// refuses loudly. A code outside the block is a bug that a client can only
-    /// see as a wrong answer, so it stops here instead.
+    /// that block to the server. This method refuses any other code with an
+    /// [IllegalArgumentException]. A code outside the block is a bug that a
+    /// client can only see as a wrong answer, so it stops here instead.
     public static Failure server(int code, String message) {
         if (code < SERVER_LOWEST || code > SERVER_HIGHEST) {
             throw new IllegalArgumentException(

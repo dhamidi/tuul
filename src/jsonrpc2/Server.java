@@ -24,10 +24,14 @@ import json.Json;
 /// server.serve(transport);
 /// ```
 ///
-/// It fails open, in the way the protocol asks for. A method that throws
-/// becomes an error response, a document that is not JSON becomes -32700, and
-/// a member of a batch that is not a call becomes -32600. Nothing a caller
-/// sends can stop the server from answering the rest of what it sent.
+/// It fails open, in the way the protocol asks for:
+///
+/// - a method that throws becomes an error response,
+/// - a document that is not JSON becomes -32700,
+/// - a member of a batch that is not a call becomes -32600.
+///
+/// Nothing a caller sends can stop the server from answering the rest of what
+/// it sent.
 public final class Server {
 
     private final Map<String, Method> methods = new LinkedHashMap<>();
@@ -38,16 +42,17 @@ public final class Server {
         return new Server();
     }
 
-    /// Adds a method. A second method under the same name replaces the first,
-    /// because a name has one meaning and a test has to be able to change it.
+    /// Adds a method. A second method under the same name replaces the first.
+    /// A name has one meaning, and a test has to be able to change it.
     public Server method(String name, Method method) {
         methods.put(name, method);
         return this;
     }
 
-    /// Reads one document, answers it, and says whether it wrote anything.
+    /// Reads one document and answers it. Answers with `true` when it wrote a
+    /// document, and with `false` when it wrote nothing.
     ///
-    /// It writes nothing when every call in the document was a notification.
+    /// It writes nothing when every call in the document is a notification.
     /// The protocol requires that silence, and a caller must not turn it into
     /// an empty document.
     public boolean handle(Reader in, Writer out) throws IOException {
@@ -63,11 +68,11 @@ public final class Server {
 
     /// Answers everything the transport delivers, one document at a time.
     ///
-    /// Documents are handled in order, on this thread. Two answers on one
-    /// transport would otherwise race for the same writer, and a transport
-    /// would have to be thread-safe to be useful. Concurrency belongs inside a
-    /// batch, where the protocol allows it. Run this method on a thread per
-    /// connection to serve several callers at once.
+    /// This method handles documents in order, on the calling thread. Two
+    /// answers on one transport would otherwise race for the same writer, and a
+    /// transport would have to be thread-safe to be useful. Concurrency belongs
+    /// inside a batch, where the protocol allows it. Run this method on a thread
+    /// per connection to serve several callers at once.
     public void serve(Transport transport) throws IOException {
         for (var incoming = transport.receive(); incoming.isPresent(); incoming = transport.receive()) {
             try (var out = transport.send()) {
@@ -98,8 +103,8 @@ public final class Server {
     /// the time [#answer(Json)] returns, which is what makes an ordinary
     /// executor enough.
     ///
-    /// Answers are collected by position, so the array comes back in the order
-    /// the calls arrived. The protocol permits any order. A stable one costs
+    /// This method collects answers by position, so the array keeps the order
+    /// the calls arrived in. The protocol permits any order. A stable one costs
     /// nothing and makes a batch readable.
     private List<Response> concurrently(List<Json> members) {
         var answers = new ConcurrentSkipListMap<Integer, Response>();
@@ -113,13 +118,13 @@ public final class Server {
         return List.copyOf(answers.values());
     }
 
-    /// Answers one member of a document, or answers nothing.
+    /// Answers one member of a document, or answers with nothing.
     ///
-    /// The checks run in the order the protocol reads the message, and the
-    /// order decides which error a caller sees. A document that is not a call
-    /// is always reported, even when it carries no id, because the caller
-    /// cannot have meant it as a notification. A call that is well formed and
-    /// carries no id is a notification, and every outcome of it stays silent.
+    /// The checks run in the order the protocol reads the member, and the order
+    /// decides which error a caller sees. A member that is not a call always
+    /// gets a response, even when it carries no id. The caller cannot have
+    /// meant it as a notification. A call that is well formed and carries no id
+    /// is a notification, and every outcome of it stays silent.
     private Optional<Response> answer(Json member) {
         if (!(member instanceof Json.Object object)) {
             return refuse(Failure.invalidRequest("a call must be an object"));
@@ -146,11 +151,11 @@ public final class Server {
     /// The arguments of a call, or nothing when the `params` field holds
     /// something that cannot be arguments.
     ///
-    /// A wrong `params` field is -32602 and not -32600. The specification does
-    /// not say which, and both readings are defensible. This one is more use to
-    /// a caller: the message is a call, the method is named, and the one thing
-    /// wrong with it is its arguments. -32600 is kept for a document that
-    /// cannot be read as a call at all.
+    /// A wrong `params` field is -32602 and not -32600. The protocol does not
+    /// say which, and both readings are defensible. This one is more useful to
+    /// a caller: the member is a call, the method is named, and the one thing
+    /// wrong with it is its arguments. This server keeps -32600 for a member it
+    /// cannot read as a call at all.
     private static Optional<Json> params(Json.Object object) {
         if (!object.fields().containsKey("params")) return Optional.of(Json.NULL);
         var params = object.get("params");
@@ -159,7 +164,7 @@ public final class Server {
     }
 
     /// Runs the method and reports what it did. A notification runs exactly the
-    /// same way. Only the answer is dropped.
+    /// same way. This method only drops the answer.
     private Optional<Response> reply(Optional<Id> id, Method method, Json params) {
         try {
             var value = method.call(params);

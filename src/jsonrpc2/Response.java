@@ -4,14 +4,14 @@ import java.io.IOException;
 import json.Json;
 import json.JsonWriter;
 
-/// What a server sends back for one [Call.Request].
+/// What a server answers to one [Call.Request].
 ///
 /// A response holds a result or a failure. It never holds both, and the
-/// protocol says so, so this is two records rather than one record with two
-/// fields that must not both be filled.
+/// protocol says so. That is why this is two records, and not one record with
+/// two fields that must never both be filled.
 ///
-/// The id is the id of the call. It is sent back unchanged, and it is the only
-/// thing that ties an answer to a question inside a batch.
+/// The id is the id of the call. A server returns it unchanged. Inside a batch
+/// it is the only thing that ties an answer to a question.
 public sealed interface Response {
 
     Id id();

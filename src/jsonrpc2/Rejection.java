@@ -7,9 +7,9 @@ package jsonrpc2;
 /// arbitrary exception means to a client. A [Rejection] is the method saying it
 /// does know.
 ///
-/// It is unchecked. A method that refuses a call has not met an exceptional
-/// condition, it has answered, and making every caller declare that would be
-/// ceremony for nothing.
+/// It is unchecked. A method that refuses a call does not meet an exceptional
+/// condition. It answers. To make every caller declare that would be ceremony
+/// for nothing.
 public final class Rejection extends RuntimeException {
 
     private final transient Failure failure;

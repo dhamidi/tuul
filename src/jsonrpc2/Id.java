@@ -3,14 +3,16 @@ package jsonrpc2;
 import java.util.Optional;
 import json.Json;
 
-/// What a call is called, so that its answer can be recognised.
+/// The name of one call, and how a client recognises its answer.
 ///
-/// The protocol allows three kinds of id: a string, a number, and null. All
-/// three are kept apart here. The id `"1"` and the id `1` are different calls,
-/// and a client that compares ids as text would confuse them.
+/// The protocol allows three kinds of id: a string, a number, and null. This
+/// interface keeps all three apart. The id `"1"` and the id `1` belong to
+/// different calls, and a client that compares ids as text would confuse
+/// them.
 ///
-/// Equality is the record equality of the case, so an id works as a map key.
-/// That is how a batch answer is matched to the call that asked for it.
+/// Each case is a record, so equality comes free and an id works as a map key.
+/// That is how a client matches a batch answer to the call that asked for
+/// it.
 ///
 /// A call with no id at all is not an [Id]. It is a [Call.Notification].
 public sealed interface Id {
@@ -34,7 +36,7 @@ public sealed interface Id {
         return new Number(value);
     }
 
-    /// Reads the `id` field of a message.
+    /// Reads an `id` field.
     ///
     /// Answers with nothing in two cases: the field is absent, and the field
     /// holds a value that cannot be an id. The caller knows which case it is
@@ -50,9 +52,10 @@ public sealed interface Id {
 
     /// This id as the value that goes on the wire.
     ///
-    /// A whole number goes out without a fractional part, because [json.JsonWriter]
+    /// A whole number keeps no fractional part, because [json.JsonWriter]
     /// writes an integral double as an integer. The id `1` arrives as `1` and
-    /// leaves as `1`.
+    /// leaves as `1`. This holds while the number stays below 1e15. Above that
+    /// [json.JsonWriter] writes the double form.
     default Json json() {
         return switch (this) {
             case Text(var text) -> Json.of(text);

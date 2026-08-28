@@ -15,21 +15,20 @@ import jsonrpc2.Transport;
 
 /// A transport that is not one.
 ///
-/// Documents go in and documents come out. There is no socket, no port, no
+/// Documents arrive and documents leave. There is no socket, no port, no
 /// thread, and nothing to start or stop. This exists because it is the proof
 /// that [Transport] is an interface: everything the protocol needs from the
-/// outside world is here, in a hundred lines, and what is not here is not
-/// needed.
+/// outside world is here, and what is not here is not needed.
 ///
-/// It is also the harness. A test of a [Server] or a [jsonrpc2.Client] should
-/// use this, because a test that binds a port is a test that can fail because a
-/// port was busy.
+/// It is also what the tests use. A test of a [Server] or a [jsonrpc2.Client]
+/// should use this. A test that binds a port can fail because the port was
+/// busy.
 ///
 /// Two shapes, one class:
 ///
 /// - [#of(Server)] answers every document itself. Give it to a
-///   [jsonrpc2.Client] and the call goes straight into the server and comes
-///   straight back.
+///   [jsonrpc2.Client], and the client's call reaches the server directly, and
+///   the answer returns the same way.
 /// - [#of(String...)] replays documents that a [Server] will read. What the
 ///   server writes lands in [#sent()].
 ///
@@ -57,13 +56,13 @@ public final class Memory implements Transport {
         return new Memory(Optional.empty(), List.of(documents));
     }
 
-    /// Every document this transport was asked to send, in order. Empty
-    /// documents are not here, because they were never sent.
+    /// Every document this transport sent, in order. An empty document is not
+    /// here, because it was never sent.
     public List<String> sent() {
         return List.copyOf(sent);
     }
 
-    /// A document waiting to be read, in the order it was queued.
+    /// The next queued document, or nothing when the queue is empty.
     @Override
     public Optional<Reader> receive() {
         return Optional.ofNullable(incoming.poll()).map(StringReader::new);
@@ -74,8 +73,8 @@ public final class Memory implements Transport {
         return new Framed();
     }
 
-    /// One outgoing document. Closing it is what sends it, and a document with
-    /// no characters in it was never sent at all — which is how a batch of
+    /// One outgoing document. Closing it is what sends it. A document with no
+    /// characters in it was never sent at all, which is how a batch of
     /// notifications stays silent.
     private final class Framed extends StringWriter {
 

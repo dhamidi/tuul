@@ -16,14 +16,14 @@ import java.io.Writer;
 /// var answer = client.call("subtract", Json.Array.of(List.of(Json.of(42), Json.of(23))));
 /// ```
 ///
-/// [#call(String,Json)] returns the result and throws a [Rejection] for an
+/// [#call(String,Json)] returns the result. It throws a [Rejection] for an
 /// error, because a caller that wanted the result has no use for a value that
 /// is not one. [#batch(List)] returns the responses instead, since one member
 /// of a batch can fail while the rest succeed.
 ///
-/// Ids are numbers, and they count up from one. Nothing else in this package
-/// depends on that. A caller that wants its own ids builds a [Call.Request] and
-/// passes it to [#batch(List)].
+/// Ids are numbers, and they start at one and increase. Nothing else in this
+/// package depends on that. A caller that wants its own ids builds a
+/// [Call.Request] and passes it to [#batch(List)].
 public final class Client implements Closeable {
 
     private final Transport transport;
@@ -74,16 +74,16 @@ public final class Client implements Closeable {
 
     /// Sends several calls as one document.
     ///
-    /// The answers come back in the order of the requests in `calls`, whatever
-    /// order the server put them in. They are matched by id, and a
+    /// This method returns the answers in the order of the requests in
+    /// `calls`, whatever order the server put them in. It matches them by id. A
     /// [Call.Notification] in `calls` produces no entry at all.
     ///
     /// A batch of nothing but notifications reads no answer, because the
     /// protocol says the server sends none.
     ///
     /// A request the server left unanswered becomes an internal error against
-    /// its own id. The list therefore lines up with the requests that were
-    /// sent, and a caller never has to guess which answer is missing.
+    /// its own id. The list therefore matches the requests that were sent, and
+    /// a caller never has to guess which answer is missing.
     public List<Response> batch(List<Call> calls) throws IOException {
         post(calls, true);
         var asked = calls.stream().<Id>mapMulti((call, ids) -> {
@@ -112,8 +112,8 @@ public final class Client implements Closeable {
         return Response.read(members.getFirst());
     }
 
-    /// Writes one document. The writer is closed here, and closing it is what
-    /// sends the document on most transports.
+    /// Writes one document. This method closes the writer, and on most
+    /// transports that close is what sends the document.
     private void post(List<Call> calls, boolean batched) throws IOException {
         try (Writer out = transport.send()) {
             var writer = new JsonWriter(out);
