@@ -11,6 +11,13 @@ import java.util.regex.Pattern;
 /// attribute end at different characters, and raw text elements end at a
 /// closing tag that cannot be escaped at all. Each of those is its own method
 /// here, because the way a library gets this wrong is by having one.
+///
+/// The two character rules live in [web.text.Escape], where the packages below
+/// this one can reach them. They stay named here so that everything in `web.ui`
+/// has one place to ask. What cannot move is the rest: refusing a name that is
+/// not a name, and refusing content that would end a raw text element, both
+/// answer with [HtmlException], which is what the components throw for every
+/// other way of being wrong too.
 final class Escape {
 
     private static final Pattern ELEMENT = Pattern.compile("[A-Za-z][A-Za-z0-9-]*");
@@ -18,37 +25,14 @@ final class Escape {
 
     private Escape() {}
 
-    /// Text in an element. `&` is replaced first by being replaced at all — a
-    /// pass per character rather than a pass per rule, so an escape can never
-    /// be escaped again.
+    /// Text in an element.
     static void text(String value, Writer out) throws IOException {
-        for (var index = 0; index < value.length(); index++) {
-            var character = value.charAt(index);
-            switch (character) {
-                case '&' -> out.write("&amp;");
-                case '<' -> out.write("&lt;");
-                case '>' -> out.write("&gt;");
-                default -> out.write(character);
-            }
-        }
+        web.text.Escape.text(value, out);
     }
 
-    /// An attribute value, which is written inside double quotes. A quote that
-    /// got through here would end the value and let whatever follows become
-    /// attributes of its own — that is the whole attack, and it is why an
-    /// attribute cannot borrow the rule for element text.
+    /// An attribute value, which is written inside double quotes.
     static void attribute(String value, Writer out) throws IOException {
-        for (var index = 0; index < value.length(); index++) {
-            var character = value.charAt(index);
-            switch (character) {
-                case '&' -> out.write("&amp;");
-                case '<' -> out.write("&lt;");
-                case '>' -> out.write("&gt;");
-                case '"' -> out.write("&quot;");
-                case '\'' -> out.write("&#39;");
-                default -> out.write(character);
-            }
-        }
+        web.text.Escape.attribute(value, out);
     }
 
     /// `<script>` and `<style>` hold text, not markup. Nothing in them is

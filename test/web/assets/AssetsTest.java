@@ -112,6 +112,33 @@ public final class AssetsTest {
         Importmap.of().pin("</script><b>", "application.js").write(assets, risky);
         Check.that("angle brackets in the map are escaped, since </script> ends the element wherever it appears",
                 inline(risky.toString()).contains("\\u003c/script\\u003e") && !inline(risky.toString()).contains("<"));
+        escaping(assets);
+    }
+
+    /// The preload href beside the map is an attribute, and an attribute ends
+    /// at a quote.
+    ///
+    /// A logical name is a file name, and a file name can hold a quote or an
+    /// angle bracket. This used to be written raw, and then escaped by a
+    /// four-line copy that handled `&`, `"` and `<` and not `>` or `'` — one of
+    /// two such copies, both weaker than the rule they were copying. They are
+    /// gone; this is the check that they do not come back.
+    private static void escaping(Assets assets) throws IOException {
+        var quoted = Files.createTempDirectory("tuul-assets-quoted");
+        quoted.toFile().deleteOnExit();
+        var awkward = "a\"b'c>d&e.js";
+        Files.writeString(quoted.resolve(awkward), "// awkward\n");
+
+        var out = new StringWriter();
+        var over = Assets.of(List.of(quoted));
+        Importmap.of().pin("awkward", awkward).write(over, out);
+        var preload = out.toString().substring(out.toString().indexOf("<link"));
+        Check.that("a quote in a preload href is escaped, or it ends the attribute",
+                preload.contains("&quot;") && !preload.contains("a\"b"));
+        for (var pair : Map.of("'", "&#39;", ">", "&gt;", "&", "&amp;").entrySet()) {
+            Check.that(pair.getKey() + " is escaped in a preload href too",
+                    preload.contains(pair.getValue()));
+        }
     }
 
     private static void serves(Assets assets) {

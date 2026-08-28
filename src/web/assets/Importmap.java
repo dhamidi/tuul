@@ -6,6 +6,7 @@ import java.io.Writer;
 import java.util.LinkedHashMap;
 import java.util.Map;
 import json.Json;
+import web.text.Escape;
 
 /// An import map: what a bare specifier means.
 ///
@@ -61,21 +62,11 @@ public record Importmap(Map<String, String> pins) {
         json(assets).write(new Inline(out));
         out.write("</script>\n");
         for (var pin : pins.values()) {
-            out.write("<link rel=\"modulepreload\" href=\"" + attribute(assets.url(pin)) + "\">\n");
+            out.write("<link rel=\"modulepreload\" href=\"");
+            Escape.attribute(assets.url(pin), out);
+            out.write("\">\n");
         }
         out.flush();
-    }
-
-    /// An attribute value, escaped.
-    ///
-    /// The document inside the `script` element is escaped for the element it
-    /// sits in, and these hrefs beside it were not escaped at all: the
-    /// reasoning stopped at the inline document. A logical name comes from a
-    /// file on a load path rather than from a request, so this closes a shape
-    /// rather than a hole — but a rule that holds for one attribute and not the
-    /// one under it is a rule nobody can rely on.
-    private static String attribute(String value) {
-        return value.replace("&", "&amp;").replace("\"", "&quot;").replace("<", "&lt;");
     }
 
     /// A writer that makes a JSON document safe to sit inside a `script`

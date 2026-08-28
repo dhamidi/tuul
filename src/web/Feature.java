@@ -6,6 +6,7 @@ import java.util.LinkedHashMap;
 import java.util.List;
 import java.util.Map;
 import web.dispatch.Router;
+import web.text.Escape;
 
 /// Everything one package contributes to an application, said once.
 ///
@@ -114,7 +115,7 @@ public record Feature(String name, String mount, List<Path> assets, Map<String, 
     public Feature stylesheet(String logical) {
         return head((assets, routes, out) -> {
             out.write("<link rel=\"stylesheet\" href=\"");
-            out.write(attribute(assets.url(logical)));
+            Escape.attribute(assets.url(logical), out);
             out.write("\">\n");
         });
     }
@@ -164,16 +165,5 @@ public record Feature(String name, String mount, List<Path> assets, Map<String, 
 
     public Feature delete(String route, String template, Handler handler) {
         return route(route, "DELETE", template, handler);
-    }
-
-    /// A value safe to put between double quotes in an attribute.
-    ///
-    /// `web.ui.Escape` does this and more, and `web` cannot call it: `web.ui` is
-    /// built on the responses this package defines, so the dependency only goes
-    /// one way. An asset name comes from a file on somebody's disk, and a file
-    /// name is not something this package gets to make assumptions about — the
-    /// same reason [web.assets.Importmap#write] escapes the map it inlines.
-    private static String attribute(String value) {
-        return value.replace("&", "&amp;").replace("\"", "&quot;").replace("<", "&lt;");
     }
 }
