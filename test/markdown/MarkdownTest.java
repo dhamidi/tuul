@@ -183,12 +183,30 @@ public final class MarkdownTest {
     }
 
     /// A reference nobody ever defines stays what it was written as, which is
-    /// text — and says so in the tree rather than only in the output.
+    /// text — all of it, including the label.
+    ///
+    /// The label is the point: a reader seeing `[the docs][nope]` knows which
+    /// definition is missing, and one seeing `[the docs]` has had the name of
+    /// it taken away.
     private static void unresolved() {
-        equal("an undefined full reference", "<p>[text]</p>\n", "[text][nope]\n");
-        equal("an undefined image reference", "<p>![alt]</p>\n", "![alt][nope]\n");
-        equal("markup inside an undefined reference survives",
-                "<p>[<em>em</em>]</p>\n", "[*em*][nope]\n");
+        equal("an undefined full reference keeps its label",
+                "<p>See [the docs][nope].</p>\n", "See [the docs][nope].\n");
+        equal("an undefined collapsed one keeps its brackets",
+                "<p>See [the docs][].</p>\n", "See [the docs][].\n");
+        equal("an undefined shortcut one is just its text",
+                "<p>See [the docs].</p>\n", "See [the docs].\n");
+
+        equal("an undefined full image reference", "<p>![alt][nope]</p>\n", "![alt][nope]\n");
+        equal("an undefined collapsed image reference", "<p>![alt][]</p>\n", "![alt][]\n");
+        equal("an undefined shortcut image reference", "<p>![alt]</p>\n", "![alt]\n");
+
+        equal("markup inside the text survives, and the label stays literal",
+                "<p>[<em>em</em>][nope]</p>\n", "[*em*][nope]\n");
+        equal("a label is escaped rather than written into the markup",
+                "<p>[a][&lt;b&gt;]</p>\n", "[a][<b>]\n");
+        equal("two on a line keep their own labels", "<p>[a][b] [c][d]</p>\n", "[a][b] [c][d]\n");
+        equal("one that resolves beside one that does not",
+                "<p>[a][nope] and <a href=\"/u\">b</a></p>\n", "[a][nope] and [b][r]\n\n[r]: /u\n");
 
         var document = Markdown.parse("[text][nope]\n");
         var reference = document.cursor();

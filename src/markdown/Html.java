@@ -97,6 +97,7 @@ public final class Html {
                 write("![");
                 escape(alt(cursor));
                 write("]");
+                escape(remainder(cursor));
             }
             default -> { }
         }
@@ -158,7 +159,10 @@ public final class Html {
             case EMPHASIS -> write("</em>");
             case STRONG -> write("</strong>");
             case LINK -> write("</a>");
-            case REFERENCE -> write("]");
+            case REFERENCE -> {
+                write("]");
+                escape(remainder(cursor));
+            }
             default -> { }
         }
     }
@@ -240,6 +244,33 @@ public final class Html {
         write("<img src=\"" + url(target.destination()) + "\" alt=\"" + attribute(alt(image)) + "\"");
         if (!target.title().isEmpty()) write(" title=\"" + attribute(target.title()) + "\"");
         write(" />");
+    }
+
+    /// What an unmatched reference wrote after its text, which goes back out
+    /// as it was typed: nothing for a shortcut, `[]` for a collapsed one,
+    /// `[label]` for a full one.
+    ///
+    /// A reader has to see the label to know which definition is missing. A
+    /// page that renders `[the docs][nope]` as `[the docs]` has swallowed the
+    /// name of the thing nobody defined, which is the one word that would have
+    /// said what to fix.
+    ///
+    /// Where the text ended is worked out from the label rather than stored: a
+    /// shortcut and a collapsed reference label *is* the text, so the text ends
+    /// where the label does, and a full one's label sits two characters past
+    /// the text's closing bracket.
+    ///
+    /// This reads the source, so a label split across two lines of a block
+    /// quote carries the `>` of the second line into the output. That is what
+    /// every span crossing a line does here — a code span has the same seam —
+    /// and it belongs to how inline spans are recorded rather than to this.
+    private String remainder(Cursor reference) {
+        var nodes = document.nodes();
+        var label = reference.copy();
+        if (!label.child(Kind.LABEL)) return "";
+        var opens = nodes.start(reference.index()) + (References.image(nodes, reference.index()) ? 2 : 1);
+        var text = nodes.start(label.index()) == opens ? nodes.end(label.index()) : nodes.start(label.index()) - 2;
+        return document.source().subSequence(text + 1, nodes.end(reference.index())).toString();
     }
 
     private record Target(String destination, String title) {}
