@@ -81,8 +81,8 @@ final class Evaluator {
         if (node instanceof Json.Bool(var allowed)) {
             if (allowed) return Output.ok();
             var where = new Location(at.keywords(), Pointer.absolute(at.base(), at.local()), at.instance());
-            return new Output(false, List.of(new Unit.Error(where, "the schema is false, so nothing is valid here")),
-                    List.of());
+            var reason = "must NOT be present, because the schema here is false";
+            return new Output(false, List.of(Unit.Error.of(where, reason)), List.of());
         }
         if (!(node instanceof Json.Object object)) throw SchemaException.notASchema(at.keywords());
         var place = at;
@@ -186,9 +186,9 @@ final class Evaluator {
         }
 
         @Override
-        public void error(String message) {
+        public void error(String message, Json params) {
             valid = false;
-            errors.add(new Unit.Error(here(), message));
+            errors.add(new Unit.Error(here(), message, params));
         }
 
         @Override

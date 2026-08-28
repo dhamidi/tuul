@@ -73,7 +73,7 @@ public final class Applicator {
             context.keep(result);
         }
         if (passed > 0) return;
-        context.error("the value matches none of the " + branches.size() + " schemas in anyOf");
+        context.error("must match a schema in anyOf");
         for (var result : failed) context.explain(result);
     }
 
@@ -82,9 +82,9 @@ public final class Applicator {
     ///
     /// The two ways this fails need different reports. When no branch passed,
     /// the errors of every branch follow the summary, as in `anyOf`. When more
-    /// than one passed, there are no errors to report and the summary names
-    /// the branches that matched instead, because a count on its own does not
-    /// say which schemas overlap.
+    /// than one passed, there are no errors to report, so the summary names the
+    /// branches that matched and the `params` carry the same list, because a
+    /// count on its own does not say which schemas overlap.
     private static void oneOf(Json value, Json instance, Context context) {
         if (!(value instanceof Json.Array(var branches))) return;
         var passed = new ArrayList<Output>();
@@ -104,19 +104,19 @@ public final class Applicator {
             return;
         }
         if (passed.isEmpty()) {
-            context.error("the value matches none of the " + branches.size() + " schemas in oneOf");
+            context.error("must match exactly one schema in oneOf");
             for (var result : failed) context.explain(result);
             return;
         }
-        context.error("the value matches " + passed.size() + " of the " + branches.size()
-                + " schemas in oneOf, and exactly one is allowed: " + String.join(", ", matched));
+        context.error("must match exactly one schema in oneOf, but matched " + String.join(", ", matched),
+                Json.Object.of().with("matched", Json.Array.strings(matched)));
     }
 
     /// The subschema must fail. Nothing it produced is kept: the annotations of
     /// a schema that failed are not annotations, and its errors describe the
     /// case that was supposed to happen.
     private static void not(Json value, Json instance, Context context) {
-        if (context.probe(value, "/not").valid()) context.error("the value matches the schema under not");
+        if (context.probe(value, "/not").valid()) context.error("must NOT be valid");
     }
 
     /// `if` runs `then` and `else` itself.
@@ -201,7 +201,7 @@ public final class Applicator {
         context.annotate(Json.Array.of(matched));
         var least = context.schema().get("minContains") instanceof Json.Num(var minimum) ? minimum : 1;
         if (least == 0 || !matched.isEmpty()) return;
-        context.error("no item of the array matches the schema in contains");
+        context.error("must contain at least one item matching contains");
         for (var result : failed) context.explain(result);
     }
 

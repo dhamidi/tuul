@@ -4,6 +4,8 @@ import harness.Check;
 import java.io.IOException;
 import java.io.StringWriter;
 import java.net.URI;
+import java.util.ArrayList;
+import java.util.List;
 import json.Json;
 
 public final class JsonschemaTest {
@@ -20,6 +22,8 @@ public final class JsonschemaTest {
         objects();
         booleans();
         applicators();
+        messages();
+        parameters();
         explanations();
         references();
         dynamic();
@@ -156,6 +160,153 @@ public final class JsonschemaTest {
                 valid("{\"if\":{\"type\":\"string\"}}", "null"));
     }
 
+    /// One schema and one instance for every keyword that can reject an
+    /// instance. The list is what keeps a new message from drifting out of the
+    /// frame the rest of them share.
+    private static final List<List<String>> FAILURES = List.of(
+            List.of("{\"type\":\"string\"}", "1"),
+            List.of("{\"type\":[\"string\",\"number\"]}", "null"),
+            List.of("{\"enum\":[1,2]}", "3"),
+            List.of("{\"const\":1}", "2"),
+            List.of("{\"multipleOf\":3}", "7"),
+            List.of("{\"maximum\":10}", "42"),
+            List.of("{\"exclusiveMaximum\":10}", "10"),
+            List.of("{\"minimum\":1}", "0"),
+            List.of("{\"exclusiveMinimum\":1}", "1"),
+            List.of("{\"maxLength\":5}", "\"abcdefghi\""),
+            List.of("{\"minLength\":2}", "\"a\""),
+            List.of("{\"pattern\":\"^a+$\"}", "\"b\""),
+            List.of("{\"maxItems\":5}", "[1,2,3,4,5,6]"),
+            List.of("{\"minItems\":2}", "[1]"),
+            List.of("{\"uniqueItems\":true}", "[1,1]"),
+            List.of("{\"contains\":{\"type\":\"number\"},\"maxContains\":2}", "[1,2,3]"),
+            List.of("{\"contains\":{\"type\":\"number\"},\"minContains\":2}", "[\"a\",1]"),
+            List.of("{\"required\":[\"card\"]}", "{}"),
+            List.of("{\"dependentRequired\":{\"a\":[\"b\"]}}", "{\"a\":1}"),
+            List.of("{\"maxProperties\":1}", "{\"a\":1,\"b\":2}"),
+            List.of("{\"minProperties\":2}", "{\"a\":1}"),
+            List.of("{\"anyOf\":[{\"type\":\"string\"},{\"type\":\"number\"}]}", "null"),
+            List.of("{\"oneOf\":[{\"type\":\"string\"},{\"type\":\"boolean\"}]}", "1"),
+            List.of("{\"oneOf\":[{\"type\":\"number\"},{\"type\":\"integer\"}]}", "1"),
+            List.of("{\"not\":{\"type\":\"string\"}}", "\"a\""),
+            List.of("{\"contains\":{\"type\":\"number\"}}", "[\"a\"]"),
+            List.of("{\"properties\":{\"a\":false}}", "{\"a\":1}"),
+            List.of("{\"additionalProperties\":false}", "{\"a\":1}"));
+
+    /// The wording of every message, and the frame all of them share.
+    private static void messages() {
+        var drifted = new ArrayList<String>();
+        for (var pair : FAILURES) {
+            for (var unit : result(pair.getFirst(), pair.getLast()).errors()) {
+                var message = ((Unit.Error) unit).message();
+                if (!message.startsWith("must ")) drifted.add(message);
+            }
+        }
+        Check.equal("every message begins with must, so an instance location finishes the sentence",
+                List.of(), drifted);
+
+        Check.equal("type names the type the schema allows",
+                "must be string", messageAt(result("{\"type\":\"string\"}", "1"), "/type"));
+        Check.equal("type joins several allowed types with or",
+                "must be string or number",
+                messageAt(result("{\"type\":[\"string\",\"number\"]}", "null"), "/type"));
+        Check.equal("enum points at the allowed values rather than listing them",
+                "must be equal to one of the allowed values",
+                messageAt(result("{\"enum\":[1,2]}", "3"), "/enum"));
+        Check.equal("const points at the constant",
+                "must be equal to constant", messageAt(result("{\"const\":1}", "2"), "/const"));
+        Check.equal("multipleOf names the factor",
+                "must be multiple of 3", messageAt(result("{\"multipleOf\":3}", "7"), "/multipleOf"));
+        Check.equal("maximum reads as the comparison it makes",
+                "must be <= 10", messageAt(result("{\"maximum\":10}", "42"), "/maximum"));
+        Check.equal("exclusiveMaximum reads as the comparison it makes",
+                "must be < 10", messageAt(result("{\"exclusiveMaximum\":10}", "10"), "/exclusiveMaximum"));
+        Check.equal("minimum reads as the comparison it makes",
+                "must be >= 1", messageAt(result("{\"minimum\":1}", "0"), "/minimum"));
+        Check.equal("exclusiveMinimum reads as the comparison it makes",
+                "must be > 1", messageAt(result("{\"exclusiveMinimum\":1}", "1"), "/exclusiveMinimum"));
+        Check.equal("maxLength states the limit and leaves the length to params",
+                "must NOT have more than 5 characters",
+                messageAt(result("{\"maxLength\":5}", "\"abcdefghi\""), "/maxLength"));
+        Check.equal("minLength states the limit and leaves the length to params",
+                "must NOT have fewer than 2 characters",
+                messageAt(result("{\"minLength\":2}", "\"a\""), "/minLength"));
+        Check.equal("pattern quotes the expression",
+                "must match pattern \"^a+$\"", messageAt(result("{\"pattern\":\"^a+$\"}", "\"b\""), "/pattern"));
+        Check.equal("maxItems states the limit",
+                "must NOT have more than 5 items",
+                messageAt(result("{\"maxItems\":5}", "[1,2,3,4,5,6]"), "/maxItems"));
+        Check.equal("minItems states the limit",
+                "must NOT have fewer than 2 items", messageAt(result("{\"minItems\":2}", "[1]"), "/minItems"));
+        Check.equal("uniqueItems leaves the index to params",
+                "must NOT have duplicate items",
+                messageAt(result("{\"uniqueItems\":true}", "[1,1]"), "/uniqueItems"));
+        Check.equal("maxContains states the ceiling on matching items",
+                "must NOT have more than 2 items matching contains",
+                messageAt(result("{\"contains\":{\"type\":\"number\"},\"maxContains\":2}", "[1,2,3]"),
+                        "/maxContains"));
+        Check.equal("minContains states the floor on matching items",
+                "must have at least 2 items matching contains",
+                messageAt(result("{\"contains\":{\"type\":\"number\"},\"minContains\":2}", "[\"a\",1]"),
+                        "/minContains"));
+        Check.equal("required names the property the way Ajv names it",
+                "must have required property 'card'",
+                messageAt(result("{\"required\":[\"card\"]}", "{}"), "/required"));
+        Check.equal("dependentRequired names the property that is missing and the one that asked for it",
+                "must have property b when property a is present",
+                messageAt(result("{\"dependentRequired\":{\"a\":[\"b\"]}}", "{\"a\":1}"),
+                        "/dependentRequired"));
+        Check.equal("minProperties states the limit",
+                "must NOT have fewer than 2 properties",
+                messageAt(result("{\"minProperties\":2}", "{\"a\":1}"), "/minProperties"));
+        Check.equal("not says only that the subschema was not supposed to match",
+                "must NOT be valid", messageAt(result("{\"not\":{\"type\":\"string\"}}", "\"a\""), "/not"));
+        Check.equal("contains asks for one matching item",
+                "must contain at least one item matching contains",
+                messageAt(result("{\"contains\":{\"type\":\"number\"}}", "[\"a\"]"), "/contains"));
+        Check.equal("a false schema says that nothing belongs where it sits",
+                "must NOT be present, because the schema here is false",
+                messageAt(result("{\"properties\":{\"a\":false}}", "{\"a\":1}"), "/properties/a"));
+        Check.equal("format names the format it wanted",
+                "must match format \"email\"",
+                messageAt(Store.of().asserting().compile(Json.parse("{\"format\":\"email\"}"))
+                        .validate(Json.parse("\"nope\"")), "/format"));
+
+        Check.equal("a limit of one character reads as one character",
+                "must NOT have fewer than 1 character",
+                messageAt(result("{\"minLength\":1}", "\"\""), "/minLength"));
+        Check.equal("a limit of one item reads as one item",
+                "must NOT have more than 1 item", messageAt(result("{\"maxItems\":1}", "[1,2]"), "/maxItems"));
+        Check.equal("a limit of one property reads as one property",
+                "must NOT have more than 1 property",
+                messageAt(result("{\"maxProperties\":1}", "{\"a\":1,\"b\":2}"), "/maxProperties"));
+        Check.equal("a limit of one matching item reads as one item",
+                "must have at least 1 item matching contains",
+                messageAt(result("{\"contains\":{\"type\":\"number\"},\"minContains\":1}", "[\"a\"]"),
+                        "/minContains"));
+    }
+
+    /// What the messages no longer say, and where it went instead.
+    private static void parameters() {
+        Check.equal("required names the property that is missing",
+                "{\"missingProperty\":\"card\"}",
+                paramsAt(result("{\"required\":[\"card\"]}", "{}"), "/required").text());
+        Check.equal("type names the types it allowed and the type it got",
+                "{\"expected\":[\"string\"],\"actual\":\"number\"}",
+                paramsAt(result("{\"type\":\"string\"}", "1"), "/type").text());
+        Check.equal("minLength carries the limit and the length that failed it",
+                "{\"limit\":2,\"actual\":1}",
+                paramsAt(result("{\"minLength\":2}", "\"a\""), "/minLength").text());
+        Check.equal("oneOf names every branch that matched",
+                "{\"matched\":[\"/oneOf/0\",\"/oneOf/1\"]}",
+                paramsAt(result("{\"oneOf\":[{\"type\":\"number\"},{\"type\":\"integer\"}]}", "1"),
+                        "/oneOf").text());
+        Check.that("an error with nothing to add carries no params",
+                paramsAt(result("{\"not\":{\"type\":\"string\"}}", "\"a\""), "/not") instanceof Json.Null);
+        Check.that("a unit with no params leaves the field out of the output",
+                !basicOf(result("{\"not\":{\"type\":\"string\"}}", "\"a\"")).contains("params"));
+    }
+
     /// What a failing applicator leaves in the output, and where it points.
     private static void explanations() {
         var choice = result("""
@@ -165,12 +316,12 @@ public final class JsonschemaTest {
                 "{\"paypal\":\"a@b.c\",\"cash\":\"maybe\"}");
         Check.equal("a failing anyOf reports the summary and one unit for every branch",
                 4, choice.errors().size());
-        Check.that("the summary counts the schemas the value matched none of",
-                messageAt(choice, "/anyOf").contains("none of the 3 schemas in anyOf"));
+        Check.equal("the summary says what the value had to match",
+                "must match a schema in anyOf", messageAt(choice, "/anyOf"));
         Check.that("the first branch says what it wanted",
-                messageAt(choice, "/anyOf/0/required").contains("\"card\""));
+                messageAt(choice, "/anyOf/0/required").contains("'card'"));
         Check.that("the second branch says what it wanted",
-                messageAt(choice, "/anyOf/1/required").contains("\"bank\""));
+                messageAt(choice, "/anyOf/1/required").contains("'bank'"));
         Check.that("a branch reports the keyword that failed inside it, however deep it sits",
                 errorAt(choice, "/anyOf/2/properties/cash/const", "/cash"));
 
@@ -183,6 +334,8 @@ public final class JsonschemaTest {
 
         var neither = result("{\"oneOf\":[{\"type\":\"string\"},{\"type\":\"boolean\"}]}", "1");
         Check.equal("a oneOf that matched nothing reports every branch", 3, neither.errors().size());
+        Check.equal("the summary of a oneOf that matched nothing states the rule",
+                "must match exactly one schema in oneOf", messageAt(neither, "/oneOf"));
         Check.that("each branch says which type it allowed",
                 messageAt(neither, "/oneOf/0/type").contains("string")
                         && messageAt(neither, "/oneOf/1/type").contains("boolean"));
@@ -190,6 +343,8 @@ public final class JsonschemaTest {
         var missed = result("{\"contains\":{\"type\":\"number\",\"minimum\":10}}", "[\"a\",3]");
         Check.equal("a failing contains reports the summary and one unit for every item",
                 3, missed.errors().size());
+        Check.equal("the summary of a failing contains says what it looked for",
+                "must contain at least one item matching contains", messageAt(missed, "/contains"));
         Check.that("the first item says it was the wrong type", errorAt(missed, "/contains/type", "/0"));
         Check.that("the second item says it was too small", errorAt(missed, "/contains/minimum", "/1"));
 
@@ -456,11 +611,12 @@ public final class JsonschemaTest {
                 "/a", unit.at().instanceLocation());
 
         Check.equal("flag output is the verdict and nothing else", "{\"valid\":false}", flag(result));
-        Check.equal("basic output carries the units under errors",
+        Check.equal("basic output carries the units under errors, with params beside the message",
                 "{\"valid\":false,\"errors\":[{\"keywordLocation\":\"/properties/a/$ref/maxLength\","
                         + "\"absoluteKeywordLocation\":\"https://example.com/lengths#/$defs/short/maxLength\","
                         + "\"instanceLocation\":\"/a\","
-                        + "\"error\":\"the string is 4 characters long and maxLength is 2\"}]}",
+                        + "\"error\":\"must NOT have more than 2 characters\","
+                        + "\"params\":{\"limit\":2,\"actual\":4}}]}",
                 basic(result));
 
         var passing = SHARED.compile(Json.parse("{\"title\":\"a name\",\"type\":\"string\"}"))
@@ -490,6 +646,16 @@ public final class JsonschemaTest {
                         && unit.at().instanceLocation().equals(instanceLocation));
     }
 
+    /// The params of the first error at `keywordLocation`, or [json.Json#NULL]
+    /// when there is none.
+    private static Json paramsAt(Output output, String keywordLocation) {
+        return output.errors().stream()
+                .filter(unit -> unit.at().keywordLocation().equals(keywordLocation))
+                .findFirst()
+                .map(unit -> ((Unit.Error) unit).params())
+                .orElse(Json.NULL);
+    }
+
     /// The message of the first error at `keywordLocation`, or an empty string
     /// when there is none, so that a check reads as one expression.
     private static String messageAt(Output output, String keywordLocation) {
@@ -504,6 +670,15 @@ public final class JsonschemaTest {
         var out = new StringWriter();
         output.flag(out);
         return out.toString();
+    }
+
+    /// [#basic(Output)] for a check that is not declared to throw.
+    private static String basicOf(Output output) {
+        try {
+            return basic(output);
+        } catch (IOException broken) {
+            throw new java.io.UncheckedIOException(broken);
+        }
     }
 
     private static String basic(Output output) throws IOException {

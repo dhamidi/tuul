@@ -24,7 +24,7 @@ public final class SchemaException extends RuntimeException {
     /// that the caller forgot to add.
     public static SchemaException unresolved(String reference, URI target, String from) {
         return new SchemaException("no schema at " + target + " — the reference \"" + reference
-                + "\" at " + from + " resolves to it, and nothing in the store has that URI."
+                + "\" at " + from + " resolves to it. Nothing in the store has that URI."
                 + " Add the schema to the store; this package never fetches a URI.");
     }
 
@@ -41,7 +41,7 @@ public final class SchemaException extends RuntimeException {
     /// that skips its assertions accepts everything.
     public static SchemaException unknownVocabulary(URI vocabulary, URI metaschema) {
         return new SchemaException("the meta-schema " + metaschema + " requires the vocabulary " + vocabulary
-                + ", and this store has no handler for it. Register a Vocabulary with that URI,"
+                + ". This store has no handler for it. Register a Vocabulary with that URI,"
                 + " or declare it false in $vocabulary to make it optional.");
     }
 

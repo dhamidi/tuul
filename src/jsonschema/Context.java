@@ -69,8 +69,18 @@ public interface Context {
     /// that passed contributes nothing here.
     void explain(Output failed);
 
-    /// This keyword failed, and this is why.
-    void error(String message);
+    /// This keyword failed, this is why, and this is the detail behind it.
+    ///
+    /// `params` is a JSON object holding what the message leaves out, such as
+    /// `{"limit":3,"actual":1}` for `minLength`. [Unit] describes the
+    /// convention. Pass [json.Json#NULL] when there is nothing worth
+    /// reporting, and the output leaves the field out.
+    void error(String message, Json params);
+
+    /// This keyword failed, and this is why. The error carries no detail.
+    default void error(String message) {
+        error(message, Json.NULL);
+    }
 
     /// This keyword produced a value. Later keywords at the same instance
     /// location can read it with [#annotations(String)].

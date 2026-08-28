@@ -57,7 +57,7 @@ public final class Formats {
             if (!assertion || !(instance instanceof Json.Str(var text))) return;
             var format = context.store().format(name);
             if (format == null || format.matches(text)) return;
-            context.error("the string is not a valid " + name);
+            context.error("must match format \"" + name + "\"", Json.Object.of().with("format", name));
         }));
     }
 
