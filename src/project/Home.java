@@ -16,17 +16,11 @@ import tuul.Version;
 /// artifact, where the jar sits in a directory with its sources jar and its C
 /// next to it. Both answer the same three questions, which is all [Install]
 /// asks.
-public record Home(Path classes, Path sources, Path natives, Path assets) {
+public record Home(Path classes, Path sources, Path natives) {
 
     /// The directory prebuilt libraries live under, inside a jar and beside
     /// one.
     public static final String NATIVE = "native";
-
-    /// The directory vendored web assets live under — Turbo and Stimulus —
-    /// found the same way and for the same reason: what a tuul ships travels
-    /// with it, and an application that vendors tuul must find them without
-    /// knowing where tuul came from.
-    public static final String ASSETS = "assets";
 
     /// Finds tuul by asking where its own class file came from.
     public static Home find() throws IOException {
@@ -39,14 +33,13 @@ public record Home(Path classes, Path sources, Path natives, Path assets) {
     public static Home at(Path located) {
         if (Files.isDirectory(located)) return checkout(located);
         return new Home(located, located.resolveSibling(Version.artifact() + "-sources.jar"),
-                located.getParent().resolve(NATIVE), located.getParent().resolve(ASSETS));
+                located.getParent().resolve(NATIVE));
     }
 
-    /// A checkout: `build/classes` has `src/`, `native/` and `assets/` two
-    /// levels up.
+    /// A checkout: `build/classes` has `src/` and `native/` two levels up.
     private static Home checkout(Path classes) {
         var root = classes.getParent().getParent();
-        return new Home(classes, root.resolve("src"), root.resolve(NATIVE), root.resolve(ASSETS));
+        return new Home(classes, root.resolve("src"), root.resolve(NATIVE));
     }
 
     /// Whether the parts are actually there. An install that would write half an
@@ -86,11 +79,12 @@ public record Home(Path classes, Path sources, Path natives, Path assets) {
         return shipped(NATIVE, distribution(), natives);
     }
 
-    /// The vendored web assets, wherever this tuul keeps them. A checkout has
-    /// them in the tree; a distribution carries them inside its jar.
-    public Libraries web() throws IOException {
-        return shipped(ASSETS, assets, assets);
-    }
+    /// Web assets are not here, and are not handed out. Every package that
+    /// ships one keeps it beside its own code — `web/ui/assets` inside the same
+    /// jar as `web/ui/Ui.class` — so a project that has the jar has them, and
+    /// [web.assets.Bundled] reads them from wherever the jar is. There used to
+    /// be a tree of them copied into every project beside the jar that already
+    /// carried a copy.
 
     private Libraries shipped(String directory, Path unpackaged, Path fallback) throws IOException {
         if (!packaged()) return new Libraries(unpackaged, null);

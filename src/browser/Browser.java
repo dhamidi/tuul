@@ -52,6 +52,10 @@ public final class Browser implements AutoCloseable {
     /// business on the load path of every application anybody writes with the
     /// framework. [Bundled#of(Class, String)] finds them in a checkout and
     /// inside the jar, so where they are read from is not this file's problem.
+    ///
+    /// The cable's and the components' come from their own packages, named
+    /// here for the same reason their modules are pinned here: this
+    /// application uses them, and one that does not should not carry them.
     public static final String ASSETS = "assets";
 
     /// The topic pages listen to. There is one, because there is one thing
@@ -87,7 +91,7 @@ public final class Browser implements AutoCloseable {
     public static Browser of(Index index, Path watched) {
         var cable = Cable.of();
         var watching = watch(cable, watched);
-        return new Browser(index, Routes.of(), Assets.standard(List.of(Bundled.of(Browser.class, ASSETS))),
+        return new Browser(index, Routes.of(), Assets.standard(List.of(Bundled.of(Browser.class, ASSETS), Cable.assets(), web.ui.Ui.assets())),
                 Importmap.standard()
                         .pin(Cable.MODULE, Cable.FILE)
                         .pin(web.ui.Ui.MODULE, web.ui.Ui.FILE)

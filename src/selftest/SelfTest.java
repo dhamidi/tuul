@@ -137,9 +137,12 @@ public final class SelfTest {
                 !Files.isDirectory(project.resolve("vendor/tuul/native/sqlite3")),
                 listing(project.resolve("vendor/tuul/native")));
         check(checks, "and Turbo and Stimulus, so a page has its behaviour without a package manager",
-                exists(project, "vendor/tuul/assets/hotwired/turbo.js")
-                        && exists(project, "vendor/tuul/assets/hotwired/stimulus.js"),
-                listing(project.resolve("vendor/tuul/assets")));
+                jarred(project, "web/assets/hotwired/turbo.js")
+                        && jarred(project, "web/assets/hotwired/stimulus.js"),
+                listing(project.resolve("vendor/tuul")));
+        check(checks, "carried inside the jar rather than copied beside it",
+                !Files.exists(project.resolve("vendor/tuul/assets")),
+                listing(project.resolve("vendor/tuul")));
 
         Files.writeString(project.resolve("src/demo/Notes.java"), NOTES);
         Files.writeString(project.resolve("src/cli/main.java"), ENTRYPOINT);
@@ -329,6 +332,18 @@ import java.util.Map;
 
     private static boolean exists(Path project, String path) {
         return Files.isRegularFile(project.resolve(path));
+    }
+
+    /// Whether the vendored tuul jar holds an entry. Assets travel inside it
+    /// now, beside the classes of the package that ships them, so this is where
+    /// a project's copy of Turbo is.
+    private static boolean jarred(Path project, String entry) {
+        try (var jar = new java.util.jar.JarFile(
+                project.resolve("vendor/tuul/" + tuul.Version.artifact() + ".jar").toFile())) {
+            return jar.getEntry(entry) != null;
+        } catch (IOException missing) {
+            return false;
+        }
     }
 
     /// What is actually there, for a check that expected something else.

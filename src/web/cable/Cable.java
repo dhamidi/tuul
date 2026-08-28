@@ -57,6 +57,9 @@ public final class Cable implements AutoCloseable {
     /// The specifier an application pins for the client half of this, and the
     /// file behind it. Both are here rather than in a document because a
     /// mismatch between them is silent.
+    /// The directory holding [#FILE], beside this package's code.
+    public static final String ASSETS = "assets";
+
     public static final String MODULE = "@tuul/cable-stream";
 
     public static final String FILE = "cable-stream.js";
@@ -173,11 +176,11 @@ public final class Cable implements AutoCloseable {
                 Stimulus.value(CONTROLLER, "url", url));
     }
 
-    /// Where the client half lives, so an application can put it on its asset
-    /// load path. It is one of the directories tuul ships, and it asks for it
-    /// by name rather than working out where tuul keeps what it carries.
+    /// Where the client half lives, so an application that uses the cable can
+    /// put it on its asset load path. It sits beside this package's own code
+    /// and travels with it, into a jar and out of one.
     public static Path assets() {
-        return Bundled.shipped("cable");
+        return Bundled.of(Cable.class, ASSETS);
     }
 
     /// Ends every subscription and waits for them. A cable that returned from

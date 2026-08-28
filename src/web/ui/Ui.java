@@ -3,7 +3,9 @@ package web.ui;
 import static web.ui.Attributes.classes;
 import static web.ui.Attributes.href;
 
+import java.nio.file.Path;
 import java.util.List;
+import web.assets.Bundled;
 
 /// The components: the vocabulary a page is written in.
 ///
@@ -24,10 +26,9 @@ import java.util.List;
 /// they must serve applications nobody has written yet; this serves one, and
 /// every component in it is one somebody has to learn.
 ///
-/// Each renders a stable class name, `ui-` prefixed, and `assets/ui/ui.css` is
-/// what those names mean. The stylesheet ships the way Turbo and the cable's
-/// controller do, so an application gets the design by pinning it rather than
-/// by copying it.
+/// Each renders a stable class name, `ui-` prefixed, and [#assets()] holds the
+/// stylesheet that says what those names mean. It travels with this package, so
+/// an application gets the design by naming it rather than by copying it.
 ///
 /// Props are declared, and an unknown one is refused — see [Props].
 public final class Ui {
@@ -42,10 +43,25 @@ public final class Ui {
 
     public static final String FILE = "sidebar.js";
 
+    /// The directory holding [#FILE] and the stylesheet, beside this package's
+    /// own code.
+    public static final String ASSETS = "assets";
+
     /// What a [Sidebar] is called when nobody says. The [Opener] has to name
     /// the thing it controls, so the two agree on a default rather than each
     /// having one.
     public static final String SIDEBAR = "sidebar";
+
+    /// Where the components' stylesheet and controller live, so an application
+    /// that renders these can put them on its asset load path.
+    ///
+    /// Every component here writes a `ui-` prefixed class name and nothing
+    /// else, so a page that does not serve `ui.css` renders the right markup
+    /// with none of the design on it. An application says it wants this the
+    /// same way it says it wants the cable: by naming it.
+    public static Path assets() {
+        return Bundled.of(Ui.class, ASSETS);
+    }
 
     private Ui() {}
 

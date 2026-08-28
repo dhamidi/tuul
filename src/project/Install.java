@@ -11,6 +11,7 @@ import java.util.ArrayList;
 import java.util.Collections;
 import java.util.Comparator;
 import java.util.List;
+import java.util.function.Predicate;
 import java.util.jar.Attributes;
 import java.util.jar.JarEntry;
 import java.util.jar.JarFile;
@@ -63,13 +64,12 @@ public final class Install {
             classes = repack(home.classes(), jar);
             Files.copy(home.sources(), sources);
         } else {
-            classes = pack(home.classes(), jar, ".class");
-            written = pack(home.sources(), sources, ".java");
+            classes = pack(home.classes(), jar, path -> true);
+            written = pack(home.sources(), sources, java(".java"));
         }
 
         var native_ = directory.resolve(Home.NATIVE);
         var platforms = source ? source(home, native_) : binaries(home, native_, log);
-        web(home, directory.resolve(Home.ASSETS));
         return new Result(directory, Version.NUMBER, classes, written, platforms);
     }
 
@@ -82,7 +82,6 @@ public final class Install {
             for (var path : existing.filter(Install::artifact).toList()) Files.delete(path);
         }
         remove(directory.resolve(Home.NATIVE));
-        remove(directory.resolve(Home.ASSETS));
     }
 
     private static boolean artifact(Path path) {
@@ -109,16 +108,6 @@ public final class Install {
             throw new IOException("this tuul carries no prebuilt libraries — install with --source to vendor the C");
         }
         return List.copyOf(written);
-    }
-
-    /// Turbo and Stimulus, beside the jar, because that is where a vendored
-    /// tuul looks for them. A tuul that carries none is not an error — the
-    /// libraries still work, and an import map that cannot resolve a pin says
-    /// which directories it looked in.
-    private static void web(Home home, Path destination) throws IOException {
-        try (var shipped = home.web()) {
-            if (Files.isDirectory(shipped.root())) copyTree(shipped.root(), destination);
-        }
     }
 
     /// Cross-builds anything the checkout is missing. `mise run natives` does
@@ -152,10 +141,14 @@ public final class Install {
     /// Copies a distribution jar into a project without what the project
     /// cannot use.
     ///
-    /// A distribution carries the prebuilt libraries and the web assets inside
-    /// itself, because that is how an installed tuul has them to hand out. A
-    /// project is handed them beside the jar, so carrying them inside it as
-    /// well is five megabytes of every project that nothing will ever read.
+    /// A distribution carries the prebuilt libraries inside itself, because
+    /// that is how an installed tuul has them to hand out. A project is handed
+    /// them beside the jar, so carrying them inside it as well is megabytes of
+    /// every project that nothing will ever read.
+    ///
+    /// Web assets are not among them. They sit beside the code that ships them,
+    /// under `web/`, so they come across with the classes and a project reads
+    /// them out of the jar it already has.
     private static int repack(Path distribution, Path jar) throws IOException {
         var written = 0;
         try (var from = new JarFile(distribution.toFile());
@@ -176,10 +169,10 @@ public final class Install {
 
     /// What a distribution carries for handing out rather than for running.
     private static boolean shipped(String entry) {
-        return entry.startsWith(Home.NATIVE + "/") || entry.startsWith(Home.ASSETS + "/");
+        return entry.startsWith(Home.NATIVE + "/");
     }
 
-    private static int pack(Path root, Path jar, String extension) throws IOException {
+    private static int pack(Path root, Path jar, Predicate<Path> wanted) throws IOException {
         var manifest = new Manifest();
         var attributes = manifest.getMainAttributes();
         attributes.put(Attributes.Name.MANIFEST_VERSION, "1.0");
@@ -188,7 +181,7 @@ public final class Install {
 
         var written = 0;
         try (var out = new JarOutputStream(Files.newOutputStream(jar), manifest)) {
-            for (var path : library(root, extension)) {
+            for (var path : library(root, wanted)) {
                 out.putNextEntry(new JarEntry(root.relativize(path).toString()));
                 Files.copy(path, out);
                 out.closeEntry();
@@ -200,16 +193,27 @@ public final class Install {
 
     /// The library half of tuul: everything in a package, which leaves out the
     /// default-package entrypoints and the directories they live in.
-    private static List<Path> library(Path root, String extension) throws IOException {
+    ///
+    /// A classes tree wants all of it, not only the `.class` files: a package
+    /// that ships a stylesheet keeps it beside its own code, so the assets are
+    /// in there too and a jar without them is a jar whose pages have no design.
+    /// A sources tree wants the Java and nothing else — it is there for
+    /// `tuul docs`, which reads comments.
+    private static List<Path> library(Path root, Predicate<Path> wanted) throws IOException {
         var found = new ArrayList<Path>();
         try (var tree = Files.walk(root)) {
-            tree.filter(path -> path.toString().endsWith(extension))
+            tree.filter(Files::isRegularFile)
+                    .filter(wanted)
                     .filter(path -> root.relativize(path).getNameCount() > 1)
                     .filter(path -> !entrypoint(path))
                     .sorted()
                     .forEach(found::add);
         }
         return found;
+    }
+
+    private static Predicate<Path> java(String extension) {
+        return path -> path.toString().endsWith(extension);
     }
 
     private static boolean entrypoint(Path path) {

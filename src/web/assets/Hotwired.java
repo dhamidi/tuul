@@ -14,7 +14,8 @@ import java.nio.file.Path;
 /// Where they are is [Bundled]'s question, not this one. This used to answer it
 /// for every package that ships assets, so `Hotwired.shipped()` meant "every
 /// directory tuul carries" — a name that told a reader the opposite of what the
-/// method did.
+/// method did, and a reason for `web.cable` to ask about Turbo to find its own
+/// file.
 public final class Hotwired {
 
     /// The bare specifiers an application imports, which are the names npm uses
@@ -34,8 +35,10 @@ public final class Hotwired {
 
     private Hotwired() {}
 
-    /// The load path holding them.
+    /// The load path holding them, which [Assets#standard(List)] puts on every
+    /// application's without being asked: a framework that assumes Turbo has to
+    /// supply it.
     public static Path path() {
-        return Bundled.shipped(DIRECTORY);
+        return Bundled.of(Hotwired.class, DIRECTORY);
     }
 }

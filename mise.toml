@@ -65,13 +65,14 @@ run = '''
 set -euo pipefail
 version=$(java --enable-native-access=ALL-UNNAMED -cp build/classes main --version | cut -d' ' -f2)
 mkdir -p build/dist
-# The jar carries the prebuilt libraries and the web assets, because an
-# installed tuul has no source tree to take them from and `tuul install` has to
-# hand them to a project. Enable-Native-Access in the manifest is what lets
-# `java -jar` run without a flag.
+# The jar carries the prebuilt libraries, because an installed tuul has no
+# source tree to take them from and `tuul install` has to hand them to a
+# project. The web assets need no line here: they sit beside the code that
+# ships them, so `build/classes` already holds them. Enable-Native-Access in
+# the manifest is what lets `java -jar` run without a flag.
 printf 'Main-Class: main\nEnable-Native-Access: ALL-UNNAMED\nImplementation-Title: tuul\nImplementation-Version: %s\n' "$version" > build/dist/manifest.txt
 jar --create --file build/dist/tuul.jar --manifest build/dist/manifest.txt \
-    -C build/classes . -C build/dist native -C . assets
+    -C build/classes . -C build/dist native
 # Beside it, because `tuul install` vendors sources so `tuul docs` can answer
 # about tuul's own libraries with their comments.
 jar --create --file "build/dist/tuul-$version-sources.jar" -C src .
@@ -88,13 +89,12 @@ home="${TUUL_HOME:-$HOME/.local/share/tuul}"
 bin="${TUUL_BIN:-$HOME/.local/bin}"
 
 # The payload lives together and the launcher points at it, because a jar finds
-# its own SQLite and its own Turbo by looking beside itself — and a bin
-# directory is no place for a native/ tree.
+# its own SQLite by looking beside itself — and a bin directory is no place for
+# a native/ tree. Turbo it finds inside itself.
 rm -rf "$home"
 mkdir -p "$home" "$bin"
 cp build/dist/tuul.jar "build/dist/tuul-$version-sources.jar" "$home/"
 cp -R build/dist/native "$home/native"
-cp -R assets "$home/assets"
 
 printf '#!/bin/sh\n# Installed by `mise run install` from the tuul checkout.\nexec java -jar "%s/tuul.jar" "$@"\n' "$home" > "$bin/tuul"
 chmod +x "$bin/tuul"

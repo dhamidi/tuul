@@ -68,17 +68,26 @@ public final class Assets {
         return new Assets(loadPaths, prefix, scan(loadPaths));
     }
 
-    /// The application's own assets, and then the ones tuul ships — Turbo,
-    /// Stimulus, the cable's controller and the components' stylesheet. An
-    /// application gets Hotwired without asking for it, and can still replace
-    /// any of it by putting a file of that name in its own load path.
+    /// The application's own assets, and then Turbo and Stimulus.
     ///
-    /// The application's own go first because first wins, and they are the
-    /// application's: they belong beside its code, and [Bundled#of(Class,
-    /// String)] is how they get here from there.
+    /// Hotwired is here because the framework assumes it: `web.ui` writes Turbo
+    /// attributes and Stimulus actions into pages, so an application that got
+    /// neither would render markup nothing acts on. It goes last, so an
+    /// application that ships a file of the same name replaces it.
+    ///
+    /// Nothing else is here. A package that ships assets says where they are —
+    /// [web.ui.Ui#assets()], [web.cable.Cable#assets()] — and an application
+    /// that uses one puts it on this list beside its own, which it already does
+    /// for the import map. Enumerating them instead would mean this package
+    /// importing the packages built on top of it, and it would hand every
+    /// application every file tuul has ever shipped.
+    ///
+    /// ```
+    /// Assets.standard(List.of(Bundled.of(Browser.class, "assets"), Cable.assets(), Ui.assets()));
+    /// ```
     public static Assets standard(List<Path> loadPaths) {
         var all = new ArrayList<>(loadPaths);
-        all.addAll(Bundled.shipped());
+        all.add(Hotwired.path());
         return of(all);
     }
 
