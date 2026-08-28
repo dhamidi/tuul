@@ -80,6 +80,17 @@ public enum Kind {
 
     IMAGE(true),
 
+    /// A reference whose definition has not been read. Its children are its
+    /// content and its [#LABEL], exactly as a resolved one's are, and it
+    /// becomes a [#LINK] or an [#IMAGE] the moment somebody defines the label
+    /// — see [References].
+    ///
+    /// It exists so that a reference can be written down where it appears
+    /// rather than held back until the document ends. One still here when the
+    /// last line has been read is what CommonMark says it is: not a link, and
+    /// the brackets were text.
+    REFERENCE(true),
+
     /// `<https://example.com>`. One child holds the text, which is also the
     /// destination.
     AUTOLINK(true),
@@ -95,8 +106,9 @@ public enum Kind {
     /// A link's title, without its quotes.
     TITLE(false),
 
-    /// The label of a reference link, which is looked up when it is needed
-    /// rather than when it is read — see [Document#definition].
+    /// The label of a reference link. It is kept whether or not the reference
+    /// resolved, because it is what the document said — see [#REFERENCE] for
+    /// the one that has not resolved yet.
     LABEL(false);
 
     private final boolean container;

@@ -24,12 +24,19 @@ import java.nio.CharBuffer;
 /// nodes, walked with a [Cursor] that allocates nothing, or with
 /// [Document#walk] as a lazy stream.
 ///
-/// **Where streaming stops.** A [Reader] is read once, and nothing is copied
-/// after that: every node's text is a span of the source. But the source is
-/// held whole, and it has to be — a link written as `[foo]` may be defined at
-/// the bottom of the document, so nothing can be finished until the last line
-/// has been read. A parser that claimed to stream markdown would be lying about
-/// that, so this reads a document and then answers questions about it.
+/// **What streams, and what the source is kept for.** A [Reader] is parsed as
+/// it arrives: a line is turned into nodes as soon as its newline has been
+/// seen, and nothing waits for the end of the input. A reference to a
+/// definition written further down is not a reason to wait either — it is
+/// written down as a [Kind#REFERENCE] where it appears and patched into a link
+/// when the definition turns up, which is two ints and no rebuilding. See
+/// [References].
+///
+/// The source is still kept, and that is a smaller claim than it sounds: text
+/// is never copied, so a node's text is a span, and a span needs something to
+/// point into. Holding the source is what makes a document of a megabyte cost
+/// a megabyte and 32 bytes a node, rather than a megabyte of nodes each holding
+/// a string of its own. Nothing about the parse needs it.
 public final class Markdown {
 
     private Markdown() {}
@@ -38,10 +45,27 @@ public final class Markdown {
         return new Blocks(source).parse();
     }
 
-    /// Reads the whole of `in`. See the note above about why this cannot be a
-    /// stream: link reference definitions can appear after their use.
+    /// Parses as `in` produces text, rather than reading it all and then
+    /// starting.
+    ///
+    /// Each buffer that arrives is appended and every whole line in it is
+    /// parsed, so the nodes for the top of a document exist while the bottom is
+    /// still on its way. What is read is kept, because spans point into it; it
+    /// is never copied a second time.
     public static Document parse(Reader in) throws IOException {
-        return parse(read(in));
+        var source = new StringBuilder();
+        var blocks = new Blocks(source);
+        blocks.start();
+        var buffer = CharBuffer.allocate(8192);
+        while (in.read(buffer) >= 0) {
+            buffer.flip();
+            source.append(buffer);
+            buffer.clear();
+            while (blocks.advance(source.length())) {
+                // every line that has arrived whole
+            }
+        }
+        return blocks.finish();
     }
 
     public static void render(Document document, Writer out) throws IOException {
@@ -62,16 +86,5 @@ public final class Markdown {
             throw new java.io.UncheckedIOException(e);
         }
         return out.toString();
-    }
-
-    private static String read(Reader in) throws IOException {
-        var text = new StringBuilder();
-        var buffer = CharBuffer.allocate(8192);
-        while (in.read(buffer) >= 0) {
-            buffer.flip();
-            text.append(buffer);
-            buffer.clear();
-        }
-        return text.toString();
     }
 }

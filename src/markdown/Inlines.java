@@ -12,22 +12,25 @@ import java.util.List;
 /// allocated twice and nothing is moved, which is what lets the node array stay
 /// in the order the document was written — see [Nodes#adopt].
 ///
-/// A reference link is not resolved here. Whether `[foo]` is a link depends on
-/// a definition that may not have been read yet, so the parser records the
-/// label and leaves the question to [Document#definition], which is asked when
-/// somebody wants the answer.
+/// A reference link is resolved here when it can be. Whether `[foo]` is a link
+/// depends on a definition that may not have been read yet, so a reference the
+/// parser cannot answer becomes a [Kind#REFERENCE] where it stands and
+/// [References] patches it when the definition arrives — rather than the whole
+/// document being held to find out.
 final class Inlines {
 
-    private final String source;
+    private final CharSequence source;
     private final Nodes nodes;
+    private final References references;
     private final int block;
     private final Segments content;
     private final List<Delimiter> delimiters = new ArrayList<>();
     private final List<Bracket> brackets = new ArrayList<>();
 
-    Inlines(String source, Nodes nodes, int block, Segments content) {
+    Inlines(CharSequence source, Nodes nodes, References references, int block, Segments content) {
         this.source = source;
         this.nodes = nodes;
+        this.references = references;
         this.block = block;
         this.content = content;
     }
@@ -347,6 +350,7 @@ final class Inlines {
         if (destination >= 0) {
             var url = nodes.open(Kind.DESTINATION, bracket.node, content.source(destination));
             nodes.end(url, content.source(destinationEnd));
+            nodes.number(bracket.node, Nodes.NONE);
         }
         if (titleStart >= 0) {
             var title = nodes.open(Kind.TITLE, bracket.node, content.source(titleStart));
@@ -355,6 +359,7 @@ final class Inlines {
         if (labelStart >= 0) {
             var label = nodes.open(Kind.LABEL, bracket.node, content.source(labelStart));
             nodes.end(label, content.source(labelEnd));
+            refer(bracket.node, label, bracket.image);
         }
         if (!bracket.image) {
             for (var open : brackets) {
@@ -362,6 +367,20 @@ final class Inlines {
             }
         }
         return after;
+    }
+
+    /// Points a reference at its definition, or writes it down as one nobody
+    /// has defined yet.
+    ///
+    /// Which of the two happens is only a matter of where the definition was
+    /// written, and the node is the same either way — so a reference is emitted
+    /// where it appears rather than held back to see whether a definition turns
+    /// up later. [References] patches the ones that were waiting.
+    private void refer(int node, int label, boolean image) {
+        var name = source.subSequence(nodes.start(label), nodes.end(label)).toString();
+        var definition = references.definition(name);
+        if (definition == Nodes.NONE) references.await(name, node, image);
+        else references.resolve(node, definition);
     }
 
     // --- emitting -----------------------------------------------------------

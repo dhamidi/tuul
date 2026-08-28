@@ -18,11 +18,11 @@ import java.util.stream.StreamSupport;
 /// events.
 public final class Document {
 
-    private final String source;
+    private final CharSequence source;
     private final Nodes nodes;
     private final Map<String, Integer> definitions;
 
-    Document(String source, Nodes nodes, Map<String, Integer> definitions) {
+    Document(CharSequence source, Nodes nodes, Map<String, Integer> definitions) {
         this.source = source;
         this.nodes = nodes;
         this.definitions = Map.copyOf(definitions);
@@ -30,7 +30,7 @@ public final class Document {
 
     /// The text this document was parsed from, unchanged. Every node's span
     /// indexes into it.
-    public String source() {
+    public CharSequence source() {
         return source;
     }
 
@@ -71,13 +71,12 @@ public final class Document {
         return StreamSupport.stream(new Walk(this, root), false);
     }
 
-    /// Where a reference link points, if anything said.
+    /// What a label was defined as, if anything defined it.
     ///
-    /// A reference is looked up when it is needed rather than when it is read,
-    /// because a document may use a label before it defines one — so the parser
-    /// records the label and leaves the question open. A renderer asks here;
-    /// a label nobody defined is not a link, and the text stays as it was
-    /// written.
+    /// A link does not need this: a reference that resolved carries the
+    /// definition it was patched with, and one that did not is a
+    /// [Kind#REFERENCE] rather than a link. This is for a reader who wants to
+    /// ask about a label without walking the tree looking for it.
     public Optional<Cursor> definition(String label) {
         return Optional.ofNullable(definitions.get(Labels.normalize(label))).map(this::at);
     }

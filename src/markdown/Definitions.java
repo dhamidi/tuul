@@ -1,7 +1,5 @@
 package markdown;
 
-import java.util.Map;
-
 /// Link reference definitions — `[label]: /url "title"`.
 ///
 /// They are read off the front of a paragraph when it closes, because that is
@@ -15,14 +13,14 @@ import java.util.Map;
 /// keeps its text — so `[foo]: ` on its own is a paragraph saying `[foo]:`.
 final class Definitions {
 
-    private final String source;
+    private final CharSequence source;
     private final Nodes nodes;
-    private final Map<String, Integer> definitions;
+    private final References references;
 
-    Definitions(String source, Nodes nodes, Map<String, Integer> definitions) {
+    Definitions(CharSequence source, Nodes nodes, References references) {
         this.source = source;
         this.nodes = nodes;
-        this.definitions = definitions;
+        this.references = references;
     }
 
     /// Reads one definition from the front of `content`, answering how many
@@ -61,7 +59,7 @@ final class Definitions {
             var text = nodes.open(Kind.TITLE, node, content.source(titleStart + 1));
             nodes.end(text, content.source(title - 1));
         }
-        definitions.putIfAbsent(name, node);
+        references.define(name, node);
 
         var lines = lines(content, end);
         content.skip(lines);

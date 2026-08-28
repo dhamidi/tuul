@@ -1,9 +1,7 @@
 package markdown;
 
 import java.util.ArrayList;
-import java.util.LinkedHashMap;
 import java.util.List;
-import java.util.Map;
 import java.util.Set;
 
 /// Block structure: the first of the two phases this parser is built in.
@@ -35,13 +33,14 @@ final class Blocks {
             "optgroup", "option", "p", "param", "search", "section", "summary", "table", "tbody", "td", "tfoot",
             "th", "thead", "title", "tr", "track", "ul");
 
-    private final String source;
+    private final CharSequence source;
     private final Nodes nodes = new Nodes();
-    private final Map<String, Integer> definitions = new LinkedHashMap<>();
+    private final References references = new References(nodes);
     private final List<Open> stack = new ArrayList<>();
     private boolean consumed;
+    private int read;
 
-    Blocks(String source) {
+    Blocks(CharSequence source) {
         this.source = source;
     }
 
@@ -70,18 +69,66 @@ final class Blocks {
     }
 
     Document parse() {
+        start();
+        while (advance(source.length())) {
+            // every line, to the end of what there is
+        }
+        return finish();
+    }
+
+    /// Opens the document. Nothing else may be parsed until this has run, and
+    /// it is separate from [#parse] so that a caller feeding text as it arrives
+    /// can start before it has any.
+    void start() {
         stack.add(new Open(nodes.open(Kind.DOCUMENT, Nodes.NONE, 0), Kind.DOCUMENT));
-        var at = 0;
-        while (at <= source.length()) {
-            var end = source.indexOf('\n', at);
-            if (end < 0) end = source.length();
-            if (at == source.length() && at > 0 && source.charAt(at - 1) == '\n') break;
-            line(at, trimCarriage(at, end));
-            at = end + 1;
+    }
+
+    /// Parses one more line, if a whole one has arrived, answering whether it
+    /// did. `available` is how much of the source can be relied on — the whole
+    /// of it for a document already in hand, and how far a reader has got for
+    /// one still arriving.
+    ///
+    /// A line is only parsed when its newline has been seen, because a block
+    /// cannot be recognised from half a line. The exception is the last line of
+    /// a document, which is why [#finish] exists.
+    boolean advance(int available) {
+        if (read > available) return false;
+        var end = indexOf('\n', read, available);
+        if (end < 0) return false;
+        if (read == available && read > 0 && source.charAt(read - 1) == '\n') return false;
+        line(read, trimCarriage(read, end));
+        read = end + 1;
+        return true;
+    }
+
+    /// Closes what is still open and answers with the document.
+    Document finish() {
+        var length = source.length();
+        if (read <= length && !(read == length && read > 0 && source.charAt(read - 1) == '\n')) {
+            line(read, trimCarriage(read, length));
+            read = length + 1;
         }
         while (stack.size() > 1) close(stack.size() - 1);
-        nodes.end(0, source.length());
-        return new Document(source, nodes, definitions);
+        nodes.end(0, length);
+        return new Document(source, nodes, references.definitions());
+    }
+
+    /// How many nodes exist so far. A caller watching a parse can see the
+    /// document grow; only a test has cause to.
+    int size() {
+        return nodes.size();
+    }
+
+    References references() {
+        return references;
+    }
+
+    /// `String#indexOf` on a [CharSequence], bounded by what has arrived.
+    private int indexOf(char character, int from, int limit) {
+        for (var at = from; at < limit; at++) {
+            if (source.charAt(at) == character) return at;
+        }
+        return -1;
     }
 
     private int trimCarriage(int start, int end) {
@@ -214,7 +261,7 @@ final class Blocks {
     }
 
     private boolean ends(Open open, int start, int end) {
-        var line = source.substring(start, end);
+        var line = source.subSequence(start, end).toString();
         return switch (open.html) {
             case 1 -> containsAny(line, "</script>", "</pre>", "</style>", "</textarea>");
             case 2 -> line.contains("-->");
@@ -306,7 +353,7 @@ final class Blocks {
         var length = run(pos, end, character);
         if (length < 3) return -1;
         var info = skipSpaces(pos + length, end, Integer.MAX_VALUE);
-        if (character == '`' && source.substring(info, end).indexOf('`') >= 0) return -1;
+        if (character == '`' && source.subSequence(info, end).toString().indexOf('`') >= 0) return -1;
         closeParagraph();
         var node = open(Kind.CODE, pos);
         node.fenced = true;
@@ -335,7 +382,7 @@ final class Blocks {
 
     private int htmlType(int pos, int end) {
         if (source.charAt(pos) != '<') return 0;
-        var rest = source.substring(pos, end);
+        var rest = source.subSequence(pos, end).toString();
         var lower = rest.toLowerCase(java.util.Locale.ROOT);
         if (lower.startsWith("<script") || lower.startsWith("<pre") || lower.startsWith("<style")
                 || lower.startsWith("<textarea")) {
@@ -537,7 +584,7 @@ final class Blocks {
         if (open.kind == Kind.LIST) tightness(open);
         if (open.content == null) return;
         switch (nodes.kind(open.node)) {
-            case PARAGRAPH, HEADING -> new Inlines(source, nodes, open.node, open.content).parse();
+            case PARAGRAPH, HEADING -> new Inlines(source, nodes, references, open.node, open.content).parse();
             case CODE, HTML_BLOCK -> verbatim(open);
             default -> { }
         }
@@ -635,7 +682,7 @@ final class Blocks {
         var content = paragraph.content;
         if (content == null) return;
         while (!content.empty()) {
-            var taken = new Definitions(source, nodes, definitions).read(paragraph.node, content);
+            var taken = new Definitions(source, nodes, references).read(paragraph.node, content);
             if (taken == 0) break;
         }
         if (content.empty()) {

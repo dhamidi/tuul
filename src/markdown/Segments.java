@@ -16,12 +16,12 @@ import java.util.Arrays;
 /// document rather than at a copy of it.
 final class Segments implements CharSequence {
 
-    private final String source;
+    private final CharSequence source;
     private int[] spans = new int[16];
     private int count;
     private int length = -1;
 
-    Segments(String source) {
+    Segments(CharSequence source) {
         this.source = source;
     }
 

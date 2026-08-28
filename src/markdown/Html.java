@@ -18,7 +18,6 @@ public final class Html {
 
     private final Document document;
     private final Writer out;
-    private int unresolved = -1;
     private char last = '\n';
 
     private Html(Document document, Writer out) {
@@ -59,7 +58,7 @@ public final class Html {
                 if (step.node() == skipping && step.leaving()) skipping = -1;
                 continue;
             }
-            if (step.entering() && whole(step.kind())) {
+            if (step.entering() && whole(step)) {
                 if (element(step)) skipping = step.node();
                 continue;
             }
@@ -70,9 +69,15 @@ public final class Html {
 
     /// The kinds this renders in one go, children and all, because their
     /// children are not content: a code block's lines, a link's destination.
-    private static boolean whole(Kind kind) {
-        return switch (kind) {
+    ///
+    /// A reference nobody defined is one of them when it was written as an
+    /// image, because an image renders its alternative text rather than its
+    /// children — and is not when it was written as a link, whose text is
+    /// content and keeps whatever markup it had.
+    private boolean whole(Step step) {
+        return switch (step.kind()) {
             case CODE, HTML_BLOCK, CODE_SPAN, AUTOLINK, IMAGE, DEFINITION, DESTINATION, TITLE, LABEL, INFO -> true;
+            case REFERENCE -> References.image(document.nodes(), step.node());
             default -> false;
         };
     }
@@ -88,6 +93,11 @@ public final class Html {
             case CODE_SPAN -> codeSpan(cursor);
             case AUTOLINK -> autolink(cursor);
             case IMAGE -> image(cursor);
+            case REFERENCE -> {
+                write("![");
+                escape(alt(cursor));
+                write("]");
+            }
             default -> { }
         }
         return true;
@@ -123,6 +133,7 @@ public final class Html {
             case EMPHASIS -> write("<em>");
             case STRONG -> write("<strong>");
             case LINK -> link(cursor);
+            case REFERENCE -> write("[");
             case TEXT -> escape(cursor.text());
             case ESCAPE -> escape(cursor.text().subSequence(1, 2));
             case ENTITY -> escape(Entities.decode(cursor.text()));
@@ -146,14 +157,8 @@ public final class Html {
             case ITEM -> write("</li>\n");
             case EMPHASIS -> write("</em>");
             case STRONG -> write("</strong>");
-            case LINK -> {
-                if (unresolved == step.node()) {
-                    write("]");
-                    unresolved = -1;
-                } else {
-                    write("</a>");
-                }
-            }
+            case LINK -> write("</a>");
+            case REFERENCE -> write("]");
             default -> { }
         }
     }
@@ -223,17 +228,8 @@ public final class Html {
         write("</a>");
     }
 
-    /// A reference whose label nobody defined is not a link at all: the
-    /// brackets were text, and they go back the way they were written. The
-    /// node's span still covers them, which is why this can be answered here
-    /// rather than guessed at.
     private void link(Cursor link) throws IOException {
         var target = target(link);
-        if (target == null) {
-            unresolved = link.index();
-            write("[");
-            return;
-        }
         write("<a href=\"" + url(target.destination()) + "\"");
         if (!target.title().isEmpty()) write(" title=\"" + attribute(target.title()) + "\"");
         write(">");
@@ -241,12 +237,6 @@ public final class Html {
 
     private void image(Cursor image) throws IOException {
         var target = target(image);
-        if (target == null) {
-            write("![");
-            escape(alt(image));
-            write("]");
-            return;
-        }
         write("<img src=\"" + url(target.destination()) + "\" alt=\"" + attribute(alt(image)) + "\"");
         if (!target.title().isEmpty()) write(" title=\"" + attribute(target.title()) + "\"");
         write(" />");
@@ -254,21 +244,21 @@ public final class Html {
 
     private record Target(String destination, String title) {}
 
-    /// Where a link points, whether it said so itself or named a definition
-    /// that did. A label nobody defined has no destination, and the link is
-    /// rendered as an empty one rather than dropped — the text is what the
-    /// document said, and the reader can see it.
+    /// Where a link points: what it said itself, or what the definition it was
+    /// patched with says.
+    ///
+    /// Nothing is looked up here. A reference that named a definition carries
+    /// the node it was resolved to, put there when the definition was read —
+    /// so rendering asks the tree rather than a map, and a link that was never
+    /// resolved is not a [Kind#LINK] at all but a [Kind#REFERENCE], which this
+    /// is never asked about.
     private Target target(Cursor link) {
         var destination = link.copy();
         if (destination.child(Kind.DESTINATION)) {
             var title = link.copy();
             return new Target(unescape(destination.text()), title.child(Kind.TITLE) ? unescape(title.text()) : "");
         }
-        var label = link.copy();
-        if (!label.child(Kind.LABEL)) return null;
-        var defined = document.definition(label.string());
-        if (defined.isEmpty()) return null;
-        var definition = defined.get();
+        var definition = document.at(link.number());
         var url = definition.copy();
         var title = definition.copy();
         return new Target(

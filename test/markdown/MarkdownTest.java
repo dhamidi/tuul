@@ -2,6 +2,7 @@ package markdown;
 
 import harness.Check;
 import java.io.IOException;
+import java.io.Reader;
 import java.io.StringReader;
 import java.io.StringWriter;
 import java.util.ArrayList;
@@ -22,6 +23,9 @@ public final class MarkdownTest {
         emphasis();
         links();
         references();
+        patching();
+        unresolved();
+        incremental();
         images();
         html();
         entities();
@@ -142,6 +146,104 @@ public final class MarkdownTest {
         Check.that("a definition is in the tree", document.definition("foo").isPresent());
         Check.that("looked up however it was capitalised", document.definition("FOO").isPresent());
         Check.that("and not one that was never written", document.definition("bar").isEmpty());
+    }
+
+    /// A reference is written down where it appears and patched when its
+    /// definition turns up, so where the definition was written cannot change
+    /// what the document says.
+    private static void patching() {
+        equal("one label used twice, defined afterwards",
+                "<p><a href=\"/u\" title=\"T\">a</a> and <a href=\"/u\" title=\"T\">b</a></p>\n",
+                "[a][r] and [b][r]\n\n[r]: /u \"T\"\n");
+        equal("used before and after its definition",
+                "<p><a href=\"/u\">one</a></p>\n<p><a href=\"/u\">two</a></p>\n",
+                "[one][r]\n\n[r]: /u\n\n[two][r]\n");
+        equal("an image reference defined afterwards",
+                "<p><img src=\"/u\" alt=\"alt\" /></p>\n", "![alt][r]\n\n[r]: /u\n");
+        equal("a second definition of a label changes nothing",
+                "<p><a href=\"/first\">a</a></p>\n", "[a][r]\n\n[r]: /first\n\n[r]: /second\n");
+
+        // The two documents are not identical, and should not be: a definition
+        // sits where it was written, so the node order differs. What must agree
+        // is the link — that it resolved, and to the same place.
+        var before = Markdown.parse("[r]: /u\n\n[a][r]\n");
+        var after = Markdown.parse("[a][r]\n\n[r]: /u\n");
+        Check.equal("a definition after a use resolves the same as one before",
+                target(before), target(after));
+        Check.equal("and the definition stays where it was written",
+                List.of(Kind.DEFINITION, Kind.PARAGRAPH), List.of(kinds(before).get(1), kinds(after).get(1)));
+
+        var resolved = Markdown.parse("[a][r]\n\n[r]: /u\n");
+        var link = resolved.cursor();
+        link.firstChild();
+        link.firstChild();
+        Check.equal("a patched reference is a link", Kind.LINK, link.kind());
+        Check.equal("carrying the definition it was patched with",
+                Kind.DEFINITION, resolved.at(link.number()).kind());
+    }
+
+    /// A reference nobody ever defines stays what it was written as, which is
+    /// text — and says so in the tree rather than only in the output.
+    private static void unresolved() {
+        equal("an undefined full reference", "<p>[text]</p>\n", "[text][nope]\n");
+        equal("an undefined image reference", "<p>![alt]</p>\n", "![alt][nope]\n");
+        equal("markup inside an undefined reference survives",
+                "<p>[<em>em</em>]</p>\n", "[*em*][nope]\n");
+
+        var document = Markdown.parse("[text][nope]\n");
+        var reference = document.cursor();
+        reference.firstChild();
+        reference.firstChild();
+        Check.equal("and the node says it is unresolved", Kind.REFERENCE, reference.kind());
+    }
+
+    /// The parse does not wait for the end of the input.
+    ///
+    /// This drives [Blocks] a line at a time, which is what [Markdown#parse]
+    /// does with what a [Reader] has produced so far. A test is the only caller
+    /// with a reason to look in the middle.
+    private static void incremental() {
+        var source = "# Title\n\n[a][r] here.\n\n[r]: /u\n";
+        var blocks = new Blocks(source);
+        blocks.start();
+
+        var lines = 0;
+        var nodesAtReference = 0;
+        while (blocks.advance(source.length())) {
+            lines++;
+            if (lines == 3) nodesAtReference = blocks.size();
+        }
+        Check.that("nodes exist before the last line is read", nodesAtReference > 0);
+        Check.that("including the reference, still waiting for its definition",
+                blocks.references().unresolved() > 0);
+
+        var document = blocks.finish();
+        Check.equal("and nothing is waiting once the definition arrives",
+                0, blocks.references().unresolved());
+        Check.equal("which is the same document as parsing it whole",
+                kinds(Markdown.parse(source)), kinds(document));
+    }
+
+    /// Where the first link in a document points, by way of the definition it
+    /// was patched with.
+    private static String target(Document document) {
+        var found = document.walk()
+                .filter(step -> step.entering() && step.kind() == Kind.LINK)
+                .findFirst()
+                .orElseThrow();
+        var link = document.at(found.node());
+        var destination = document.at(link.number());
+        return link.kind() + " → " + (destination.child(Kind.DESTINATION) ? destination.text().toString() : "?");
+    }
+
+    /// Every node's kind, in document order — enough to say two parses agree
+    /// about the shape of a document without saying it twice.
+    private static List<Kind> kinds(Document document) {
+        var kinds = new ArrayList<Kind>();
+        document.walk().forEach(step -> {
+            if (step.entering()) kinds.add(step.kind());
+        });
+        return kinds;
     }
 
     private static void images() {
@@ -272,6 +374,39 @@ public final class MarkdownTest {
         var out = new StringWriter();
         Markdown.render(document, out);
         Check.equal("and rendered into a Writer", "<h1>from a reader</h1>\n", out.toString());
+
+        // A line arriving in pieces is where a parser that advances per line
+        // goes wrong, so this hands it one character at a time.
+        var source = "# Title\r\n\n[a][r] and [b][r]\n\n> quoted\n\n[r]: /u \"T\"\n";
+        var dribbled = Markdown.parse(new OneCharacterAtATime(source));
+        Check.equal("a document read a character at a time parses the same",
+                kinds(Markdown.parse(source)), kinds(dribbled));
+
+        var whole = new StringWriter();
+        Markdown.render(dribbled, whole);
+        Check.equal("and renders the same", Markdown.html(source), whole.toString());
+    }
+
+    /// A [Reader] that hands over one character per read, so that every line
+    /// arrives in pieces and no buffer boundary lines up with a newline.
+    private static final class OneCharacterAtATime extends Reader {
+
+        private final String source;
+        private int at;
+
+        private OneCharacterAtATime(String source) {
+            this.source = source;
+        }
+
+        @Override
+        public int read(char[] buffer, int offset, int length) {
+            if (at >= source.length()) return -1;
+            buffer[offset] = source.charAt(at++);
+            return 1;
+        }
+
+        @Override
+        public void close() {}
     }
 
     /// The cases where implementations quietly differ from one another, and
