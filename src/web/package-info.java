@@ -54,6 +54,28 @@
 /// `routes.path("post", Map.of("slug", "hello"))` for a link, and no handler
 /// writes a URL as a string.
 ///
+/// ## Features
+///
+/// A package can bring routes, handlers, files and import-map pins with it. A
+/// [web.Feature] is all four as one value, and [web.Features] composes the
+/// application's own routes with the features it uses.
+///
+/// ```
+/// var wiring = Features.of(routes, Ui.feature(), cable.feature(Topics.fixed("posts")));
+///
+/// var app = wiring.routing()
+///         .on("posts", Posts::index)
+///         .otherwise(NotFound::page);
+/// ```
+///
+/// `wiring.assets()` and `wiring.importmap()` are what a page needs to link
+/// what the features shipped. The URL that answers for a file comes with them,
+/// built from [web.assets.Assets#prefix()] rather than written out again.
+///
+/// A feature is a value and nothing is discovered from the class path. An
+/// application names what it uses, which is the only way to read a program and
+/// know what it serves.
+///
 /// ## Wrappers
 ///
 /// A [web.Middleware] is a handler that wraps a handler. [web.Middlewares]

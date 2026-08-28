@@ -18,6 +18,7 @@ void main() throws Exception {
     uritemplates.TemplatesTest.run();
     eventstream.EventStreamTest.run();
     web.WebTest.run();
+    web.FeaturesTest.run();
     web.ui.UiTest.run();
     web.assets.AssetsTest.run();
     web.hyperspec.HyperspecTest.run();

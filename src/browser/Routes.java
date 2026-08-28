@@ -2,12 +2,18 @@ package browser;
 
 import web.dispatch.Router;
 
-/// Every URL the browser has, named once.
+/// Every URL the browser has of its own, named once.
 ///
 /// Nothing below builds a path by writing one out: a link asks the router for
 /// the route by name and gives it the variables. Renaming a route then breaks
 /// the page that links to it, at compile time or at the first test, rather than
 /// producing a 404 for somebody reading documentation.
+///
+/// The stream of updates and the URL that serves a file are not here. They
+/// belong to [web.cable.Cable] and to [web.Features], which bring them along
+/// with the handlers that answer them — see [web.Feature]. This application
+/// used to declare both, and the asset one had to repeat a prefix that
+/// [web.assets.Assets] was already sure about.
 public final class Routes {
 
     public static final String HOME = "home";
@@ -20,10 +26,6 @@ public final class Routes {
     /// where its opener goes for a reader whose scripts never arrived — which
     /// is why it exists as a URL and not only as a panel.
     public static final String TREE = "tree";
-
-    public static final String UPDATES = "updates";
-
-    public static final String ASSET = "asset";
 
     /// The path every client asks for whether or not a page mentions one. A
     /// `<link rel="icon">` stops a browser asking, and stops nothing else —
@@ -38,8 +40,6 @@ public final class Routes {
                 .get(SEARCH, "/search")
                 .get(SYMBOL, "/symbols/{name}")
                 .get(TREE, "/tree")
-                .get(UPDATES, "/updates")
-                .get(ASSET, "/assets/{file}")
                 .get(FAVICON, "/favicon.ico");
     }
 }

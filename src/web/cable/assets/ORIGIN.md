@@ -10,7 +10,7 @@ applies Turbo Stream elements that arrive over a connection rather than in a
 response.
 
 An application puts this directory on its asset load path with
-`web.cable.Cable.assets()`, pins it as `@tuul/cable-stream`, and registers it
+`web.cable.Cable.feature(Topics)`, pins it as `@tuul/cable-stream`, and registers it
 under the identifier `web.cable.Cable.CONTROLLER`. All three names are constants
 on `Cable`, because a mismatch between them fails silently — the page simply
 never updates.

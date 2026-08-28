@@ -37,8 +37,13 @@ public final class HandlerTest {
     /// answers nothing is a route somebody will link to.
     private static void routes(Browser browser) {
         var routes = browser.routes();
-        for (var name : List.of(Routes.HOME, Routes.SEARCH, Routes.UPDATES, Routes.FAVICON)) {
+        for (var name : List.of(Routes.HOME, Routes.SEARCH, Routes.FAVICON)) {
             Check.that("the router knows the route " + name, routes.route(name).isPresent());
+        }
+        // The features brought these, and the application never wrote either.
+        for (var name : List.of(web.cable.Cable.UPDATES, web.Features.ASSET)) {
+            Check.that("and the route " + name + ", which came with its feature",
+                    routes.route(name).isPresent());
         }
         Check.equal("a symbol's path is built from its name", "/symbols/json.Json",
                 routes.path(Routes.SYMBOL, Map.of("name", "json.Json")));

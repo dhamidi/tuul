@@ -105,7 +105,7 @@ public final class Views {
                         Html.deferred(out -> modules.write(assets, out)),
                         script(BOOT, type("module"))),
                 body(
-                        Cable.source(routes.path(Routes.UPDATES)),
+                        Cable.source(routes.path(Cable.UPDATES)),
                         a(classes("skip"), href("#" + MAIN), text("Skip to content")),
                         Html.element("div", classes("shell"), Stimulus.controller(Ui.CONTROLLER),
                                 header(classes("bar"),

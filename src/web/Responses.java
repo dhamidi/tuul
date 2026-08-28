@@ -5,7 +5,6 @@ import java.io.Writer;
 import java.nio.charset.StandardCharsets;
 import json.Json;
 import web.assets.Served;
-import web.ui.Html;
 
 /// Putting a thing on the wire.
 ///
@@ -20,11 +19,11 @@ public final class Responses {
 
     private Responses() {}
 
-    public static void html(Html html, Response response) throws IOException {
+    public static void html(Markup html, Response response) throws IOException {
         html(html, Status.OK, response);
     }
 
-    public static void html(Html html, int status, Response response) throws IOException {
+    public static void html(Markup html, int status, Response response) throws IOException {
         response.status(status).header("Content-Type", "text/html; charset=utf-8");
         try (var out = response.writer()) {
             html.write(out);
@@ -33,7 +32,7 @@ public final class Responses {
 
     /// A Turbo Stream response — the same markup as a page, and a different
     /// content type, which is the whole of how Turbo tells them apart.
-    public static void turbo(Html html, Response response) throws IOException {
+    public static void turbo(Markup html, Response response) throws IOException {
         response.status(Status.OK).header("Content-Type", TURBO_STREAM + "; charset=utf-8");
         try (var out = response.writer()) {
             html.write(out);

@@ -21,7 +21,7 @@ import java.util.concurrent.ConcurrentHashMap;
 /// other keeps anything.
 ///
 /// ```
-/// Assets.standard(List.of(Bundled.of(Browser.class, "assets"), Ui.assets()));
+/// Feature.named("browser").from(Bundled.of(Browser.class, "assets"));
 /// ```
 ///
 /// The build copies everything under `src` that is not Java beside the classes

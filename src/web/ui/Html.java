@@ -30,7 +30,7 @@ import java.util.function.Function;
 /// escaped for the place it lands in, a name that is not a name is refused, a
 /// void element cannot have children, and the text inside a `<script>` cannot
 /// end the script.
-public sealed interface Html extends Node permits
+public sealed interface Html extends Node, web.Markup permits
         Html.Text, Html.Unsafe, Html.Element, Html.RawText, Html.Fragment, Html.Deferred, Component {
 
     /// Elements that are their whole tag. HTML gives them no closing tag, so

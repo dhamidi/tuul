@@ -2,7 +2,6 @@ package web.cable;
 
 import eventstream.Event;
 import java.io.IOException;
-import java.nio.file.Path;
 import java.util.ArrayList;
 import java.util.Comparator;
 import java.util.HashMap;
@@ -14,6 +13,7 @@ import java.util.Set;
 import java.util.concurrent.TimeUnit;
 import java.util.concurrent.locks.Condition;
 import java.util.concurrent.locks.ReentrantLock;
+import web.Feature;
 import web.Handler;
 import web.Request;
 import web.Responses;
@@ -54,15 +54,20 @@ import web.ui.Turbo;
 /// and [#close] does not return until every one of them has ended.
 public final class Cable implements AutoCloseable {
 
-    /// The specifier an application pins for the client half of this, and the
-    /// file behind it. Both are here rather than in a document because a
-    /// mismatch between them is silent.
     /// The directory holding [#FILE], beside this package's code.
     public static final String ASSETS = "assets";
 
+    /// The specifier an application pins for the client half of this, and the
+    /// file behind it. Both are here rather than in a document because a
+    /// mismatch between them is silent.
     public static final String MODULE = "@tuul/cable-stream";
 
     public static final String FILE = "cable-stream.js";
+
+    /// The route a page connects to. An application refers to it by this name
+    /// and never writes the path, so [#feature(Topics)] can be mounted
+    /// anywhere and every link still builds itself.
+    public static final String UPDATES = "web.cable.updates";
 
     /// The Stimulus identifier the controller is registered under. [#source]
     /// writes it, the application registers it, and neither should have to
@@ -176,11 +181,24 @@ public final class Cable implements AutoCloseable {
                 Stimulus.value(CONTROLLER, "url", url));
     }
 
-    /// Where the client half lives, so an application that uses the cable can
-    /// put it on its asset load path. It sits beside this package's own code
-    /// and travels with it, into a jar and out of one.
-    public static Path assets() {
-        return Bundled.of(Cable.class, ASSETS);
+    /// Everything an application needs to use the cable: the controller, its
+    /// pin, the route a page connects to, and the handler behind it.
+    ///
+    /// The controller sits beside this package's own code and travels with it,
+    /// into a jar and out of one.
+    ///
+    /// `topics` stays the application's, because what is worth broadcasting is
+    /// the application's business and nothing here can guess it. Everything
+    /// else is this package's and is now said once:
+    ///
+    /// ```
+    /// Features.of(Routes.of(), Cable.feature(cable, Topics.fixed("symbols")));
+    /// ```
+    public Feature feature(Topics topics) {
+        return Feature.named("web.cable")
+                .from(Bundled.of(Cable.class, ASSETS))
+                .pin(MODULE, FILE)
+                .get(UPDATES, "/updates", stream(topics));
     }
 
     /// Ends every subscription and waits for them. A cable that returned from

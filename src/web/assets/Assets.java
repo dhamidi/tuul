@@ -75,15 +75,15 @@ public final class Assets {
     /// neither would render markup nothing acts on. It goes last, so an
     /// application that ships a file of the same name replaces it.
     ///
-    /// Nothing else is here. A package that ships assets says where they are —
-    /// [web.ui.Ui#assets()], [web.cable.Cable#assets()] — and an application
-    /// that uses one puts it on this list beside its own, which it already does
-    /// for the import map. Enumerating them instead would mean this package
-    /// importing the packages built on top of it, and it would hand every
-    /// application every file tuul has ever shipped.
+    /// Nothing else is here. A package that ships assets says so as a
+    /// [web.Feature] — [web.ui.Ui#feature()], [web.cable.Cable#feature] — and
+    /// [web.Features] collects the directories of the features an application
+    /// names. Enumerating them instead would mean this package importing the
+    /// packages built on top of it, and it would hand every application every
+    /// file tuul has ever shipped.
     ///
     /// ```
-    /// Assets.standard(List.of(Bundled.of(Browser.class, "assets"), Cable.assets(), Ui.assets()));
+    /// Features.of(Routes.of(), Ui.feature(), cable.feature(topics)).assets();
     /// ```
     public static Assets standard(List<Path> loadPaths) {
         var all = new ArrayList<>(loadPaths);

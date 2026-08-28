@@ -12,16 +12,16 @@ import java.util.concurrent.ExecutorService;
 import java.util.concurrent.Executors;
 import symbols.Index;
 import symbols.References;
+import web.Feature;
+import web.Features;
 import web.Handler;
 import web.Page;
 import web.Request;
 import web.Response;
 import web.Responses;
-import web.Routing;
 import web.Status;
 import web.assets.Assets;
 import web.assets.Bundled;
-import web.assets.Importmap;
 import web.cable.Cable;
 import web.cable.Topics;
 import web.controllers.Negotiate;
@@ -30,6 +30,7 @@ import web.forms.Submission;
 import web.ui.Html;
 import web.serve.Http;
 import web.ui.Turbo;
+import web.ui.Ui;
 
 /// A browser for the symbol index tuul already builds.
 ///
@@ -63,18 +64,13 @@ public final class Browser implements AutoCloseable {
     public static final String INDEX = "index";
 
     private final Index index;
-    private final Router routes;
-    private final Assets assets;
-    private final Importmap modules;
+    private final Features wiring;
     private final Cable cable;
     private final ExecutorService watching;
 
-    private Browser(Index index, Router routes, Assets assets, Importmap modules, Cable cable,
-                    ExecutorService watching) {
+    private Browser(Index index, Features wiring, Cable cable, ExecutorService watching) {
         this.index = index;
-        this.routes = routes;
-        this.assets = assets;
-        this.modules = modules;
+        this.wiring = wiring;
         this.cable = cable;
         this.watching = watching;
     }
@@ -91,13 +87,22 @@ public final class Browser implements AutoCloseable {
     public static Browser of(Index index, Path watched) {
         var cable = Cable.of();
         var watching = watch(cable, watched);
-        return new Browser(index, Routes.of(), Assets.standard(List.of(Bundled.of(Browser.class, ASSETS), Cable.assets(), web.ui.Ui.assets())),
-                Importmap.standard()
-                        .pin(Cable.MODULE, Cable.FILE)
-                        .pin(web.ui.Ui.MODULE, web.ui.Ui.FILE)
-                        .pin("@tuul/browser-search", "search.js")
-                        .pin(ResultItemKind.MODULE, ResultItemKind.FILE),
-                cable, watching);
+        return new Browser(index, Features.of(Routes.of(), own(), Ui.feature(),
+                cable.feature(Topics.fixed(INDEX))), cable, watching);
+    }
+
+    /// What this application ships to the browser.
+    ///
+    /// Its own files, and the two controllers it wrote. Everything else on the
+    /// page — the components' stylesheet, the cable's controller, Turbo and
+    /// Stimulus — comes from the package that ships it, which is why this list
+    /// is short and why nothing here repeats a file name that a framework
+    /// package already knows.
+    private static Feature own() {
+        return Feature.named("browser")
+                .from(Bundled.of(Browser.class, ASSETS))
+                .pin("@tuul/browser-search", "search.js")
+                .pin(ResultItemKind.MODULE, ResultItemKind.FILE);
     }
 
     /// Starts a server and does not return until it is stopped. What a command
@@ -118,11 +123,11 @@ public final class Browser implements AutoCloseable {
     }
 
     public Router routes() {
-        return routes;
+        return wiring.routes();
     }
 
     public Assets assets() {
-        return assets;
+        return wiring.assets();
     }
 
     public Cable cable() {
@@ -133,13 +138,11 @@ public final class Browser implements AutoCloseable {
     /// rather than a bare status, since somebody who mistyped a symbol name is
     /// still reading documentation and should be given the search box back.
     public Handler handler() {
-        return Routing.of(routes)
+        return wiring.routing()
                 .on(Routes.HOME, searching())
                 .on(Routes.SEARCH, searching())
                 .on(Routes.SYMBOL, showing())
                 .on(Routes.TREE, this::browsing)
-                .on(Routes.UPDATES, cable.stream(Topics.fixed(INDEX)))
-                .on(Routes.ASSET, this::asset)
                 .on(Routes.FAVICON, this::favicon)
                 .otherwise(this::missing);
     }
@@ -158,9 +161,9 @@ public final class Browser implements AutoCloseable {
                 .effect(Symbols.SEARCH, Symbols.searching(index, MATCHES))
                 .render((found, request, response) -> render(
                         Views.RESULTS.equals(frame(request))
-                                ? Views.results(routes, found)
-                                : shell(request, title(found), Search.asking(routes, found.query()),
-                                        Views.searching(routes, found)),
+                                ? Views.results(routes(), found)
+                                : shell(request, title(found), Search.asking(routes(), found.query()),
+                                        Views.searching(routes(), found)),
                         Status.OK, response));
     }
 
@@ -196,8 +199,8 @@ public final class Browser implements AutoCloseable {
             state.description().write(response.writer());
             return;
         }
-        render(shell(request, state.name(), Search.blank(routes),
-                Views.symbol(routes, referencing(state.name()), state)), status, response);
+        render(shell(request, state.name(), Search.blank(routes()),
+                Views.symbol(routes(), referencing(state.name()), state)), status, response);
     }
 
     /// A doc comment's `[Type#member]` cross-references, pointed at pages.
@@ -214,7 +217,7 @@ public final class Browser implements AutoCloseable {
     /// link claims the page exists; brackets only claim the name does.
     private markdown.Links referencing(String scope) {
         return References.of(index, scope, (symbol, member) ->
-                routes.path(Routes.SYMBOL, Map.of("name", symbol)) + (member.isEmpty() ? "" : "#" + member));
+                wiring.routes().path(Routes.SYMBOL, Map.of("name", symbol)) + (member.isEmpty() ? "" : "#" + member));
     }
 
     /// The tree as a page. The sidebar shows it on every page; this is the same
@@ -222,24 +225,21 @@ public final class Browser implements AutoCloseable {
     /// JavaScript to open a panel with — and it is also the honest answer to
     /// somebody who asks what this browser has in it.
     private void browsing(Request request, Response response) throws IOException {
-        render(shell(request, "What there is", Search.blank(routes), Views.browsing(routes, index.roots())),
+        render(shell(request, "What there is", Search.blank(routes()), Views.browsing(routes(), index.roots())),
                 Status.OK, response);
-    }
-
-    private void asset(Request request, Response response) throws IOException {
-        Responses.send(assets.serve(request.path(), request.headers().first("If-None-Match").orElse(null)), response);
     }
 
     /// The icon, answered at the conventional path as well as its digested
     /// one. The digested URL is what a page points at and what a cache keeps;
     /// this is for everything that asks without reading the page first.
     private void favicon(Request request, Response response) throws IOException {
-        Responses.send(assets.serve(assets.url(Views.ICON), request.headers().first("If-None-Match").orElse(null)), response);
+        Responses.send(wiring.assets().serve(wiring.assets().url(Views.ICON),
+                request.headers().first("If-None-Match").orElse(null)), response);
     }
 
     private void missing(Request request, Response response) throws IOException {
-        render(shell(request, "Not found", Search.blank(routes),
-                Views.searching(routes, Found.nothing().failed("There is nothing at " + request.path() + "."))),
+        render(shell(request, "Not found", Search.blank(routes()),
+                Views.searching(routes(), Found.nothing().failed("There is nothing at " + request.path() + "."))),
                 Status.NOT_FOUND, response);
     }
 
@@ -252,7 +252,8 @@ public final class Browser implements AutoCloseable {
     /// bytes.
     private Html shell(Request request, String heading, Submission search, Html content) {
         if (Views.CONTENT.equals(frame(request))) return Views.pane(content);
-        return Views.page(routes, assets, modules, heading, search, index.roots(), content);
+        return Views.page(wiring.routes(), wiring.assets(), wiring.importmap(), heading, search,
+                index.roots(), content);
     }
 
     private static void render(Html html, int status, Response response) throws IOException {

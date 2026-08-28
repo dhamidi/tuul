@@ -100,6 +100,54 @@ public final class Router {
         return new Router(List.copyOf(next), Map.copyOf(names));
     }
 
+    /// Adds every route of another table, under a prefix.
+    ///
+    /// This is how a package brings its URLs with it. The cable owns `/updates`
+    /// and the handler behind it; an application that uses the cable mounts
+    /// that table and never writes the path. Both directions keep working:
+    /// [#recognise] finds the mounted route at its prefixed path, and
+    /// [#path(String, Map)] builds the same path from the same name.
+    ///
+    /// **A mount does not rename.** A route keeps the name its own table gave
+    /// it, and only its path changes. The alternative — qualifying names with
+    /// the prefix — would mean that every place which builds a URL must know
+    /// where the table was mounted, which is the coupling a mount exists to
+    /// remove. So a package names its routes uniquely, usually with its own
+    /// name in front, and the application is free to move them.
+    ///
+    /// **A collision is refused.** Two tables that both name a route `home`
+    /// cannot be merged, because [#path(String, Map)] would then have two
+    /// answers and would silently give whichever arrived first. [#with] already
+    /// refuses that; this only says which mount found it.
+    public Router mount(String prefix, Router mounted) {
+        if (!prefix.isEmpty() && !prefix.startsWith("/")) {
+            throw new DispatchException("a mount prefix is a path and starts with /, unlike " + prefix);
+        }
+        var router = this;
+        for (var route : mounted.routes()) {
+            var moved = Route.of(route.name(), route.method(), under(prefix, route.template().text()));
+            try {
+                router = router.with(moved);
+            } catch (DispatchException collision) {
+                throw new DispatchException("mounting at " + (prefix.isEmpty() ? "/" : prefix)
+                        + ": " + collision.getMessage());
+            }
+        }
+        return router;
+    }
+
+    /// A template under a prefix. A prefix that ends in `/` and a template that
+    /// begins with one must not make `//`, which is a different path to
+    /// everything that reads paths — and a mounted root is the prefix itself
+    /// rather than the prefix with a trailing slash, so that mounting at
+    /// `/blog` answers `/blog`.
+    private static String under(String prefix, String template) {
+        var base = prefix.endsWith("/") ? prefix.substring(0, prefix.length() - 1) : prefix;
+        if (base.isEmpty()) return template;
+        if (template.equals("/")) return base;
+        return base + (template.startsWith("/") ? template : "/" + template);
+    }
+
     /// Which route this is, if it is one.
     public Recognised recognise(String method, String path) {
         var wanted = method.toUpperCase(Locale.ROOT);

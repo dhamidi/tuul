@@ -3,8 +3,8 @@ package web.ui;
 import static web.ui.Attributes.classes;
 import static web.ui.Attributes.href;
 
-import java.nio.file.Path;
 import java.util.List;
+import web.Feature;
 import web.assets.Bundled;
 
 /// The components: the vocabulary a page is written in.
@@ -52,15 +52,18 @@ public final class Ui {
     /// having one.
     public static final String SIDEBAR = "sidebar";
 
-    /// Where the components' stylesheet and controller live, so an application
-    /// that renders these can put them on its asset load path.
+    /// What this contributes to an application: the stylesheet, the sidebar
+    /// controller, and the name a page imports the controller by.
     ///
     /// Every component here writes a `ui-` prefixed class name and nothing
     /// else, so a page that does not serve `ui.css` renders the right markup
     /// with none of the design on it. An application says it wants this the
     /// same way it says it wants the cable: by naming it.
-    public static Path assets() {
-        return Bundled.of(Ui.class, ASSETS);
+    ///
+    /// There are no routes here, and that is the point of a feature being able
+    /// to have none: a design system serves no URL of its own.
+    public static Feature feature() {
+        return Feature.named("web.ui").from(Bundled.of(Ui.class, ASSETS)).pin(MODULE, FILE);
     }
 
     private Ui() {}

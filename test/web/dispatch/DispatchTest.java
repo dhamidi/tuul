@@ -21,6 +21,81 @@ public final class DispatchTest {
         ordering();
         refusing();
         encoding();
+        mounting();
+    }
+
+    /// A mounted table keeps both directions honest under its prefix, and keeps
+    /// its names.
+    private static void mounting() {
+        var feature = Router.of()
+                .get("cable.updates", "/updates")
+                .get("cable.one", "/updates/{id}")
+                .post("cable.send", "/updates");
+        var host = Router.of().get("home", "/").get("search", "/search");
+
+        var mounted = host.mount("/live", feature);
+        Check.equal("a mounted route is recognised under its prefix", "cable.updates",
+                nameOf(mounted.recognise("GET", "/live/updates")));
+        Check.equal("and its path is built from the name it always had", "/live/updates",
+                mounted.path("cable.updates"));
+        Check.equal("variables survive the move", "/live/updates/7",
+                mounted.path("cable.one", Map.of("id", "7")));
+        Check.equal("and are read back out again", "7",
+                valueOf(mounted.recognise("GET", "/live/updates/7"), "id"));
+        Check.equal("the method is not changed by the move", "cable.send",
+                nameOf(mounted.recognise("POST", "/live/updates")));
+        Check.that("the host keeps its own routes", mounted.route("home").isPresent());
+        Check.equal("which are not moved", "/", mounted.path("home"));
+        Check.that("and the unprefixed path of a mounted route is gone",
+                mounted.recognise("GET", "/updates") instanceof Recognised.NotFound);
+
+        Check.equal("mounting at the root leaves paths alone", "/updates",
+                Router.of().mount("", feature).path("cable.updates"));
+        Check.equal("and so does mounting at a bare slash", "/updates",
+                Router.of().mount("/", feature).path("cable.updates"));
+
+        // A prefix and a root template must not make `//`, which is a
+        // different path to everything that reads one.
+        var rooted = Router.of().get("blog.home", "/").get("blog.post", "/{slug}");
+        Check.equal("a mounted root is the prefix itself", "/blog",
+                Router.of().mount("/blog", rooted).path("blog.home"));
+        Check.equal("even when the prefix was written with a trailing slash", "/blog",
+                Router.of().mount("/blog/", rooted).path("blog.home"));
+        Check.equal("and what is under it has one separator", "/blog/hello",
+                Router.of().mount("/blog", rooted).path("blog.post", Map.of("slug", "hello")));
+        Check.equal("which is the path that is recognised", "blog.home",
+                nameOf(Router.of().mount("/blog", rooted).recognise("GET", "/blog")));
+
+        // The collision is the reason mount does not rename: two answers to
+        // path("home") is worse than none, so it is refused rather than
+        // resolved to whichever arrived first.
+        var clash = Router.of().get("home", "/");
+        var collision = refused(() -> Router.of().get("home", "/").mount("/blog", clash));
+        Check.that("mounting a name the host already has is refused: " + collision,
+                collision.contains("home"));
+        Check.that("and the message says which mount found it: " + collision,
+                collision.contains("/blog"));
+        Check.that("a prefix that is not a path is refused",
+                refused(() -> Router.of().mount("blog", clash)).contains("starts with /"));
+
+        // Two features that happen to agree on a name are the same mistake.
+        Check.that("two mounted tables cannot share a name",
+                !refused(() -> Router.of().mount("/a", clash).mount("/b", clash)).isEmpty());
+    }
+
+    /// The message from a route table that refused something, or empty if it
+    /// did not refuse.
+    private static String refused(Runnable mistake) {
+        try {
+            mistake.run();
+            return "";
+        } catch (DispatchException refused) {
+            return refused.getMessage();
+        }
+    }
+
+    private static String nameOf(Recognised recognised) {
+        return recognised instanceof Recognised.Match match ? match.route().name() : String.valueOf(recognised);
     }
 
     /// What a recognition found, as something a check can compare. A wrong
