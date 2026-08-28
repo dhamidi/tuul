@@ -15,9 +15,10 @@
 ///
 /// ```
 /// var server = Server.of()
-///         .method("greet", params -> {
-///             var who = ((Json.Object) params).string("name", "world");
-///             return Json.of("hello, " + who);
+///         .method("greet", params -> switch (params) {
+///             case Json.Object arguments -> Json.of("hello, " + arguments.string("name", "world"));
+///             case Json.Null _ -> Json.of("hello, world");
+///             default -> throw Rejection.of(Failure.invalidParams("expected an object"));
 ///         });
 /// ```
 ///
@@ -26,6 +27,12 @@
 /// position, a `Json.Object` when the caller named them, and [json.Json#NULL]
 /// when the call carried no arguments at all. Each method reads what it needs,
 /// because only the method knows the shape it wants.
+///
+/// Match on the shape. Do not cast to it. A cast that fails throws a
+/// `ClassCastException`, the server reports that as -32603, and -32603 tells
+/// the caller that your server broke. Arguments of the wrong shape are the
+/// caller's mistake, and the code for that is -32602. Pattern matching is what
+/// lets you answer with the right one.
 ///
 /// ## Calling it
 ///
@@ -41,9 +48,14 @@
 /// ```
 ///
 /// [Client#call(String, json.Json)] waits for the answer and returns the
-/// result. [Client#notify(String, json.Json)] sends a call with no id. A
-/// server must never answer a notification, so `notify` returns nothing and
-/// there is nothing to wait for.
+/// result. When the server answers with an error instead, `call` throws a
+/// [Rejection] holding that [Failure], so the code you chose on the server
+/// arrives at the caller as `rejection.failure().code()`.
+///
+/// [Client#notify(String, json.Json)] sends a call with no id. A server must
+/// never answer a notification, so `notify` returns nothing and there is
+/// nothing to wait for. A notification that fails fails silently, which is the
+/// price of not waiting.
 ///
 /// ## Reporting an error
 ///
@@ -52,13 +64,20 @@
 ///
 /// ```
 /// .method("add", params -> {
-///     var items = ((Json.Array) params).items();
-///     if (items.size() != 2) throw Rejection.of(Failure.invalidParams("two numbers, please"));
-///     if (!(items.get(0) instanceof Json.Num(var left))) throw Rejection.of(Failure.invalidParams("not a number"));
-///     if (!(items.get(1) instanceof Json.Num(var right))) throw Rejection.of(Failure.invalidParams("not a number"));
-///     return Json.of(left + right);
+///     if (params instanceof Json.Array(var items)
+///             && items.size() == 2
+///             && items.get(0) instanceof Json.Num(var left)
+///             && items.get(1) instanceof Json.Num(var right)) {
+///         return Json.of(left + right);
+///     }
+///     throw Rejection.of(Failure.invalidParams("expected two numbers"));
 /// })
 /// ```
+///
+/// One chain of patterns states every condition the method requires. A call
+/// that fails any of them gets the same error. The bindings `items`, `left`
+/// and `right` exist only inside the branch where their patterns matched, so
+/// there is no way to read one that was never assigned.
 ///
 /// Any other exception becomes -32603, an internal error. The server does not
 /// copy the exception message into the response, because a caller has no use
