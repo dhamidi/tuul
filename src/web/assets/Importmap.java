@@ -1,5 +1,6 @@
 package web.assets;
 
+import java.io.FilterWriter;
 import java.io.IOException;
 import java.io.Writer;
 import java.util.LinkedHashMap;
@@ -55,26 +56,9 @@ public record Importmap(Map<String, String> pins) {
     /// The tags a page needs, in the order a browser needs them: the map before
     /// anything imports through it, then a preload for each module so the
     /// browser can start fetching them without waiting to be asked.
-    ///
-    /// An attribute value, escaped.
-    ///
-    /// The JSON below is escaped for the element it sits inside, and these
-    /// hrefs were not escaped at all: the reasoning stopped at the inline
-    /// document and did not reach the two attributes beside it. A logical name
-    /// comes from a file on a load path rather than from a request, so this
-    /// closes a shape rather than a hole — but a rule that holds for one
-    /// attribute and not the one under it is a rule nobody can rely on.
-    private static String attribute(String value) {
-        return value.replace("&", "&amp;").replace("\"", "&quot;").replace("<", "&lt;");
-    }
-
-    /// The JSON has its angle brackets escaped. Inside a `script` element the
-    /// bytes `</script` end the element wherever they appear, including in the
-    /// middle of a string, and a file name is not something this package gets to
-    /// assume about.
     public void write(Assets assets, Writer out) throws IOException {
         out.write("<script type=\"importmap\">");
-        out.write(inline(json(assets)));
+        json(assets).write(new Inline(out));
         out.write("</script>\n");
         for (var pin : pins.values()) {
             out.write("<link rel=\"modulepreload\" href=\"" + attribute(assets.url(pin)) + "\">\n");
@@ -82,7 +66,54 @@ public record Importmap(Map<String, String> pins) {
         out.flush();
     }
 
-    private static String inline(Json.Object map) {
-        return map.text().replace("<", "\\u003c").replace(">", "\\u003e");
+    /// An attribute value, escaped.
+    ///
+    /// The document inside the `script` element is escaped for the element it
+    /// sits in, and these hrefs beside it were not escaped at all: the
+    /// reasoning stopped at the inline document. A logical name comes from a
+    /// file on a load path rather than from a request, so this closes a shape
+    /// rather than a hole — but a rule that holds for one attribute and not the
+    /// one under it is a rule nobody can rely on.
+    private static String attribute(String value) {
+        return value.replace("&", "&amp;").replace("\"", "&quot;").replace("<", "&lt;");
+    }
+
+    /// A writer that makes a JSON document safe to sit inside a `script`
+    /// element.
+    ///
+    /// The bytes `</script` end the element wherever they appear, including in
+    /// the middle of a string, and a file name is not something this package
+    /// gets to assume about. So the angle brackets leave as their JSON escapes,
+    /// which a parser reads back as the same two characters.
+    ///
+    /// It is a writer rather than two passes over a string because the map is
+    /// written into the page as it is serialised. [json.Json#text()] says it is
+    /// for values known to be small, and an import map grows with every pin an
+    /// application adds — it was being built whole, copied once per escape, and
+    /// only then written, on the render of every page.
+    private static final class Inline extends FilterWriter {
+
+        private Inline(Writer out) {
+            super(out);
+        }
+
+        @Override
+        public void write(int character) throws IOException {
+            switch (character) {
+                case '<' -> out.write("\\u003c");
+                case '>' -> out.write("\\u003e");
+                default -> out.write(character);
+            }
+        }
+
+        @Override
+        public void write(char[] buffer, int from, int length) throws IOException {
+            for (var at = from; at < from + length; at++) write(buffer[at]);
+        }
+
+        @Override
+        public void write(String text, int from, int length) throws IOException {
+            for (var at = from; at < from + length; at++) write(text.charAt(at));
+        }
     }
 }
