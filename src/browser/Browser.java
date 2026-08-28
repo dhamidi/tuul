@@ -70,13 +70,11 @@ public final class Browser implements AutoCloseable {
     private final Index index;
     private final Features wiring;
     private final Cable cable;
-    private final ExecutorService watching;
 
-    private Browser(Index index, Features wiring, Cable cable, ExecutorService watching) {
+    private Browser(Index index, Features wiring, Cable cable) {
         this.index = index;
         this.wiring = wiring;
         this.cable = cable;
-        this.watching = watching;
     }
 
     /// A browser over a project's index, watching it for changes.
@@ -90,9 +88,8 @@ public final class Browser implements AutoCloseable {
     /// wants too.
     public static Browser of(Index index, Path watched) {
         var cable = Cable.of();
-        var watching = watch(cable, watched);
         return new Browser(index, Features.of(Routes.of(), Ui.feature(),
-                cable.feature(Topics.fixed(INDEX)), own()), cable, watching);
+                cable.feature(Topics.fixed(INDEX)), own(watch(cable, watched))), cable);
     }
 
     /// What this application ships to the browser.
@@ -105,13 +102,26 @@ public final class Browser implements AutoCloseable {
     ///
     /// It is named last in [#of(Index, Path)] so that [#STYLESHEET] cascades
     /// over the components' one. See [Features] on what that order costs.
-    private static Feature own() {
-        return Feature.named("browser")
+    ///
+    /// It also carries the watcher, which is the application's own resource
+    /// rather than any package's: it watches a symbol index, and nothing in
+    /// `web` has ever heard of one. Being named last it is closed first, and it
+    /// has to be — it broadcasts on the cable, so it must stop before the cable
+    /// does.
+    ///
+    /// The watcher is handed over as what *stops* it, not as itself. An
+    /// [ExecutorService] is an [AutoCloseable] whose `close` waits for the
+    /// running tasks to end, and this task loops until it is interrupted, so
+    /// closing it that way would wait for something that is never going to
+    /// happen.
+    private static Feature own(ExecutorService watching) {
+        var feature = Feature.named("browser")
                 .from(Bundled.of(Browser.class, ASSETS))
                 .stylesheet(STYLESHEET)
                 .head(Views.icon())
                 .pin("@tuul/browser-search", "search.js")
                 .pin(ResultItemKind.MODULE, ResultItemKind.FILE);
+        return watching == null ? feature : feature.closing(watching::shutdownNow);
     }
 
     /// Starts a server and does not return until it is stopped. What a command
@@ -304,10 +314,19 @@ public final class Browser implements AutoCloseable {
         }
     }
 
+    /// Stops the watcher, ends every open stream, and then closes the index.
+    ///
+    /// The first two are not named here any more. They are what the features
+    /// declared, unwound in the order [Features#close()] documents, and this
+    /// file no longer knows that a cable is one of the things a shutdown waits
+    /// for.
+    ///
+    /// The index stays, because it is not a web resource and because whoever
+    /// handed one to [#of(Index, Path)] may still be using it — a test opens an
+    /// index, passes it here, and closes it itself.
     @Override
-    public void close() {
-        if (watching != null) watching.shutdownNow();
-        cable.close();
+    public void close() throws Exception {
+        wiring.close();
         index.close();
     }
 }

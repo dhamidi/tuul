@@ -6,6 +6,7 @@ import java.util.LinkedHashMap;
 import java.util.LinkedHashSet;
 import java.util.List;
 import java.util.Map;
+import java.util.concurrent.atomic.AtomicBoolean;
 import web.assets.Assets;
 import web.assets.Importmap;
 import web.dispatch.Router;
@@ -43,7 +44,9 @@ import web.dispatch.Router;
 /// the reverse silently is not.
 ///
 /// It is middleware order too: the first feature named wraps outermost and sees
-/// a request before the ones after it.
+/// a request before the ones after it. And it is shutdown order, reversed —
+/// see [#close()], which is the one use of this order that agrees with document
+/// order rather than fighting it.
 ///
 /// The two uses of that one order pull opposite ways, and an application has to
 /// choose. Naming yourself **first** means your file wins when a feature ships
@@ -52,7 +55,7 @@ import web.dispatch.Router;
 /// would mean an application that reads correctly and renders wrong. Replacing a
 /// whole shipped file is rare and overriding some of its rules is not, so name
 /// yourself last unless you have a reason.
-public final class Features {
+public final class Features implements AutoCloseable {
 
     /// The route that answers for a file. Named so that it can be replaced by
     /// an application that wants to serve assets some other way, and so that a
@@ -64,6 +67,7 @@ public final class Features {
     private final Assets assets;
     private final Importmap modules;
     private final Map<String, Handler> handlers;
+    private final AtomicBoolean closed = new AtomicBoolean();
 
     private Features(List<Feature> features, Router routes, Assets assets, Importmap modules,
                      Map<String, Handler> handlers) {
@@ -188,6 +192,48 @@ public final class Features {
         var stack = new ArrayList<Middleware>();
         for (var feature : features) stack.addAll(feature.middleware());
         return Middleware.of(stack);
+    }
+
+    /// Closes every resource the features declared, last named first.
+    ///
+    /// Reverse of composition, for the reason reverse is always the answer: a
+    /// feature can be built from something an earlier one produced, so
+    /// unwinding forwards would take a thing away from something still using
+    /// it. The browser is exactly that — its own feature holds a watcher that
+    /// broadcasts on the cable, so the watcher has to stop before the cable
+    /// closes, and naming order gives that for free.
+    ///
+    /// **This is the third meaning of the one order, and the only one that does
+    /// not fight the others.** Dependencies point backwards: a feature built
+    /// from another feature's object is named after it, closes before it, and
+    /// — being later — also cascades over it. So "name yourself after what you
+    /// use" is the same advice as "name yourself last", and only asset
+    /// precedence pulls the other way. See the note on order above.
+    ///
+    /// Everything is closed even when something throws. The first failure is
+    /// what comes out and the rest are attached to it, because a shutdown that
+    /// abandoned the remaining resources to report the first problem would
+    /// leave a server unable to say it had stopped — which is the thing
+    /// [web.cable.Cable#close()] exists to guarantee.
+    ///
+    /// Closing twice does nothing the second time. A server and the thing it
+    /// serves are often closed by nested try-with-resources, and both arriving
+    /// here is ordinary rather than a mistake.
+    @Override
+    public void close() throws Exception {
+        if (!closed.compareAndSet(false, true)) return;
+        Exception failure = null;
+        for (var feature : features.reversed()) {
+            for (var resource : feature.closing().reversed()) {
+                try {
+                    resource.close();
+                } catch (Exception unclosed) {
+                    if (failure == null) failure = unclosed;
+                    else failure.addSuppressed(unclosed);
+                }
+            }
+        }
+        if (failure != null) throw failure;
     }
 
     /// Answering for a file.

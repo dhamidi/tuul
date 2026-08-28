@@ -55,9 +55,14 @@ import web.text.Escape;
 /// [#stylesheet(String)] says both at once. Anything else the document needs is
 /// a [Contribution], written in the order it was declared. See [Features#head()]
 /// for what that order means across features.
+///
+/// **And what has to be closed.** [#closing(AutoCloseable)] is how a package
+/// that holds a resource says so, rather than the application knowing which of
+/// its features happens to need shutting down. See [Features#close()].
 public record Feature(String name, String mount, List<Path> assets, Map<String, String> pins,
                       Router routes, Map<String, Handler> handlers,
-                      List<Contribution> head, List<Contribution> body, List<Middleware> middleware) {
+                      List<Contribution> head, List<Contribution> body, List<Middleware> middleware,
+                      List<AutoCloseable> closing) {
 
     public Feature {
         if (name.isBlank()) throw new IllegalArgumentException("a feature needs a name");
@@ -67,12 +72,14 @@ public record Feature(String name, String mount, List<Path> assets, Map<String, 
         head = List.copyOf(head);
         body = List.copyOf(body);
         middleware = List.copyOf(middleware);
+        closing = List.copyOf(closing);
     }
 
     /// A feature that contributes nothing yet. The name is for whoever reads an
     /// error: a pin that cannot resolve says which feature asked for it.
     public static Feature named(String name) {
-        return new Feature(name, "", List.of(), Map.of(), Router.of(), Map.of(), List.of(), List.of(), List.of());
+        return new Feature(name, "", List.of(), Map.of(), Router.of(), Map.of(), List.of(), List.of(), List.of(),
+                List.of());
     }
 
     /// A directory of files this ships. Usually one —
@@ -81,7 +88,7 @@ public record Feature(String name, String mount, List<Path> assets, Map<String, 
     public Feature from(Path directory) {
         var next = new ArrayList<>(assets);
         next.add(directory);
-        return new Feature(name, mount, next, pins, routes, handlers, head, body, middleware);
+        return new Feature(name, mount, next, pins, routes, handlers, head, body, middleware, closing);
     }
 
     /// A bare specifier, and the logical name of the file behind it.
@@ -92,7 +99,7 @@ public record Feature(String name, String mount, List<Path> assets, Map<String, 
     public Feature pin(String module, String logical) {
         var next = new LinkedHashMap<>(pins);
         next.put(module, logical);
-        return new Feature(name, mount, assets, next, routes, handlers, head, body, middleware);
+        return new Feature(name, mount, assets, next, routes, handlers, head, body, middleware, closing);
     }
 
     /// Where this feature's paths hang. Empty means at the root, which is what
@@ -100,7 +107,7 @@ public record Feature(String name, String mount, List<Path> assets, Map<String, 
     /// rather than `/updates` says so here and nothing else changes, because
     /// the route keeps its name and every link is built from that name.
     public Feature at(String mount) {
-        return new Feature(name, mount, assets, pins, routes, handlers, head, body, middleware);
+        return new Feature(name, mount, assets, pins, routes, handlers, head, body, middleware, closing);
     }
 
     /// A stylesheet this ships, and the `link` that reaches it.
@@ -126,7 +133,7 @@ public record Feature(String name, String mount, List<Path> assets, Map<String, 
     public Feature head(Contribution contribution) {
         var next = new ArrayList<>(head);
         next.add(contribution);
-        return new Feature(name, mount, assets, pins, routes, handlers, next, body, middleware);
+        return new Feature(name, mount, assets, pins, routes, handlers, next, body, middleware, closing);
     }
 
     /// Something this puts at the top of the document body.
@@ -138,7 +145,7 @@ public record Feature(String name, String mount, List<Path> assets, Map<String, 
     public Feature body(Contribution contribution) {
         var next = new ArrayList<>(body);
         next.add(contribution);
-        return new Feature(name, mount, assets, pins, routes, handlers, head, next, middleware);
+        return new Feature(name, mount, assets, pins, routes, handlers, head, next, middleware, closing);
     }
 
     /// Something this wraps around the whole application.
@@ -162,7 +169,36 @@ public record Feature(String name, String mount, List<Path> assets, Map<String, 
     public Feature wrappedBy(Middleware wrapper) {
         var next = new ArrayList<>(middleware);
         next.add(wrapper);
-        return new Feature(name, mount, assets, pins, routes, handlers, head, body, next);
+        return new Feature(name, mount, assets, pins, routes, handlers, head, body, next, closing);
+    }
+
+    /// Something to close when the application stops.
+    ///
+    /// This is the weaker of the two claims a feature could make, and it is the
+    /// true one. A feature does not *own* the resource: the application builds
+    /// a [web.cable.Cable] and keeps it, because broadcasting is the
+    /// application's business and it needs the live object to do it. What the
+    /// feature knows is that the object has to be closed when the application
+    /// stops — the same shape as knowing the cable needs a route, a pin, a load
+    /// path and an element in the body.
+    ///
+    /// Making features build their own resources instead would be the larger
+    /// change and the wrong one. A factory that runs while an application is
+    /// composed is a side effect at composition time, which is the Rails
+    /// property this design refuses, and the application would then need some
+    /// way to ask for the object back — a lookup by name or by type, which is
+    /// the discovery mechanism refused just as deliberately.
+    ///
+    /// **Pass what stops the thing, not the thing, when they differ.** An
+    /// [java.util.concurrent.ExecutorService] is itself an [AutoCloseable]
+    /// whose `close` waits for the running tasks to finish. A watcher that
+    /// loops until it is interrupted never finishes, so closing one that way
+    /// waits forever; what ends it is `shutdownNow`. See
+    /// [browser.Browser#of(symbols.Index, java.nio.file.Path)].
+    public Feature closing(AutoCloseable resource) {
+        var next = new ArrayList<>(closing);
+        next.add(resource);
+        return new Feature(name, mount, assets, pins, routes, handlers, head, body, middleware, next);
     }
 
     /// A route and the handler that answers it, together.
@@ -173,7 +209,8 @@ public record Feature(String name, String mount, List<Path> assets, Map<String, 
     public Feature route(String route, String method, String template, Handler handler) {
         var next = new LinkedHashMap<>(handlers);
         next.put(route, handler);
-        return new Feature(name, mount, assets, pins, routes.route(route, method, template), next, head, body, middleware);
+        return new Feature(name, mount, assets, pins, routes.route(route, method, template), next, head, body, middleware,
+                closing);
     }
 
     public Feature get(String route, String template, Handler handler) {

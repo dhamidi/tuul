@@ -22,6 +22,7 @@ public final class FeaturesTest {
         wrapping();
         guarding();
         refusing();
+        closing();
     }
 
     /// Each of the three parts arrives, and a feature with only some of them is
@@ -52,6 +53,67 @@ public final class FeaturesTest {
 
         Check.equal("a feature with no routes adds none", 0, quiet.routes().routes().size());
         Check.that("and still contributes what it ships", wiring.assets().find("design.css").isPresent());
+    }
+
+    /// What a feature says has to be closed, and when.
+    ///
+    /// Order is the part worth pinning. A feature can be built from something
+    /// an earlier one produced, so unwinding forwards would take a resource
+    /// away from something still using it — the browser's watcher broadcasts on
+    /// the cable, and stopping it after the cable closes is a broadcast into a
+    /// closed cable.
+    private static void closing() throws Exception {
+        var order = new java.util.ArrayList<String>();
+
+        var wiring = Features.of(Router.of(),
+                Feature.named("first").closing(() -> order.add("first")),
+                Feature.named("second").closing(() -> order.add("second.a")).closing(() -> order.add("second.b")));
+        wiring.close();
+        Check.equal("the last feature named is closed first, and its own in reverse too",
+                List.of("second.b", "second.a", "first"), order);
+
+        wiring.close();
+        Check.equal("and closing twice does nothing the second time",
+                List.of("second.b", "second.a", "first"), order);
+
+        var closed = new java.util.ArrayList<String>();
+        var failing = Features.of(Router.of(),
+                Feature.named("early").closing(() -> closed.add("early")),
+                Feature.named("angry")
+                        .closing(() -> closed.add("after"))
+                        .closing(() -> {
+                            throw new IllegalStateException("first to go wrong");
+                        }));
+        try {
+            failing.close();
+            Check.that("a resource that throws is reported", false);
+        } catch (Exception thrown) {
+            Check.equal("the first failure is what comes out", "first to go wrong", thrown.getMessage());
+        }
+        Check.equal("and everything after it is still closed", List.of("after", "early"), closed);
+
+        var both = new java.util.ArrayList<String>();
+        var angrier = Features.of(Router.of(), Feature.named("angry")
+                .closing(() -> {
+                    both.add("second");
+                    throw new IllegalStateException("second");
+                })
+                .closing(() -> {
+                    throw new IllegalStateException("first");
+                }));
+        try {
+            angrier.close();
+            Check.that("two failures are reported", false);
+        } catch (Exception thrown) {
+            Check.equal("the first failure is the one thrown", "first", thrown.getMessage());
+            Check.equal("and the rest are attached to it rather than lost",
+                    List.of("second"),
+                    java.util.Arrays.stream(thrown.getSuppressed()).map(Throwable::getMessage).toList());
+        }
+        Check.equal("a throwing resource does not stop the ones after it", List.of("second"), both);
+
+        Check.that("a feature that owns nothing needs no closing",
+                Feature.named("quiet").closing().isEmpty());
     }
 
     /// What a feature puts in the document, and in what order.

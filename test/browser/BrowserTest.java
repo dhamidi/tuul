@@ -12,6 +12,7 @@ import web.assets.Hotwired;
 import web.hyperspec.Hyperspec;
 import web.hyperspec.Outcome;
 import web.serve.Http;
+import web.serve.Memory;
 
 /// Everything the browser is, checked at the cheapest level that can see it.
 ///
@@ -35,6 +36,63 @@ public final class BrowserTest {
             assets(browser);
             answers(browser);
         }
+        stops(sources);
+    }
+
+    /// Shutting down actually shuts down.
+    ///
+    /// This is the failure mode of moving lifetimes into the features, and it
+    /// has no visible symptom: a server that returns from `close` while a
+    /// stream is still open, or one that never returns at all. Neither shows up
+    /// in a status code, and the second one hangs a test run rather than
+    /// failing it — so closing happens on a thread here and the check is that
+    /// it finished.
+    ///
+    /// The browser is built with a file to watch, because the watcher is the
+    /// half that only this application has: it is carried by the application's
+    /// own feature, and it is the one that must stop before the cable it
+    /// broadcasts on.
+    private static void stops(Path sources) throws Exception {
+        var watched = Files.createTempFile("tuul-browser-watch", ".db");
+        watched.toFile().deleteOnExit();
+
+        try (var index = Index.of(List.of(sources), List.of(), index(sources))) {
+            var browser = Browser.of(index, watched);
+            try (var open = Memory.open(browser.handler(), Memory.get("/updates"))) {
+                Check.equal("a page is listening before the shutdown", 1, listening(browser, 1));
+
+                var failure = new java.util.concurrent.atomic.AtomicReference<Exception>();
+                var closing = Thread.ofVirtual().start(() -> {
+                    try {
+                        browser.close();
+                    } catch (Exception thrown) {
+                        failure.set(thrown);
+                    }
+                });
+                closing.join(java.time.Duration.ofSeconds(15));
+                Check.that("closing returns rather than waiting for something that never ends",
+                        !closing.isAlive());
+                Check.that("and does not throw", failure.get() == null);
+
+                Check.equal("every subscription has ended", 0, browser.cable().subscribers());
+                Check.that("and the handler holding the stream open has finished",
+                        !open.handler().isAlive());
+                Check.throwing("the cable really closed, rather than only losing its subscribers",
+                        () -> browser.cable().broadcast(Browser.INDEX, web.ui.Turbo.refresh()));
+
+                browser.close();
+                Check.equal("closing twice is safe", 0, browser.cable().subscribers());
+            }
+        }
+    }
+
+    /// How many pages the cable has, once it has them. The handler runs on a
+    /// thread of its own, so a subscription appears a moment after the response
+    /// does — see the longer note in [HandlerTest].
+    private static int listening(Browser browser, int wanted) throws InterruptedException {
+        var deadline = System.nanoTime() + java.time.Duration.ofSeconds(2).toNanos();
+        while (System.nanoTime() < deadline && browser.cable().subscribers() != wanted) Thread.sleep(5);
+        return browser.cable().subscribers();
     }
 
     /// The application's own assets reach the pipeline from beside its own

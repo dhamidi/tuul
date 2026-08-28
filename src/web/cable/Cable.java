@@ -205,12 +205,18 @@ public final class Cable implements AutoCloseable {
     /// ```
     /// Features.of(Routes.of(), Cable.feature(cable, Topics.fixed("symbols")));
     /// ```
+    ///
+    /// That includes [#close()]. The application still holds this cable and
+    /// still broadcasts on it — the feature does not take it away — but it no
+    /// longer has to remember that a cable is among the things a shutdown has
+    /// to wait for.
     public Feature feature(Topics topics) {
         return Feature.named("web.cable")
                 .from(Bundled.of(Cable.class, ASSETS))
                 .pin(MODULE, FILE)
                 .body((assets, routes, out) -> source(routes.path(UPDATES)).write(out))
-                .get(UPDATES, "/updates", stream(topics));
+                .get(UPDATES, "/updates", stream(topics))
+                .closing(this);
     }
 
     /// Ends every subscription and waits for them. A cable that returned from
