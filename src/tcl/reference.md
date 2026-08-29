@@ -31,6 +31,42 @@ Terms keep one meaning. See [Glossary](#glossary).
 
 The package exposes these types. All other types are package-private.
 
+### `Repl`
+
+| Member | Action |
+|---|---|
+| `Repl.of(Evaluator)` | Create a REPL with Tcl completeness rules and no prompts. |
+| `Repl.of(Evaluator, Completer)` | Create a REPL with a caller-supplied completeness rule and no prompts. |
+| `complete(source)` | Return whether `source` has no unclosed brace, quote, or command substitution. |
+| `prompts(primary, continuation)` | Return a copy that writes prompts before input lines. |
+| `interactive()` | Return a copy with `% ` and `> ` prompts. |
+| `noPrompts()` | Return a copy with no prompts. |
+| `results(ResultWriter)` | Return a copy with a custom result writer. |
+| `failures(ErrorWriter)` | Return a copy with a custom error writer. |
+| `run(reader, out)` | Read to EOF. Write results and errors to `out`. |
+| `run(reader, out, errors)` | Read to EOF. Write results and errors separately. |
+
+`Evaluator` receives a `Reader` for one complete command. It does not receive
+the REPL's input reader. A normal binding is `Repl.of(tcl::eval)`.
+
+The REPL reads one line at a time. It retains only the current incomplete
+command. It adds each line terminator to that command before it calls the
+completer. It does not call the evaluator for a blank line.
+
+The default result writer writes non-null, non-empty results with a trailing
+newline. The default error writer writes `error: `, the exception message, and
+a trailing newline. An evaluator exception does not stop the REPL.
+
+The default has no prompts. `interactive()` enables `% ` for a new command and
+`> ` for a continuation. Prompts, results, and errors flush immediately.
+
+At EOF, an incomplete command becomes one failure and does not reach the
+evaluator. `Result.evaluated()` counts evaluator calls. `Result.failures()`
+counts evaluator failures and this EOF failure. `Result.successful()` is true
+only when there are no failures and no incomplete command.
+
+The caller closes the input and output streams. The REPL does not close them.
+
 ### `Tcl`
 
 | Member | Action |

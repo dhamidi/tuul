@@ -185,6 +185,20 @@ returns that origin. `info frame` then has `type` `source` and a `file` key.
 `-errorinfo` can print `(file "app.tcl" line 16)`. Without an origin there is
 no file line. There is only a proc line or an eval line.
 
+## Why the REPL keeps one command
+
+`eval(Reader)` is the source-text primitive, but a REPL needs one result per
+command. It also needs to wait when a line opens a body or a substitution.
+
+`Repl` reads lines from the host's `Reader`, uses the same delimiter rules as
+`info complete`, and sends each complete command to the evaluator through a
+new `Reader`. It keeps the current command only. A large script after that
+command stays unread until the evaluator returns.
+
+Prompts are a presentation choice. The default has none, so a pipe carries
+only results and errors. `interactive()` adds the primary and continuation
+prompts for a terminal. The host still owns all streams and closes them.
+
 ## Why `info` exists
 
 Scripts debug scripts. They need `info exists`, `info level`, `info frame`,

@@ -1,7 +1,8 @@
 # tcl
 
-A Tcl interpreter that holds JVM objects as values. This directory has no
-implementation yet. These documents are the design.
+A Tcl interpreter that holds JVM objects as values. This directory also
+contains a stream-friendly REPL driver. These documents are the design and
+the contract.
 
 The host passes objects into the interpreter. A script finds those objects,
 calls procs and Java methods, and returns an object.
@@ -11,6 +12,10 @@ There is no I/O in this package. The host reads and writes. `eval` accepts a
 
 One interpreter runs on one thread at a time. The host owns virtual threads,
 streams, and Flow. The script sees objects and method calls.
+
+`Repl` does not own an interpreter. The host supplies an evaluator, so the
+same driver can run the interpreter over a terminal, a pipe, or a test
+reader.
 
 ## Documents
 

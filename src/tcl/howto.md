@@ -24,6 +24,22 @@ There is no `source` and no `puts`. Open the reader in the host. Write output
 in the host. The interpreter reads commands from the reader. It does not
 open a file.
 
+## Run an evaluator as a REPL
+
+1. Bind the evaluator: `var repl = Repl.of(tcl::eval)`. The default has no
+   prompts, so it also works with a pipe.
+2. Enable terminal prompts when needed:
+   `repl = repl.interactive()`.
+3. Run it with caller-owned streams:
+   `var report = repl.run(input, output, errors)`.
+4. Close `input`, `output`, and `errors` in the host.
+
+The REPL reads one line at a time. It uses Tcl completeness rules to keep a
+multiline command together. It evaluates a complete command through the
+interpreter's `Reader` API, writes its result, and continues after an error.
+At end of input, an unfinished command is reported as a failure and is not
+evaluated.
+
 ## Call a method on a host object
 
 1. Pass the object: `tcl.set("obj", object)`.
