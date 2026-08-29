@@ -66,9 +66,20 @@ public record Undeliverable(Address to, Cause cause, Message command) {
 
     /// Reads the failed command back out of a notice, which is what a retry
     /// needs.
+    ///
+    /// A notice always carries one, because [#notice()] is the only thing that
+    /// builds one, so a notice without a command is malformed rather than
+    /// empty. Answering with a typeless message would hand a retry something to
+    /// send that nothing would handle.
+    ///
+    /// The command is nested here, and that is right where it would be wrong in
+    /// an effect: this reports a message rather than sending one, so the
+    /// message is the payload's subject. An effect that sends carries the
+    /// payload itself — see [application.Effect#sending(String,
+    /// application.Message)].
     public static Message commandOf(Message notice) {
         if (notice.get("command") instanceof json.Json.Object document) return Message.from(document);
-        return Message.of("");
+        throw new IllegalArgumentException("not an " + TYPE + " notice: it carries no command");
     }
 
     /// Reads the address back out of a notice.

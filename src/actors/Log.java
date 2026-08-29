@@ -55,6 +55,22 @@ public interface Log extends AutoCloseable {
     /// starts at one and never has a gap.
     ///
     /// The command carries when it arrived, so nothing is passed beside it.
+    ///
+    /// ## What a log keeps of an envelope
+    ///
+    /// A log keeps the type, the [application.Message#AT] stamp and the payload,
+    /// and it assigns [#SEQ]. **Every other envelope field is dropped**, and a
+    /// replayed command carries only those.
+    ///
+    /// That is a rule, not an accident of how one store is built. It is what
+    /// makes it safe for an envelope to be an open bag: a field added to one
+    /// cannot start being written to every actor's history because somebody
+    /// added a column. A caller's reply address is the case that matters —
+    /// [Delivery] keeps it out of the message for that reason, and this keeps
+    /// it out of the log even if some future message does carry one.
+    ///
+    /// An implementation that wants to persist more has to change this
+    /// sentence first.
     long append(Message command);
 
     /// Every command, in order, each carrying its sequence number and the

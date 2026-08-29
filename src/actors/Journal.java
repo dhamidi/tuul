@@ -134,6 +134,9 @@ public final class Journal implements Log {
     }
 
     @Override
+    /// Writes the type, the stamp and the payload, and nothing else an
+    /// envelope happens to hold — the rule [Log#append(Message)] states. The
+    /// four columns are the whole of what a history keeps.
     public long append(Message command) {
         var seq = length + 1;
         insert.run(seq, command.at(), command.type(), command.body().text());

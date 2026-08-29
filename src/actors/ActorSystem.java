@@ -74,6 +74,16 @@ import json.Json;
 /// [#traces()] is already the feed it would subscribe to.
 public final class ActorSystem implements AutoCloseable {
 
+    /// Envelope fields the message-sending effects are routed by.
+    ///
+    /// They are envelope fields, and they are named for the family that owns
+    /// them, because the body of one of these effects is the message's own
+    /// payload. A message about a delivery van may say `to`; it must not be
+    /// mistaken for where the message goes.
+    static final String TO = "actor.to";
+
+    static final String AFTER = "actor.after";
+
     /// Effect types the system handles for every actor.
     static final String TELL = "actor.tell";
     static final String REPLY = "actor.reply";
@@ -528,12 +538,12 @@ public final class ActorSystem implements AutoCloseable {
         var application = actor.application();
         shared.forEach(application::effect);
         application.effect(TELL, (effect, emit) ->
-                deliver(Delivery.of(Address.from(effect.get("to")), Effect.carried(effect)).from(actor.address())));
+                deliver(Delivery.of(addressed(effect), Effect.sent(effect)).from(actor.address())));
         application.effect(ASK, (effect, emit) ->
-                deliver(Delivery.of(Address.from(effect.get("to")), Effect.carried(effect))
+                deliver(Delivery.of(addressed(effect), Effect.sent(effect))
                         .from(actor.address())
                         .replyTo(actor.address())));
-        application.effect(REPLY, (effect, emit) -> reply(actor, Effect.carried(effect)));
+        application.effect(REPLY, (effect, emit) -> reply(actor, Effect.sent(effect)));
         application.effect(SPAWN, (effect, emit) -> {
             var address = Address.from(effect.get("address"));
             if (effect.get("durable") instanceof Json.Bool(var durable)) {
@@ -544,6 +554,11 @@ public final class ActorSystem implements AutoCloseable {
         application.effect(EVICT, (effect, emit) ->
                 evict(effect.get("address") == null ? actor.address() : Address.from(effect.get("address"))));
         application.effect(SCHEDULE, (effect, emit) -> schedule(actor.address(), effect));
+    }
+
+    /// Where a message-sending effect is addressed.
+    private static Address addressed(Effect effect) {
+        return Address.from(effect.envelope().get(TO));
     }
 
     /// Answers whoever sent the message being handled.
@@ -569,9 +584,9 @@ public final class ActorSystem implements AutoCloseable {
     /// message a timer delivers should carry the deadline it was armed for, so
     /// that a duplicate firing after a restart is recognised and ignored.
     private void schedule(Address self, Effect effect) {
-        var message = Effect.carried(effect);
-        var to = effect.get("to") == null ? self : Address.from(effect.get("to"));
-        var after = effect.get("after") instanceof Json.Num(var millis) ? (long) millis : 0L;
+        var message = Effect.sent(effect);
+        var to = effect.envelope().get(TO) == null ? self : Address.from(effect.envelope().get(TO));
+        var after = (long) effect.envelope().number(AFTER, 0);
         timers.schedule(() -> deliver(Delivery.of(to, message).from(self)), after, TimeUnit.MILLISECONDS);
     }
 

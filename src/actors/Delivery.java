@@ -34,6 +34,26 @@ import java.time.Instant;
 /// that [Actor] copied into the message before every update, because the
 /// envelope did not exist and the message had nowhere to keep it.
 ///
+/// ## Why this is still a type
+///
+/// Every field left here is metadata travelling beside a payload, which is what
+/// an envelope is for, so this looks like the next wrapper to collapse — the
+/// way `Log.Entry` collapsed once its sequence number, timestamp and command
+/// were all things a message already carried.
+///
+/// It is the opposite case. `Log.Entry` held nothing that was not already an
+/// envelope field, so it was a box around a message. This holds exactly what an
+/// envelope must **not** carry. A message is the thing that gets written to a
+/// log; a delivery is the routing that gets it there and then stops. Put
+/// `replyTo` in the envelope and the reply address is inside the object the
+/// journal writes, with nothing between it and the disk but the list of columns
+/// that journal happens to have — see [Log#append(application.Message)] for why
+/// that rule is written down rather than left to the schema.
+///
+/// So the split is the point of the type. Collapsing it would not remove a box;
+/// it would remove the only thing keeping a caller's address out of a permanent
+/// record of intent.
+///
 /// @param command  the message the actor will handle, stamped with when it
 ///                 arrived
 /// @param to       the actor it is addressed to

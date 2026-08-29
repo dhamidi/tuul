@@ -22,8 +22,8 @@
 ///         return Application.of(new Counter(0))
 ///                 .on("add", (state, message) -> Step.of(new Counter(state.total() + 1)))
 ///                 .on("total", (state, message) -> Step.of(state,
-///                         Effect.of("actor.reply")
-///                                 .carrying(Message.of("total").with("value", Json.of(state.total())))));
+///                         Effect.sending("actor.reply",
+///                                 Message.of("total").with("value", Json.of(state.total())))));
 ///     }
 ///
 ///     public Json inspect(Counter state) {

@@ -26,6 +26,7 @@ public final class ActorsTest {
 
     public static void run() throws Exception {
         addresses();
+        stamping();
         replays();
         upgrades();
         suppressesEffects();
@@ -709,6 +710,132 @@ public final class ActorsTest {
         }
     }
 
+    // ---- an effect that sends is a message plus a destination -------------
+
+    /// The handler stamps the destination; the sender never packs a message.
+    ///
+    /// The shape this replaced nested a whole message inside the effect's
+    /// payload, so `with("message", message.body())` compiled and handed over a
+    /// payload with no envelope. The message arrived typeless and nothing
+    /// dispatched it. Now the effect's body *is* the payload, which moves the
+    /// question from "did the sender pack it right" to "did the sender say what
+    /// it sends" — and that one can be refused.
+    private static void stamping() throws Exception {
+        refusesToSendNothing();
+        routingDoesNotTouchThePayload();
+        keepsNoReplyAddress();
+    }
+
+    /// An effect that does not say what it sends is a mistake, and it says so.
+    private static void refusesToSendNothing() throws Exception {
+        var errors = new CopyOnWriteArrayList<Message>();
+        Definition<Long> mute = new Definition<>() {
+
+            @Override
+            public String type() {
+                return "mute";
+            }
+
+            @Override
+            public Application<Long> instantiate(Address self) {
+                return Application.of(0L)
+                        .on("go", (state, message) -> Step.of(state, Effect.of(ActorSystem.REPLY)))
+                        .on("error", (state, message) -> {
+                            errors.add(message);
+                            return Step.of(state);
+                        });
+            }
+        };
+
+        try (var system = ActorSystem.named("test").define(mute, Spawn.ephemeral())) {
+            system.tell(mute.at("1"), Message.of("go"));
+            settle();
+            Check.equal("an effect that sends nothing is refused rather than delivering a typeless message",
+                    1, errors.size());
+            Check.that("and the refusal says how to build one properly",
+                    errors.isEmpty() || errors.getFirst().string("reason", "").contains("Effect.sending"));
+        }
+    }
+
+    /// Routing is an envelope field, so a payload may have a field called `to`
+    /// and mean its own thing by it.
+    ///
+    /// While routing lived in the effect's body it shared a namespace with the
+    /// message's payload — the collision the envelope exists to end, one level
+    /// up from where it was found the first time. The payload here says `to`
+    /// and means a customer; the envelope says which actor the message goes to.
+    /// Nothing about an actor address is postal, and the point is that the two
+    /// words never meet.
+    private static void routingDoesNotTouchThePayload() throws Exception {
+        var delivered = new CopyOnWriteArrayList<String>();
+        var seen = new CopyOnWriteArrayList<Message>();
+        Definition<Long> ledger = new Definition<>() {
+
+            @Override
+            public String type() {
+                return "post";
+            }
+
+            @Override
+            public Application<Long> instantiate(Address self) {
+                return Application.of(0L)
+                        .on("send", (state, message) -> Step.of(state,
+                                Effect.sending(ActorSystem.TELL,
+                                                Message.of("parcel").with("to", "Ada Lovelace"))
+                                        .about(ActorSystem.TO, Address.of("post", "2").json())))
+                        .on("parcel", (state, message) -> {
+                            delivered.add(self.toString());
+                            seen.add(message);
+                            return Step.of(state);
+                        });
+            }
+        };
+
+        try (var system = ActorSystem.named("test").define(ledger, Spawn.ephemeral())) {
+            system.tell(ledger.at("1"), Message.of("send"));
+            settle();
+            Check.equal("exactly one parcel arrived", 1, seen.size());
+            Check.equal("at the actor the envelope named", List.of("post/2"), List.copyOf(delivered));
+            Check.equal("and the payload's own `to` arrived untouched",
+                    "Ada Lovelace", seen.isEmpty() ? "" : seen.getFirst().string("to", ""));
+        }
+    }
+
+    /// A log keeps the type, the stamp and the payload, and drops the rest of
+    /// an envelope.
+    ///
+    /// [Delivery] keeps a reply address out of the message so that it cannot be
+    /// written down, and this is the second half of that: even a message that
+    /// does carry an unknown envelope field leaves it at the log. The rule is
+    /// asserted here rather than left to whichever columns a store happens to
+    /// have, because adding one would otherwise start writing callers'
+    /// addresses into a permanent record of intent.
+    private static void keepsNoReplyAddress() throws Exception {
+        var root = root();
+        var address = Address.of("counter", "1");
+        try (var system = ActorSystem.named("test").rooted(root).define(new Counting(1))) {
+            var smuggled = Message.from(Json.Object.of()
+                    .with("type", "add")
+                    .with("replyTo", "counter/999")
+                    .with("body", Json.Object.of().with("by", Json.of(2))));
+            Check.equal("a message read from a document keeps an envelope field nobody knows",
+                    "counter/999", smuggled.envelope().string("replyTo", ""));
+
+            system.tell(address, smuggled);
+            settle();
+            system.ask(address, Message.of("total"), Duration.ofSeconds(2)).get();
+            settle();
+
+            try (var history = system.history(address, 0, 100)) {
+                var envelopes = history.map(command -> command.envelope().fields().keySet()).toList();
+                Check.that("a log keeps only the type, the stamp and the sequence number",
+                        envelopes.stream().allMatch(keys -> keys.equals(java.util.Set.of("type", "at", "seq"))));
+                Check.that("so no reply address survives being written down",
+                        envelopes.stream().noneMatch(keys -> keys.contains("replyTo")));
+            }
+        }
+    }
+
     // ---- the counter every test below talks to ---------------------------
 
     /// A counter that adds what it is told and answers with its total.
@@ -732,8 +859,8 @@ public final class ActorsTest {
             return Application.of(new Counter(0))
                     .on("add", (state, message) -> Step.of(new Counter(state.total() + weight * amount(message))))
                     .on("total", (state, message) -> Step.of(state,
-                            Effect.of(ActorSystem.REPLY)
-                                    .carrying(Message.of("total").with("value", Json.of(state.total())))));
+                            Effect.sending(ActorSystem.REPLY,
+                                    Message.of("total").with("value", Json.of(state.total())))));
         }
 
         @Override
@@ -916,9 +1043,9 @@ public final class ActorsTest {
             @Override
             public Application<Long> instantiate(Address self) {
                 return Application.of(0L)
-                        .on("go", (state, message) -> Step.of(state, Effect.of(ActorSystem.TELL)
-                                .with("to", Address.parse(message.string("to", "")).json())
-                                .carrying(Message.of("hello"))))
+                        .on("go", (state, message) -> Step.of(state,
+                                Effect.sending(ActorSystem.TELL, Message.of("hello"))
+                                        .about(ActorSystem.TO, Address.parse(message.string("to", "")).json())))
                         .on(Undeliverable.TYPE, (state, message) -> {
                             notices.add(message);
                             return Step.of(state);

@@ -18,8 +18,19 @@ public record Effect(Json.Object body, Json.Object envelope) implements Envelope
     /// message back to itself.
     public static final String SEND = "application.send";
 
-    /// The field [#send(Message)] carries the message in.
-    public static final String MESSAGE = "message";
+    /// The envelope field naming the type of the message an effect sends.
+    ///
+    /// It is an envelope field for the same reason a message's type is one. An
+    /// effect that sends a message *is* that message plus a destination, so the
+    /// effect's body is the message's payload — and a payload may have a field
+    /// called anything, including `type`, `to` or `after`.
+    ///
+    /// This replaced nesting the whole message under a payload key. That shape
+    /// made the sender pack a message by hand, and `with("message",
+    /// message.body())` compiled: it handed over a payload with no envelope, so
+    /// the message arrived typeless, was dispatched by nobody, and said nothing
+    /// about why. Nothing is packed now, so there is nothing to pack wrongly.
+    public static final String SENDING = "sending";
 
     public static Effect of(String type) {
         return of(type, Json.Object.of());
@@ -37,27 +48,63 @@ public record Effect(Json.Object body, Json.Object envelope) implements Envelope
 
     /// An effect that hands a whole message back.
     public static Effect send(Message message) {
-        return of(SEND).carrying(message);
+        return sending(SEND, message);
     }
 
-    /// This effect, carrying a whole message for whoever runs it.
+    /// An effect of this type that sends this message.
     ///
-    /// Packing one by hand is the way this goes wrong. A message travels as
-    /// [Envelope#json()], and `with(MESSAGE, message.body())` also compiles —
-    /// it hands over the payload with no envelope, so the message arrives with
-    /// no type, is dispatched by nobody, and says nothing about why. That was
-    /// the documented idiom while the type lived in the payload and survived by
-    /// accident. This is the same statement with the accident removed.
-    public Effect carrying(Message message) {
-        return with(MESSAGE, message.json());
+    /// The message is not nested inside the effect: its payload becomes the
+    /// effect's body and its type becomes [#SENDING] in the effect's envelope.
+    /// So a handler does not unpack a message, it stamps one — and there is no
+    /// way to build an effect that says it sends something and does not.
+    ///
+    /// Where the message goes is [#about(String, Json)], the envelope again,
+    /// because the body belongs to the message and a payload may have a field
+    /// called `to`.
+    ///
+    /// ```
+    /// Effect.sending("actor.reply", Message.of("total").with("value", Json.of(7)));
+    /// ```
+    public static Effect sending(String type, Message message) {
+        return new Effect(message.body(), Json.Object.of().with(TYPE, type).with(SENDING, message.type()));
     }
 
-    /// The message an [#SEND] effect carries, or a typeless one when it carries
-    /// nothing.
-    public static Message carried(Effect effect) {
-        return effect.get(MESSAGE) instanceof Json.Object document
-                ? Message.from(document)
-                : Message.of("");
+    /// The message this effect sends.
+    ///
+    /// The envelope is built here rather than carried through: a message's
+    /// envelope says what the message is, and an effect's says what the effect
+    /// is and where it goes. Only the type crosses over, so a routing field
+    /// added to an effect later can never end up looking like something the
+    /// message said about itself.
+    ///
+    /// An effect that does not say what it sends is a mistake in the update
+    /// that built it, not a message with no type, so this refuses instead of
+    /// inventing one. [Application] turns the throw into an `error` message, so
+    /// it is loud and it does not take the loop down.
+    public static Message sent(Effect effect) {
+        var type = effect.envelope().string(SENDING, "");
+        if (type.isEmpty()) {
+            throw new IllegalStateException("the effect " + effect.type()
+                    + " does not say what it sends — build it with Effect.sending(type, message)");
+        }
+        return Message.of(type, effect.body());
+    }
+
+    /// The same effect with one more envelope field: something about the doing
+    /// of it rather than something said.
+    ///
+    /// Where a message goes, and how long to wait before sending it, live here
+    /// and not in the body, because the body is the message's own payload.
+    public Effect about(String name, Json value) {
+        return new Effect(body, envelope.with(name, value));
+    }
+
+    public Effect about(String name, String value) {
+        return new Effect(body, envelope.with(name, value));
+    }
+
+    public Effect about(String name, double value) {
+        return new Effect(body, envelope.with(name, value));
     }
 
     public Effect with(String name, Json value) {
