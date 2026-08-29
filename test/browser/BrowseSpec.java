@@ -1,6 +1,7 @@
 package browser;
 
 import harness.Check;
+import harness.Checkout;
 import java.io.IOException;
 import java.io.Writer;
 import java.net.URI;
@@ -35,7 +36,7 @@ public final class BrowseSpec {
 
     /// Where a person looks for the specs, and where the build copies them
     /// from.
-    public static final Path SPECS = Path.of("spec", "browse");
+    public static final Path SPECS = Checkout.at("spec", "browse");
 
     /// The specs, in the order they read: what the application is for, then
     /// how it is put together, then what it answers, then where its results
@@ -61,7 +62,7 @@ public final class BrowseSpec {
         var results = new ArrayList<Result>();
         var index = Files.createTempDirectory("tuul-browse-spec");
         index.toFile().deleteOnExit();
-        try (var symbols = Index.of(List.of(Path.of("src")), List.of(), index.resolve("index.db"));
+        try (var symbols = Index.of(List.of(Checkout.at("src")), List.of(), index.resolve("index.db"));
                 var browser = Browser.of(symbols, null);
                 var server = Http.start(browser.handler(), 0)) {
             var service = URI.create("http://localhost:" + server.port());

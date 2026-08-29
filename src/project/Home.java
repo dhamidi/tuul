@@ -10,13 +10,18 @@ import tuul.Version;
 
 /// Where the running tuul keeps its own parts.
 ///
-/// A tool that installs itself has to be able to find itself. There are two
-/// shapes it can be in: a source checkout, where the classes are in
-/// `build/classes` with `src/` and `native/` beside them, and an installed
-/// artifact, where the jar sits in a directory with its sources jar and its C
-/// next to it. Both answer the same three questions, which is all [Install]
-/// asks.
-public record Home(Path classes, Path sources, Path natives) {
+/// A tool that installs itself must find itself first. This finds it in either
+/// shape it comes in. A source checkout keeps the classes under `build/` and
+/// `src/` and `native/` at the root. An installed artifact is a jar with its
+/// sources jar and its C beside it. Both answer the same questions, which is
+/// all [Install] asks.
+///
+/// `root` is the directory that holds the parts. For a checkout it is the top
+/// of the checkout. For an artifact it is the directory the jar sits in.
+///
+/// [#find()] locates the running tuul. [#at(Path)] describes a tuul somewhere
+/// else. [#missing()] reports a part that is not there.
+public record Home(Path root, Path classes, Path sources, Path natives) {
 
     /// The directory prebuilt libraries live under, inside a jar and beside
     /// one.
@@ -32,14 +37,34 @@ public record Home(Path classes, Path sources, Path natives) {
     /// file is an artifact.
     public static Home at(Path located) {
         if (Files.isDirectory(located)) return checkout(located);
-        return new Home(located, located.resolveSibling(Version.artifact() + "-sources.jar"),
+        return new Home(located.getParent(), located,
+                located.resolveSibling(Version.artifact() + "-sources.jar"),
                 located.getParent().resolve(NATIVE));
     }
 
-    /// A checkout: `build/classes` has `src/` and `native/` two levels up.
+    /// A checkout, found from a directory of classes inside it.
     private static Home checkout(Path classes) {
-        var root = classes.getParent().getParent();
-        return new Home(classes, root.resolve("src"), root.resolve(NATIVE));
+        var root = rootOf(classes);
+        return new Home(root, classes, root.resolve("src"), root.resolve(NATIVE));
+    }
+
+    /// The checkout that holds these classes.
+    ///
+    /// This reads the directories above the classes and answers the first one
+    /// that holds both `src/` and `native/`. It does not count levels, because
+    /// the number of them depends on where the compiler was told to write.
+    /// `mise run build` writes `build/classes` and makes it two. An agent that
+    /// compiles into `build/mine/classes` to leave a running server alone makes
+    /// it three, and `tuul install` must still work there.
+    ///
+    /// When no directory above holds both, this answers two levels up. That is
+    /// where the classes of a checkout normally sit, so [#missing()] then names
+    /// the path a reader expects to see.
+    private static Path rootOf(Path classes) {
+        for (var above = classes.getParent(); above != null; above = above.getParent()) {
+            if (Files.isDirectory(above.resolve("src")) && Files.isDirectory(above.resolve(NATIVE))) return above;
+        }
+        return classes.getParent().getParent();
     }
 
     /// Whether the parts are actually there. An install that would write half an
@@ -98,7 +123,7 @@ public record Home(Path classes, Path sources, Path natives) {
     /// Where a checkout keeps what it cross-built: derived output, under
     /// `build/` with everything else that can be deleted.
     public Path distribution() {
-        return classes.resolveSibling("dist").resolve(NATIVE);
+        return root.resolve("build").resolve("dist").resolve(NATIVE);
     }
 
     private static Path location() throws IOException {

@@ -6,6 +6,7 @@ import application.Message;
 import application.Step;
 import actors.transport.Loopback;
 import harness.Check;
+import harness.Checkout;
 import java.io.IOException;
 import java.nio.file.Files;
 import java.nio.file.Path;
@@ -330,7 +331,7 @@ public final class ActorsTest {
     /// [Flight] is meant to be the only file that names `jdk.jfr`, so that an
     /// image built without that module still loads the rest of the package.
     private static boolean onlyFlightUsesJfr() throws IOException {
-        try (var sources = Files.list(Path.of("src/actors"))) {
+        try (var sources = Files.list(Checkout.at("src", "actors"))) {
             return sources.filter(path -> path.toString().endsWith(".java"))
                     .filter(path -> !path.getFileName().toString().equals("Flight.java"))
                     .noneMatch(ActorsTest::mentionsJfr);
