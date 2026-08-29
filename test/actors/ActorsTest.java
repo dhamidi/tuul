@@ -727,34 +727,22 @@ public final class ActorsTest {
     }
 
     /// An effect that does not say what it sends is a mistake, and it says so.
-    private static void refusesToSendNothing() throws Exception {
-        var errors = new CopyOnWriteArrayList<Message>();
-        Definition<Long> mute = new Definition<>() {
-
-            @Override
-            public String type() {
-                return "mute";
-            }
-
-            @Override
-            public Application<Long> instantiate(Address self) {
-                return Application.of(0L)
-                        .on("go", (state, message) -> Step.of(state, Effect.of(ActorSystem.REPLY)))
-                        .on("error", (state, message) -> {
-                            errors.add(message);
-                            return Step.of(state);
-                        });
-            }
-        };
-
-        try (var system = ActorSystem.named("test").define(mute, Spawn.ephemeral())) {
-            system.tell(mute.at("1"), Message.of("go"));
-            settle();
-            Check.equal("an effect that sends nothing is refused rather than delivering a typeless message",
-                    1, errors.size());
-            Check.that("and the refusal says how to build one properly",
-                    errors.isEmpty() || errors.getFirst().string("reason", "").contains("Effect.sending"));
+    ///
+    /// The old shape could not refuse this. A message was nested in the
+    /// effect's payload, so an effect carrying nothing read back as a message
+    /// with no type — dispatched by nobody, explaining nothing. Now there is
+    /// nothing to carry and the absence is visible.
+    private static void refusesToSendNothing() {
+        var refused = "";
+        try {
+            Effect.sent(Effect.of(ActorSystem.REPLY));
+        } catch (IllegalStateException expected) {
+            refused = expected.getMessage();
         }
+        Check.that("an effect that sends nothing is refused rather than read as a typeless message",
+                !refused.isEmpty());
+        Check.that("and the refusal names the effect and says how to build one",
+                refused.contains(ActorSystem.REPLY) && refused.contains("Effect.sending"));
     }
 
     /// Routing is an envelope field, so a payload may have a field called `to`
@@ -762,43 +750,29 @@ public final class ActorsTest {
     ///
     /// While routing lived in the effect's body it shared a namespace with the
     /// message's payload — the collision the envelope exists to end, one level
-    /// up from where it was found the first time. The payload here says `to`
-    /// and means a customer; the envelope says which actor the message goes to.
-    /// Nothing about an actor address is postal, and the point is that the two
-    /// words never meet.
-    private static void routingDoesNotTouchThePayload() throws Exception {
-        var delivered = new CopyOnWriteArrayList<String>();
-        var seen = new CopyOnWriteArrayList<Message>();
-        Definition<Long> ledger = new Definition<>() {
+    /// up from where it was found the first time. Here the payload says `to`
+    /// and means a customer, and the envelope says which actor the message goes
+    /// to. Nothing about an actor address is postal; the point is that the two
+    /// uses of the word never meet.
+    ///
+    /// This asks the effect rather than a running system, because the property
+    /// is a property of the effect: where a message goes is in one object and
+    /// what it says is in another. Delivering it to find that out would make a
+    /// timing question out of an arithmetic one.
+    private static void routingDoesNotTouchThePayload() {
+        var effect = Effect.sending(ActorSystem.TELL, Message.of("parcel").with("to", "Ada Lovelace"))
+                .about(ActorSystem.TO, Address.of("post", "2").json());
 
-            @Override
-            public String type() {
-                return "post";
-            }
+        Check.equal("where it goes is in the envelope",
+                Address.of("post", "2"), Address.from(effect.envelope().get(ActorSystem.TO)));
+        Check.equal("what it says is in the body, including a field called `to`",
+                "Ada Lovelace", effect.string("to", ""));
 
-            @Override
-            public Application<Long> instantiate(Address self) {
-                return Application.of(0L)
-                        .on("send", (state, message) -> Step.of(state,
-                                Effect.sending(ActorSystem.TELL,
-                                                Message.of("parcel").with("to", "Ada Lovelace"))
-                                        .about(ActorSystem.TO, Address.of("post", "2").json())))
-                        .on("parcel", (state, message) -> {
-                            delivered.add(self.toString());
-                            seen.add(message);
-                            return Step.of(state);
-                        });
-            }
-        };
-
-        try (var system = ActorSystem.named("test").define(ledger, Spawn.ephemeral())) {
-            system.tell(ledger.at("1"), Message.of("send"));
-            settle();
-            Check.equal("exactly one parcel arrived", 1, seen.size());
-            Check.equal("at the actor the envelope named", List.of("post/2"), List.copyOf(delivered));
-            Check.equal("and the payload's own `to` arrived untouched",
-                    "Ada Lovelace", seen.isEmpty() ? "" : seen.getFirst().string("to", ""));
-        }
+        var message = Effect.sent(effect);
+        Check.equal("the message that comes out keeps its own type", "parcel", message.type());
+        Check.equal("and its own `to`, which was never routing", "Ada Lovelace", message.string("to", ""));
+        Check.that("and carries no routing field of the effect's",
+                message.envelope().get(ActorSystem.TO) == null);
     }
 
     /// A log keeps the type, the stamp and the payload, and drops the rest of
