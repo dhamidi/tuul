@@ -18,14 +18,18 @@ import java.util.Optional;
 /// and writes one JSON value. Only the transport knows where one document stops
 /// and the next one starts.
 ///
-/// Two rules make the whole package work, and an implementation must keep both:
+/// Three rules make the whole package work, and an implementation must keep
+/// them:
 ///
 /// 1. [#receive()] answers with nothing when no more documents will arrive. A
-///    serving loop learns from this that it is finished.
+///    [Conn#listen] loop learns from this that it is finished.
 /// 2. [#send()] sends nothing when the caller writes nothing to the writer
 ///    before the caller closes it. Send the frame on the first character, not
-///    on the call. A batch of notifications produces no document at all. This
-///    rule is what keeps that true on every transport.
+///    on the call. A batch of notifications produces no document at all.
+/// 3. [#receive] may run on one thread while [#send] runs on another. Two
+///    calls to [#send] never overlap: [Conn] writes under a lock. Two calls to
+///    [#receive] never overlap. A transport that cannot be duplex cannot carry
+///    a [Conn].
 public interface Transport extends Closeable {
 
     /// The next document that arrived, or nothing when the transport is

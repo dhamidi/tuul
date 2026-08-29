@@ -2,7 +2,7 @@ package jsonrpc2;
 
 import json.Json;
 
-/// A method is one operation that a [Server] can perform.
+/// A method is one operation that a [Server] or a [Conn] can perform.
 ///
 /// Arguments arrive as the caller wrote them: an array for positional
 /// arguments, an object for named ones, and [json.Json#NULL] when the call

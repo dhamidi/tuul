@@ -4,18 +4,22 @@ import harness.Check;
 import java.io.IOException;
 import java.io.StringReader;
 import java.io.StringWriter;
+import java.time.Duration;
 import java.util.ArrayList;
 import java.util.List;
+import java.util.concurrent.CopyOnWriteArrayList;
 import java.util.concurrent.CountDownLatch;
 import java.util.concurrent.TimeUnit;
+import java.util.concurrent.TimeoutException;
 import json.Json;
 import jsonrpc2.transport.Memory;
+import jsonrpc2.transport.Pipe;
 
 public final class Jsonrpc2Test {
 
     private Jsonrpc2Test() {}
 
-    public static void run() throws IOException {
+    public static void run() throws Exception {
         calls();
         identity();
         reserved();
@@ -24,6 +28,7 @@ public final class Jsonrpc2Test {
         concurrency();
         correlation();
         transport();
+        session();
     }
 
     private static void calls() throws IOException {
@@ -164,57 +169,165 @@ public final class Jsonrpc2Test {
     private static void correlation() throws IOException {
         var transport = Memory.of("[{\"jsonrpc\":\"2.0\",\"result\":\"second\",\"id\":2},"
                 + "{\"jsonrpc\":\"2.0\",\"result\":\"first\",\"id\":1}]");
-        var client = Client.of(transport);
-        var answers = client.batch(List.<Call>of(
-                Call.of(Id.of(1), "first", Json.NULL),
-                Call.of(Id.of(2), "second", Json.NULL),
-                Call.of("told", Json.NULL)));
-        Check.equal("a batch is written as one array",
-                "[{\"jsonrpc\":\"2.0\",\"method\":\"first\",\"id\":1},"
-                        + "{\"jsonrpc\":\"2.0\",\"method\":\"second\",\"id\":2},"
-                        + "{\"jsonrpc\":\"2.0\",\"method\":\"told\"}]",
-                transport.sent().getFirst());
-        Check.equal("a notification asks for no answer", 2, answers.size());
-        Check.equal("an answer out of order still belongs to the call that asked",
-                new Response.Result(Id.of(1), Json.of("first")), answers.get(0));
-        Check.equal("the second call gets the answer that carries its id",
-                new Response.Result(Id.of(2), Json.of("second")), answers.get(1));
+        try (var client = Conn.of(transport)) {
+            var answers = client.batch(List.<Call>of(
+                    Call.of(Id.of(1), "first", Json.NULL),
+                    Call.of(Id.of(2), "second", Json.NULL),
+                    Call.of("told", Json.NULL)));
+            Check.equal("a batch is written as one array",
+                    "[{\"jsonrpc\":\"2.0\",\"method\":\"first\",\"id\":1},"
+                            + "{\"jsonrpc\":\"2.0\",\"method\":\"second\",\"id\":2},"
+                            + "{\"jsonrpc\":\"2.0\",\"method\":\"told\"}]",
+                    transport.sent().getFirst());
+            Check.equal("a notification asks for no answer", 2, answers.size());
+            Check.equal("an answer out of order still belongs to the call that asked",
+                    new Response.Result(Id.of(1), Json.of("first")), answers.get(0));
+            Check.equal("the second call gets the answer that carries its id",
+                    new Response.Result(Id.of(2), Json.of("second")), answers.get(1));
+        }
 
         var thin = Memory.of("[{\"jsonrpc\":\"2.0\",\"result\":1,\"id\":1}]");
-        var missing = Client.of(thin).batch(List.<Call>of(
-                Call.of(Id.of(1), "here", Json.NULL),
-                Call.of(Id.of(2), "gone", Json.NULL)));
-        Check.equal("a call the server never answered is reported against its own id",
-                new Response.Failed(Id.of(2),
-                        Failure.internalError("the server left this call unanswered")),
-                missing.get(1));
+        try (var client = Conn.of(thin)) {
+            var missing = client.batch(List.<Call>of(
+                    Call.of(Id.of(1), "here", Json.NULL),
+                    Call.of(Id.of(2), "gone", Json.NULL)));
+            Check.equal("a call the server never answered is reported against its own id",
+                    new Response.Failed(Id.of(2),
+                            Failure.internalError("the transport carried no answer")),
+                    missing.get(1));
+        }
     }
 
-    private static void transport() throws IOException {
-        var server = server();
-        var transport = Memory.of(server);
-        try (var client = Client.of(transport)) {
+    private static void transport() throws Exception {
+        var methods = server();
+        peers(methods, (client, _) -> {
             Check.equal("a call travels over a transport and comes back",
                     Json.of(19), client.call("subtract", Json.Array.of(List.of(Json.of(42), Json.of(23)))));
-            Check.equal("the call went out as one document", 1, transport.sent().size());
-
             var before = updates.size();
             client.notify("update", Json.Array.of(List.of(Json.of(1))));
-            Check.equal("a notification runs on the server", before + 1, updates.size());
-            Check.that("a notification brings nothing back", transport.receive().isEmpty());
-
+            Check.that("a notification runs on the server", waited(() -> updates.size() == before + 1));
             Check.throwing("a failure on the server becomes a rejection here",
                     () -> quietly(() -> client.call("boom")));
-        }
+        });
 
         var serving = Memory.of("{\"jsonrpc\":\"2.0\",\"method\":\"ping\",\"id\":1}",
                 "{\"jsonrpc\":\"2.0\",\"method\":\"update\",\"params\":[1]}",
                 "{\"jsonrpc\":\"2.0\",\"method\":\"ping\",\"id\":2}");
-        server.serve(serving);
-        Check.equal("serving answers every document that asks for an answer",
+        try (var conn = Conn.of(serving).answering(server())) {
+            conn.listen();
+        }
+        Check.equal("listening answers every document that asks for an answer",
                 List.of("{\"jsonrpc\":\"2.0\",\"result\":\"pong\",\"id\":1}",
                         "{\"jsonrpc\":\"2.0\",\"result\":\"pong\",\"id\":2}"),
                 serving.sent());
+    }
+
+    private static void session() throws Exception {
+        peers(Server.of().method("ping", _ -> Json.of("pong")), (client, _) -> {
+            var first = client.request("ping", Json.NULL);
+            var second = client.request("ping", Json.NULL);
+            Check.equal("two calls in flight both return", Json.of("pong"), first.get());
+            Check.equal("the second in-flight call returns too", Json.of("pong"), second.get());
+        });
+
+        var progress = new CopyOnWriteArrayList<Json>();
+        var seen = new CountDownLatch(2);
+        peers(Server.of().method("work", (params, conn) -> {
+            conn.notify("progress", Json.Object.of().with("n", 1));
+            conn.notify("progress", Json.Object.of().with("n", 2));
+            return Json.of("done");
+        }), (client, _) -> {
+            client.method("progress", params -> {
+                progress.add(params);
+                seen.countDown();
+                return Json.NULL;
+            });
+            Check.equal("a method may notify before it returns", Json.of("done"), client.call("work"));
+            Check.that("both progress notifications arrived", seen.await(5, TimeUnit.SECONDS));
+            Check.that("both progress values arrived",
+                    progress.contains(Json.Object.of().with("n", 1))
+                            && progress.contains(Json.Object.of().with("n", 2)));
+        });
+
+        peers(Server.of().method("work", (params, conn) -> conn.call("roots", Json.NULL)), (client, _) -> {
+            client.method("roots", _ -> Json.of("here"));
+            Check.equal("a method may call back without deadlocking", Json.of("here"), client.call("work"));
+            var answers = client.batch(List.of(
+                    Call.of(client.next(), "work", Json.NULL),
+                    Call.of(client.next(), "work", Json.NULL)));
+            Check.equal("a reverse call from a batch member does not deadlock",
+                    Json.of("here"), ((Response.Result) answers.getFirst()).value());
+            Check.equal("the other batch member called back too",
+                    Json.of("here"), ((Response.Result) answers.get(1)).value());
+        });
+
+        var logs = new CountDownLatch(20);
+        var ticks = new CountDownLatch(20);
+        peers(Server.of()
+                .method("log", params -> {
+                    logs.countDown();
+                    return Json.NULL;
+                })
+                .method("work", (params, conn) -> {
+                    for (var i = 0; i < 20; i++) conn.notify("progress", Json.Object.of().with("n", i));
+                    return conn.call("roots", Json.NULL);
+                }), (client, _) -> {
+            client.method("progress", params -> {
+                ticks.countDown();
+                return Json.NULL;
+            });
+            client.method("roots", _ -> Json.of("here"));
+            var flooding = Thread.startVirtualThread(() -> {
+                try {
+                    for (var i = 0; i < 20; i++) client.notify("log", Json.Object.of().with("n", i));
+                } catch (IOException e) {
+                    throw new IllegalStateException(e);
+                }
+            });
+            Check.equal("a notify storm both ways still returns the reverse call",
+                    Json.of("here"), client.call("work"));
+            flooding.join();
+            Check.that("client log notifies arrived", logs.await(5, TimeUnit.SECONDS));
+            Check.that("server progress notifies arrived", ticks.await(5, TimeUnit.SECONDS));
+        });
+
+        peers(Server.of().method("slow", params -> {
+            Thread.sleep(400);
+            return Json.of("late");
+        }), (client, _) -> {
+            try {
+                client.call("slow", Json.NULL, Duration.ofMillis(20));
+                Check.that("a slow call timed out", false);
+            } catch (TimeoutException e) {
+                Check.that("a slow call timed out", true);
+            }
+            Thread.sleep(500);
+            Check.that("the late answer was fenced", client.fenced() >= 1);
+        });
+    }
+
+    @FunctionalInterface
+    private interface Peers {
+        void run(Conn client, Conn server) throws Exception;
+    }
+
+    private static void peers(Server methods, Peers body) throws Exception {
+        var pipe = Pipe.open();
+        try (var remote = Conn.of(pipe.right()).answering(methods);
+                var local = Conn.of(pipe.left())) {
+            var serving = Thread.startVirtualThread(() -> {
+                try {
+                    remote.listen();
+                } catch (IOException ignored) {
+                }
+            });
+            try {
+                body.run(local, remote);
+            } finally {
+                local.close();
+                serving.join();
+            }
+        }
     }
 
     private static final List<Json> updates = new ArrayList<>();
@@ -291,6 +404,20 @@ public final class Jsonrpc2Test {
 
     private static List<Json> members(String document) {
         return ((Json.Array) Json.parse(document)).items();
+    }
+
+    private static boolean waited(Probe probe) throws Exception {
+        var deadline = System.nanoTime() + TimeUnit.SECONDS.toNanos(5);
+        while (System.nanoTime() < deadline) {
+            if (probe.ready()) return true;
+            Thread.sleep(10);
+        }
+        return false;
+    }
+
+    @FunctionalInterface
+    private interface Probe {
+        boolean ready();
     }
 
     private static void quietly(Body body) {

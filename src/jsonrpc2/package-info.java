@@ -1,17 +1,18 @@
 /// An implementation of JSON-RPC 2.0, the remote call protocol specified at
 /// <https://www.jsonrpc.org/specification>.
 ///
-/// A client sends a call that names a method. A server runs that method and
+/// A caller sends a call that names a method. The peer runs that method and
 /// sends back a response holding either a result or an error. This package
 /// implements that exchange and stops there. It never opens a socket and it
-/// never decides where one message ends and the next begins. A [Transport]
+/// never decides where one message ends and the next one starts. A [Transport]
 /// does both, and you either write one or take one from
 /// `jsonrpc2.transport`.
 ///
-/// ## A first server
+/// ## One document
 ///
 /// A [Server] holds named methods. A [Method] takes the arguments as JSON and
-/// returns JSON.
+/// returns JSON. [Server#handle(java.io.Reader, java.io.Writer)] reads one
+/// document and writes the answer. That is one HTTP body, or one test.
 ///
 /// ```
 /// var server = Server.of()
@@ -20,6 +21,7 @@
 ///             case Json.Null _ -> Json.of("hello, world");
 ///             default -> throw Rejection.of(Failure.invalidParams("expected an object"));
 ///         });
+/// server.handle(in, out);
 /// ```
 ///
 /// Nothing binds arguments to parameters for you. The `params` value arrives
@@ -34,28 +36,45 @@
 /// caller's mistake, and the code for that is -32602. Pattern matching is what
 /// lets you answer with the right one.
 ///
-/// ## Calling it
+/// ## A live connection
 ///
-/// [jsonrpc2.transport.Memory] joins a client to a server inside one process.
-/// The tests use it, and it is the quickest way to try a server without a
-/// network.
+/// A [Conn] is both ends of the protocol on one transport. It sends calls, it
+/// answers calls, and it matches each response to the call that asked for it.
+/// There is no separate client type.
+///
+/// [jsonrpc2.transport.Pipe] joins two connections inside one process. The
+/// tests use it. A test that binds a real port can fail because the port was
+/// busy.
 ///
 /// ```
-/// try (var client = Client.of(Memory.of(server))) {
+/// var pipe = jsonrpc2.transport.Pipe.open();
+/// try (var remote = Conn.of(pipe.right()).answering(server);
+///         var client = Conn.of(pipe.left())) {
+///     Thread.startVirtualThread(() -> {
+///         try { remote.listen(); } catch (java.io.IOException ignored) {}
+///     });
 ///     var greeting = client.call("greet", Json.Object.of().with("name", "ada"));
 ///     client.notify("log", Json.of("greeted ada"));
 /// }
 /// ```
 ///
-/// [Client#call(String, json.Json)] waits for the answer and returns the
-/// result. When the server answers with an error instead, `call` throws a
+/// [Conn#call(String, json.Json)] waits for the answer and returns the
+/// result. When the peer answers with an error instead, `call` throws a
 /// [Rejection] holding that [Failure], so the code you chose on the server
 /// arrives at the caller as `rejection.failure().code()`.
 ///
-/// [Client#notify(String, json.Json)] sends a call with no id. A server must
+/// [Conn#notify(String, json.Json)] sends a call with no id. A peer must
 /// never answer a notification, so `notify` returns nothing and there is
 /// nothing to wait for. A notification that fails fails silently, which is the
-/// price of not waiting.
+/// price of not waiting. A notify the peer did not register a method for is
+/// also silent. Register the method on the receiving [Conn] if you need to
+/// see it.
+///
+/// The receive loop never runs a method. It forks a virtual thread for every
+/// inbound call. A [Handler] may therefore [Conn#call(String, json.Json)] or
+/// [Conn#notify(String, json.Json)] before it returns, and it will not
+/// deadlock. Handlers run at the same time. A method that needs order takes
+/// its own lock.
 ///
 /// ## Reporting an error
 ///
@@ -90,8 +109,8 @@
 ///
 /// ## Batches
 ///
-/// A client can send several calls in one document. The answers come back in
-/// the order the calls were made, whatever order the server wrote them in.
+/// A caller can send several calls in one document. The answers come back in
+/// the order the calls were made, whatever order the peer wrote them in.
 ///
 /// ```
 /// var answers = client.batch(List.of(
@@ -101,16 +120,18 @@
 /// ```
 ///
 /// That returns two responses. Notifications are not answered, so they take no
-/// place in the list. The server runs the members of a batch at the same time,
-/// one virtual thread for each, and the batch is finished only when every
-/// member is.
+/// place in the list. The members of a batch run at the same time, one virtual
+/// thread for each, and the batch is finished only when every member is.
 ///
 /// ## The types in this package
 ///
-///   - [Server] and [Client] are the two ends. Most code needs only these.
-///   - [Method] is what you write to add behaviour to a server.
-///     [Rejection] is how a method picks its own error code.
-///   - [Call], [Response], [Id] and [Failure] are the messages. [Call] is
+///   - [Conn] is the live session. [Server] is the method table and the
+///     one-document fold. Most code needs only these.
+///   - [Method] is what you write when the method only returns a value.
+///     [Handler] is what you write when the method must talk on the [Conn]
+///     before it returns. [Rejection] is how either picks its own error code.
+///   - [Call], [Response], [Id] and [Failure] are the messages. [Incoming]
+///     classifies one member as a call, a response, or neither. [Call] is
 ///     either a `Request` or a `Notification`. [Response] is either a `Result`
 ///     or a `Failed`. Neither can be both.
 ///   - [Transport] is what you supply to reach the outside world.
@@ -123,28 +144,28 @@
 /// each one has caught somebody out:
 ///
 ///   - A notification is never answered, even when it fails. Send a
-///     notification naming a method that does not exist and the server stays
+///     notification naming a method that does not exist and the peer stays
 ///     silent.
 ///   - A batch of nothing but notifications produces no document at all. The
-///     server does not answer with an empty array. It answers with nothing,
+///     peer does not answer with an empty array. It answers with nothing,
 ///     and the transport sends nothing.
 ///   - An empty batch, the document `[]`, is an invalid request. The answer to
 ///     it is a single object rather than an array of one.
 ///   - Ids carry their type. The id `"1"` and the id `1` are different ids,
-///     and [Id] keeps text, number and absent apart so that a client cannot
+///     and [Id] keeps text, number and absent apart so that a caller cannot
 ///     confuse two calls.
 ///   - A number id survives the round trip as a whole number while it stays
 ///     below 1e15. Above that, [json.JsonWriter] writes the double form.
+///   - A timeout on [Conn#call(String, json.Json, java.time.Duration)] is
+///     local. It is not a JSON-RPC error. A late answer increments
+///     [Conn#fenced] and is dropped.
+///   - A tight [Conn#notify(String, json.Json)] loop delays every other
+///     document in that direction, including a result. Yield.
 ///
 /// ## Writing a transport
 ///
 /// A real transport is a socket, a pipe, a `Content-Length` header, or an HTTP
-/// body. Implement [Transport] and keep its two rules. The first rule says
-/// that [Transport#receive()] answers with nothing once no more documents will
-/// arrive, which is how a serving loop learns that it is finished. The second
-/// rule says that a writer closed without a single character written must send
-/// nothing at all, which is what keeps the silent batch above silent.
-///
-/// Read [jsonrpc2.transport.Memory] first. It is under a hundred lines and it
-/// keeps both rules.
+/// body. Implement [Transport] and keep its three rules. Read
+/// [jsonrpc2.transport.Pipe] first. It is under a hundred lines and it keeps
+/// them.
 package jsonrpc2;

@@ -13,13 +13,12 @@ import json.JsonWriter;
 ///
 /// The package has two layers and this file is the lower one. A document is
 /// one JSON value that arrives or leaves as a unit. It holds one call, one
-/// response, or an array of either. [Server] and [Client] sit above and decide
-/// what the members mean.
+/// response, or an array of either. [Incoming] classifies a member. [Server]
+/// and [Conn] sit above and decide what to do with it.
 ///
 /// Batches are why this layer exists. Every member of a batch has to be read
-/// before any member runs, and every answer goes into one array. The server
-/// and the client both need that, so it lives here instead of in either of
-/// them.
+/// before any member runs, and every answer goes into one array. [Server] and
+/// [Conn] both need that, so it lives here instead of in either of them.
 public final class Jsonrpc2 {
 
     /// What every call and every response declares. A call or a response that
