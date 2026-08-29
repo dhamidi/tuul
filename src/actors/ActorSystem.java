@@ -7,12 +7,13 @@ import java.nio.file.Path;
 import java.time.Duration;
 import java.time.Instant;
 import java.util.ArrayList;
-import java.util.LinkedHashMap;
 import java.util.List;
 import java.util.Map;
 import java.util.concurrent.CompletableFuture;
 import java.util.concurrent.ConcurrentHashMap;
+import java.util.concurrent.ExecutorService;
 import java.util.concurrent.Executors;
+import java.util.concurrent.Future;
 import java.util.concurrent.ScheduledExecutorService;
 import java.util.concurrent.TimeUnit;
 import java.util.concurrent.atomic.AtomicLong;
@@ -39,21 +40,17 @@ import json.Json;
 ///
 /// ## Effects are how an actor reaches anything
 ///
-/// A definition never holds a reference to a system. It asks for an effect, and
-/// the system installs the handlers for those effects on every application it
-/// builds:
+/// A definition never holds a reference to a system. It creates an
+/// [ActorEffect], and the system runs that effect directly:
 ///
 ///   - `actor.tell` sends a message to an address.
 ///   - `actor.reply` answers whoever is waiting on the message being handled.
 ///     It carries no address, because the system already knows.
-///   - `actor.ask` sends a message and names this actor as the reply address,
-///     which is how a durable conversation is started.
 ///   - `actor.spawn`, `actor.evict` and `actor.schedule` do what they say.
 ///
-/// Two things follow. A definition can be tested with no system at all, by
-/// swapping the handler for one that records. And an address in another system
-/// is not a new concept — it is the same effect with a system name in the
-/// address, and [Transport] carries it.
+/// External effect handlers run on system-owned virtual threads. An address in
+/// another system uses the same actor effect. [Transport] carries that effect's
+/// delivery.
 ///
 /// ## Ownership, passivation and watching
 ///
@@ -87,7 +84,6 @@ public final class ActorSystem implements AutoCloseable {
     /// Effect types the system handles for every actor.
     static final String TELL = "actor.tell";
     static final String REPLY = "actor.reply";
-    static final String ASK = "actor.ask";
     static final String SPAWN = "actor.spawn";
     static final String EVICT = "actor.evict";
     static final String SCHEDULE = "actor.schedule";
@@ -95,19 +91,21 @@ public final class ActorSystem implements AutoCloseable {
     private static final Duration PATIENCE = Duration.ofSeconds(5);
 
     private final String name;
+    private final Object lifecycle = new Object();
     private final Map<String, Definition<?>> definitions = new ConcurrentHashMap<>();
     private final Map<String, Spawn> defaults = new ConcurrentHashMap<>();
     private final Map<Address, Spawn> overrides = new ConcurrentHashMap<>();
     private final Map<Address, Actor> loaded = new ConcurrentHashMap<>();
     private final Map<Address, Ownership.Claim> claims = new ConcurrentHashMap<>();
     private final Map<Address, CompletableFuture<Message>> asks = new ConcurrentHashMap<>();
-    private final Map<String, Effect.Handler> shared = new LinkedHashMap<>();
+    private final Map<String, Effect.Handler> shared = new ConcurrentHashMap<>();
     private final Registry registry = new Registry();
     private final Traces traces = new Traces();
     private final AtomicLong dropped = new AtomicLong();
     private final AtomicLong asked = new AtomicLong();
     private final ScheduledExecutorService timers =
             Executors.newScheduledThreadPool(0, Thread.ofVirtual().factory());
+    private final ExecutorService effects = Executors.newVirtualThreadPerTaskExecutor();
     private Logs logs = Logs.none();
     private Ownership ownership = Ownership.shared();
     private Transport transport;
@@ -264,15 +262,17 @@ public final class ActorSystem implements AutoCloseable {
 
     // ---- sending ---------------------------------------------------------
 
-    /// Sends a message and does not wait.
-    public void tell(Address to, Message message) {
-        deliver(Delivery.of(to, message));
+    /// Sends a message without waiting for local mailbox room or processing.
+    /// Returns the delivery status. A foreign call returns after the transport
+    /// accepts or refuses the delivery.
+    public DeliveryStatus tell(Address to, Message message) {
+        return deliver(Delivery.of(to, message));
     }
 
     /// Sends a message from one actor to another, so that a failure can be
     /// reported back to the sender.
-    public void tell(Address to, Message message, Address from) {
-        deliver(Delivery.of(to, message).from(from));
+    public DeliveryStatus tell(Address to, Message message, Address from) {
+        return deliver(Delivery.of(to, message).from(from));
     }
 
     /// Sends a message and waits for one answer.
@@ -291,24 +291,37 @@ public final class ActorSystem implements AutoCloseable {
     /// [Definition#inspect(Object)] says why: the state type must not leave the
     /// system.
     ///
-    /// The reply address is an ordinary address in this system, and it is the
-    /// correlation: no table of outstanding requests, no sequence numbers, and
-    /// an ask works across a [Transport] because the answer routes back the
-    /// same way any message does.
+    /// The reply address contains this system's name and a sequence number. A
+    /// pending table maps that address to one future. A transport routes the
+    /// qualified address back to this system.
     ///
     /// Every ask has a deadline. There is no version of this that waits
     /// forever, because an ask that is never answered would otherwise leave a
-    /// reply address behind for as long as the system runs.
+    /// reply address behind for as long as the system runs. A closed system
+    /// returns a future that contains an `IllegalStateException`.
     public CompletableFuture<Message> ask(Address to, Message message, Duration deadline) {
-        var reply = Address.of("actors.ask", java.lang.Long.toString(asked.incrementAndGet()));
+        if (deadline.isZero() || deadline.isNegative()) {
+            throw new IllegalArgumentException("an ask deadline must be positive: " + deadline);
+        }
+        if (closed) return CompletableFuture.failedFuture(
+                new IllegalStateException("the actor system " + name + " is closed"));
+        var reply = Address.of("actors.ask", name + "/" + asked.incrementAndGet());
         var answer = new CompletableFuture<Message>();
         asks.put(reply, answer);
-        var timeout = timers.schedule(() -> {
-            if (asks.remove(reply) != null) {
-                answer.completeExceptionally(new java.util.concurrent.TimeoutException(
-                        "no answer from " + to + " within " + deadline));
-            }
-        }, deadline.toMillis(), TimeUnit.MILLISECONDS);
+        java.util.concurrent.ScheduledFuture<?> timeout;
+        try {
+            timeout = timers.schedule(() -> {
+                if (asks.remove(reply) != null) {
+                    answer.completeExceptionally(new java.util.concurrent.TimeoutException(
+                            "no answer from " + to + " within " + deadline));
+                }
+            }, deadline.toMillis(), TimeUnit.MILLISECONDS);
+        } catch (java.util.concurrent.RejectedExecutionException closedDuringAsk) {
+            asks.remove(reply);
+            answer.completeExceptionally(new IllegalStateException(
+                    "the actor system " + name + " is closed", closedDuringAsk));
+            return answer;
+        }
         answer.whenComplete((ignored, failure) -> {
             asks.remove(reply);
             timeout.cancel(false);
@@ -323,42 +336,53 @@ public final class ActorSystem implements AutoCloseable {
 
     /// Routes one delivery.
     ///
-    /// The order of the tests is the design. A pending ask is checked first,
-    /// because a reply address is not an actor and never needs a definition. A
-    /// foreign address goes to the transport. Everything else is local, and a
-    /// local address with no definition fails at once rather than blocking,
-    /// because a misspelled type is a mistake and not congestion.
-    void deliver(Delivery delivery) {
+    /// The order of these tests is part of the routing contract. A foreign
+    /// address goes to the transport before local ask correlation runs. A local
+    /// reply address then completes one pending ask. Every other local address
+    /// enters an actor mailbox.
+    DeliveryStatus deliver(Delivery delivery) {
+        if (closed) return DeliveryStatus.closed;
         var to = delivery.to();
-        var waiting = asks.get(to.here());
-        if (waiting != null) {
-            waiting.complete(delivery.command());
-            return;
-        }
         if (to.foreign(name)) {
-            remote(delivery);
-            return;
+            return remote(delivery);
         }
         var here = to.here();
+        var waiting = asks.remove(here);
+        if (waiting != null) {
+            waiting.complete(delivery.command());
+            return DeliveryStatus.accepted;
+        }
         if (!definitions.containsKey(here.type())) {
             refuse(delivery, Undeliverable.Cause.unknown);
-            return;
+            return DeliveryStatus.unknown;
         }
         if (registry.quarantined(here)) {
             refuse(delivery, Undeliverable.Cause.quarantined);
-            return;
+            return DeliveryStatus.quarantined;
         }
+        Actor target;
         try {
-            var admission = summon(here).offer(delivery.to(here));
-            switch (admission) {
-                case accepted -> {}
-                case busy -> refuse(delivery, Undeliverable.Cause.busy);
-                case expired -> dropped.incrementAndGet();
-            }
-        } catch (InterruptedException e) {
-            Thread.currentThread().interrupt();
-            refuse(delivery, Undeliverable.Cause.busy);
+            target = summon(here);
+        } catch (IllegalStateException stopped) {
+            if (closed) return DeliveryStatus.closed;
+            throw stopped;
         }
+        if (delivery.from() != null && here.equals(delivery.from().here()) && target.ownsCurrentThread()) {
+            target.self(delivery.to(here));
+            return DeliveryStatus.accepted;
+        }
+        var admission = target.offer(delivery.to(here));
+        return switch (admission) {
+            case accepted -> DeliveryStatus.accepted;
+            case busy -> {
+                refuse(delivery, Undeliverable.Cause.busy);
+                yield DeliveryStatus.busy;
+            }
+            case expired -> {
+                dropped.incrementAndGet();
+                yield DeliveryStatus.expired;
+            }
+        };
     }
 
     /// Hands a delivery to the transport.
@@ -367,16 +391,18 @@ public final class ActorSystem implements AutoCloseable {
     /// was local while it stayed here, and the system on the other side has to
     /// be able to route an answer back, so the qualification happens at exactly
     /// the boundary that makes it necessary.
-    private void remote(Delivery delivery) {
+    private DeliveryStatus remote(Delivery delivery) {
         if (transport == null) {
             refuse(delivery, Undeliverable.Cause.unreachable);
-            return;
+            return DeliveryStatus.unreachable;
         }
         var replyTo = delivery.replyTo() == null ? null : delivery.replyTo().in(name);
         try {
             transport.deliver(delivery.to(), delivery.command(), replyTo);
+            return DeliveryStatus.accepted;
         } catch (Exception e) {
             refuse(delivery, Undeliverable.Cause.unreachable);
+            return DeliveryStatus.unreachable;
         }
     }
 
@@ -399,10 +425,16 @@ public final class ActorSystem implements AutoCloseable {
                 .with("cause", cause.name())
                 .with("type", delivery.command().type()));
         var notice = new Undeliverable(delivery.to(), cause, delivery.command()).notice();
-        var waiting = delivery.replyTo() == null ? null : asks.get(delivery.replyTo().here());
-        if (waiting != null) {
-            waiting.complete(notice);
-            return;
+        if (delivery.replyTo() != null) {
+            if (delivery.replyTo().foreign(name)) {
+                deliver(Delivery.of(delivery.replyTo(), notice));
+                return;
+            }
+            var waiting = asks.remove(delivery.replyTo().here());
+            if (waiting != null) {
+                waiting.complete(notice);
+                return;
+            }
         }
         if (delivery.from() == null || delivery.command().type().equals(Undeliverable.TYPE)) {
             dropped.incrementAndGet();
@@ -414,12 +446,12 @@ public final class ActorSystem implements AutoCloseable {
             dropped.incrementAndGet();
             return;
         }
-        try {
-            if (summon(target).offer(back) != Mailbox.Admission.accepted) dropped.incrementAndGet();
-        } catch (InterruptedException e) {
-            Thread.currentThread().interrupt();
-            dropped.incrementAndGet();
+        var sender = loaded.get(target);
+        if (sender != null && !sender.finished()) {
+            sender.self(back);
+            return;
         }
+        if (summon(target).offer(back) != Mailbox.Admission.accepted) dropped.incrementAndGet();
     }
 
     // ---- loading ---------------------------------------------------------
@@ -436,17 +468,22 @@ public final class ActorSystem implements AutoCloseable {
     /// An actor that keeps no log is not claimed, because there is no shared
     /// history for a second owner to corrupt.
     private Actor summon(Address address) {
-        passivating();
-        return loaded.compute(address, (at, existing) -> {
-            if (existing != null && !existing.finished()) return existing;
-            var definition = definitions.get(at.type());
-            var spawn = spawnFor(at);
-            var log = spawn.keepsLog() ? claim(at, spawn) : Log.none();
-            var actor = new Actor(this, at, definition, log, spawn);
-            install(actor);
-            actor.start();
-            return actor;
-        });
+        var active = loaded.get(address);
+        if (active != null && !active.finished()) return active;
+        synchronized (lifecycle) {
+            if (closed) throw new IllegalStateException("the actor system " + name + " is closed");
+            passivating();
+            return loaded.compute(address, (at, existing) -> {
+                if (existing != null && !existing.finished()) return existing;
+                var definition = definitions.get(at.type());
+                var spawn = spawnFor(at);
+                var log = spawn.keepsLog() ? claim(at, spawn) : Log.none();
+                var actor = new Actor(this, at, definition, log, spawn);
+                install(actor);
+                actor.start();
+                return actor;
+            });
+        }
     }
 
     /// Takes the claim on one actor and opens its log.
@@ -460,6 +497,7 @@ public final class ActorSystem implements AutoCloseable {
         try {
             var log = logs.open(address, spawn.durability());
             log.refresh();
+            log.redelivers(spawn.redelivers());
             claims.put(address, claim);
             return log;
         } catch (RuntimeException opening) {
@@ -528,32 +566,140 @@ public final class ActorSystem implements AutoCloseable {
         return defaults.getOrDefault(address.type(), Spawn.durable());
     }
 
-    /// Puts the shared handlers and the `actor.*` handlers on one actor's
-    /// application.
-    ///
-    /// The shared handlers go on first so that an actor's own definition can
-    /// replace one for a test, and the `actor.*` handlers go on afterwards so
-    /// that nothing can replace the routing.
+    /// Adds the external handlers to one actor application. The runtime runs
+    /// `actor.*` effects directly and does not register handlers for them.
     private void install(Actor actor) {
         var application = actor.application();
         shared.forEach(application::effect);
-        application.effect(TELL, (effect, emit) ->
-                deliver(Delivery.of(addressed(effect), effect.message()).from(actor.address())));
-        application.effect(ASK, (effect, emit) ->
-                deliver(Delivery.of(addressed(effect), effect.message())
-                        .from(actor.address())
-                        .replyTo(actor.address())));
-        application.effect(REPLY, (effect, emit) -> reply(actor, effect.message()));
-        application.effect(SPAWN, (effect, emit) -> {
-            var address = Address.from(effect.get("address"));
-            if (effect.get("durable") instanceof Json.Bool(var durable)) {
-                spawn(address, durable ? Spawn.durable() : Spawn.ephemeral());
+    }
+
+    /// Runs one actor step. Local runtime effects run inline in list order.
+    /// External handlers and foreign deliveries run on system-owned virtual
+    /// threads.
+    List<Message> perform(Actor actor, List<Effect> requested) {
+        if (requested.isEmpty()) return List.of();
+        var step = new EffectStep(actor.address());
+        var external = new ArrayList<PendingEffect>();
+        for (var effect : requested) {
+            if (external(actor, effect)) {
+                var future = effects.submit(() -> perform(actor, effect, step));
+                external.add(new PendingEffect(effect, future));
+                continue;
             }
-            summon(address.here());
-        });
-        application.effect(EVICT, (effect, emit) ->
-                evict(effect.get("address") == null ? actor.address() : Address.from(effect.get("address"))));
-        application.effect(SCHEDULE, (effect, emit) -> schedule(actor.address(), effect));
+            if (perform(actor, effect, step)) continue;
+            var future = effects.submit(() -> actor.application().perform(effect, step));
+            external.add(new PendingEffect(effect, future));
+        }
+        await(actor, external, step);
+        return step.close();
+    }
+
+    private boolean external(Actor actor, Effect effect) {
+        if (effect.type().equals(TELL)) {
+            try {
+                return addressed(effect).foreign(name);
+            } catch (RuntimeException malformed) {
+                return false;
+            }
+        }
+        if (!effect.type().equals(REPLY)) return false;
+        var current = actor.current();
+        return current != null && current.replyTo() != null && current.replyTo().foreign(name);
+    }
+
+    /// Returns true when the runtime handled the effect directly.
+    private boolean perform(Actor actor, Effect effect, EffectStep emit) {
+        try {
+            switch (effect.type()) {
+                case Effect.SEND -> emit.emit(effect.message());
+                case TELL -> tell(actor, effect, emit);
+                case REPLY -> reply(actor, effect.message());
+                case SPAWN -> spawn(effect);
+                case EVICT -> evict(effect.get("address") == null
+                        ? actor.address() : Address.from(effect.get("address")));
+                case SCHEDULE -> schedule(actor.address(), effect);
+                default -> { return false; }
+            }
+        } catch (Exception failure) {
+            var cause = failure.getCause() == null ? failure : failure.getCause();
+            var reason = cause.getMessage() == null ? cause.toString() : cause.getMessage();
+            emit.emit(Message.error(reason)
+                    .with("exception", cause.getClass().getName())
+                    .with("while", effect.type()));
+        }
+        return true;
+    }
+
+    private void tell(Actor actor, Effect effect, EffectStep emit) {
+        var to = addressed(effect);
+        if (!to.foreign(name) && to.here().equals(actor.address())) {
+            emit.emit(effect.message());
+            return;
+        }
+        deliver(Delivery.of(to, effect.message()).from(actor.address()));
+    }
+
+    private void spawn(Effect effect) {
+        var address = Address.from(effect.get("address"));
+        if (effect.get("durable") instanceof Json.Bool(var durable)) {
+            spawn(address, durable ? Spawn.durable() : Spawn.ephemeral());
+        }
+        summon(address.here());
+    }
+
+    private void await(Actor actor, List<PendingEffect> pending, EffectStep step) {
+        var limit = System.nanoTime() + actor.spawn().effects().toNanos();
+        for (var item : pending) {
+            try {
+                var remaining = limit - System.nanoTime();
+                if (remaining <= 0) throw new java.util.concurrent.TimeoutException();
+                item.future().get(remaining, TimeUnit.NANOSECONDS);
+            } catch (InterruptedException interrupted) {
+                Thread.currentThread().interrupt();
+                break;
+            } catch (java.util.concurrent.TimeoutException timeout) {
+                break;
+            } catch (java.util.concurrent.ExecutionException impossible) {
+                // Application.perform reports handler exceptions through the emitter.
+            }
+        }
+        for (var item : pending) {
+            if (item.future().isDone()) continue;
+            item.future().cancel(true);
+            step.emit(Message.of("error.timeout")
+                    .with("reason", "the effect did not finish within " + actor.spawn().effects())
+                    .with("while", item.effect().type()));
+            trace(actor.address(), Trace.Kind.abandoned,
+                    Json.Object.of().with("while", item.effect().type()));
+        }
+    }
+
+    private record PendingEffect(Effect effect, Future<?> future) {}
+
+    /// Collects external effect results until the actor step ends.
+    private final class EffectStep implements Effect.Emitter {
+        private final Address actor;
+        private final List<Message> emitted = new ArrayList<>();
+        private boolean open = true;
+
+        private EffectStep(Address actor) {
+            this.actor = actor;
+        }
+
+        @Override
+        public synchronized void emit(Message message) {
+            if (open) {
+                emitted.add(message);
+                return;
+            }
+            trace(actor, Trace.Kind.fenced,
+                    Json.Object.of().with("type", message.type()));
+        }
+
+        synchronized List<Message> close() {
+            open = false;
+            return List.copyOf(emitted);
+        }
     }
 
     /// Where a message-sending effect is addressed.
@@ -624,20 +770,37 @@ public final class ActorSystem implements AutoCloseable {
     }
 
     void unloaded(Actor actor) {
+        registry.handled(actor.address(), actor.lastAt());
         loaded.remove(actor.address(), actor);
         release(actor.address());
     }
 
     @Override
     public void close() {
-        if (closed) return;
-        closed = true;
-        loaded.values().forEach(Actor::stop);
-        var deadline = System.currentTimeMillis() + 2_000;
-        while (!loaded.isEmpty() && System.currentTimeMillis() < deadline) {
-            Thread.onSpinWait();
+        List<Actor> actors;
+        synchronized (lifecycle) {
+            if (closed) return;
+            closed = true;
+            actors = List.copyOf(loaded.values());
         }
+        actors.forEach(Actor::stop);
+        var deadline = System.currentTimeMillis() + 2_000;
+        for (var actor : actors) {
+            var remaining = deadline - System.currentTimeMillis();
+            if (remaining <= 0) break;
+            try {
+                actor.await(remaining);
+            } catch (InterruptedException interrupted) {
+                Thread.currentThread().interrupt();
+                break;
+            }
+        }
+        actors.stream().filter(actor -> !actor.finished()).forEach(Actor::interrupt);
+        var stopped = new IllegalStateException("the actor system " + name + " is closed");
+        asks.values().forEach(answer -> answer.completeExceptionally(stopped));
+        asks.clear();
         timers.shutdownNow();
+        effects.shutdownNow();
         if (transport != null) {
             try {
                 transport.close();
@@ -663,16 +826,36 @@ public final class ActorSystem implements AutoCloseable {
         var seen = new java.util.LinkedHashMap<Address, Registry.Entry>();
         loaded.forEach((address, actor) -> seen.put(address, new Registry.Entry(
                 address, actor.spawn().keepsLog(), true, actor.commands(), actor.depth(),
-                registry.lastAt(address), actor.settled(), registry.health(address))));
+                actor.lastAt(), actor.settled(), registry.health(address))));
         logs.catalogue().forEach(address -> seen.computeIfAbsent(address, at -> new Registry.Entry(
                 at, true, false, 0, 0, registry.lastAt(at), false, registry.health(at))));
         return seen.values().stream();
     }
 
     /// The state of one actor, as its definition chooses to show it.
+    ///
+    /// A loaded actor performs the inspection as a serial mailbox turn. The
+    /// inspection follows all inbound messages that this system accepted first.
+    /// An unloaded actor uses replay and does not run effects.
     public Json inspect(Address address) {
         var actor = loaded.get(address.here());
-        if (actor != null) return actor.inspect();
+        if (actor != null) {
+            try {
+                var state = actor.inspect();
+                if (state != null) return state;
+            } catch (RuntimeException failure) {
+                if (!actor.finished()) throw failure;
+            }
+            try {
+                actor.await(PATIENCE.toMillis());
+            } catch (InterruptedException interrupted) {
+                Thread.currentThread().interrupt();
+                throw new IllegalStateException("interrupted while inspecting " + address, interrupted);
+            }
+            if (!actor.finished()) {
+                throw new IllegalStateException("the actor did not stop while inspecting " + address);
+            }
+        }
         return inspectAt(address, Long.MAX_VALUE);
     }
 
@@ -741,10 +924,8 @@ public final class ActorSystem implements AutoCloseable {
         return new Fleet(this, type);
     }
 
-    /// The actor at this address, as a [java.util.concurrent.Flow.Subscriber],
-    /// so that a publisher can feed it with the mailbox bound as its demand.
-    public java.util.concurrent.Flow.Subscriber<Message> subscriber(Address address) {
-        return summon(address.here());
+    void activate(Address address) {
+        summon(address.here());
     }
 
     List<Address> loadedAddresses() {

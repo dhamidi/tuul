@@ -4,7 +4,8 @@ import application.Application;
 import application.Message;
 import application.Step;
 import java.util.List;
-import java.util.concurrent.Flow;
+import java.util.concurrent.CompletableFuture;
+import java.util.concurrent.ConcurrentHashMap;
 import java.util.concurrent.atomic.AtomicLong;
 import json.Json;
 
@@ -22,8 +23,8 @@ import json.Json;
 ///
 /// 1. Append the command to the log, unless it is a control message.
 /// 2. Advance the state with it. No effect runs here.
-/// 3. Carry out the effects, and put whatever they emit back into this actor's
-///    own mailbox, where each one is logged in its turn.
+/// 3. Run actor effects in list order. Run external effects concurrently.
+/// 4. Put emitted messages into the continuation queue in arrival order.
 ///
 /// Step 3 is what makes step 1 sufficient. An effect that reads a socket or a
 /// clock hands back what it learned as a message, that message enters the
@@ -83,13 +84,14 @@ import json.Json;
 /// [Undeliverable.Cause#quarantined], and it takes a person to decide what to
 /// do. [ActorSystem#inspectAt(Address, long)] still reads the state up to the
 /// command before the poison, which is usually where that person starts.
-final class Actor implements Flow.Subscriber<Message> {
+final class Actor {
 
     /// The message an actor sends itself to stop.
     static final String STOP = "actors.stop";
 
     /// The message delivered once, after replay and before any live message.
     static final String RESUMED = "actors.resumed";
+    static final String INSPECT = "actors.inspect";
 
     /// Pairs a definition with the application it built, so that the state type
     /// stays inside this object.
@@ -116,10 +118,6 @@ final class Actor implements Flow.Subscriber<Message> {
             return application.advance(message);
         }
 
-        List<Message> perform(List<application.Effect> effects) {
-            return application.perform(effects);
-        }
-
         Json inspect() {
             return definition.inspect(application.state());
         }
@@ -139,15 +137,14 @@ final class Actor implements Flow.Subscriber<Message> {
     private final Log log;
     private final Mailbox mailbox;
     private final Spawn spawn;
-    private final AtomicLong handled = new AtomicLong();
+    private long handled;
     private volatile Delivery current;
     private volatile Thread thread;
     private volatile boolean finished;
     private volatile boolean settled;
     private volatile long lastAt = System.currentTimeMillis();
-    private long seenAbandoned;
-    private long seenFenced;
-    private Flow.Subscription subscription;
+    private final AtomicLong inspected = new AtomicLong();
+    private final ConcurrentHashMap<Long, CompletableFuture<Json>> inspections = new ConcurrentHashMap<>();
 
     Actor(ActorSystem system, Address address, Definition<?> definition, Log log, Spawn spawn) {
         this.system = system;
@@ -155,10 +152,6 @@ final class Actor implements Flow.Subscriber<Message> {
         this.body = Body.of(definition, address);
         this.log = log;
         this.spawn = spawn;
-        // An application waits for its effects for as long as they take. An
-        // actor cannot: a hung effect holds the mailbox thread, and every
-        // sender blocked on the full mailbox behind it is held too.
-        this.body.application().patience(spawn.effects());
         this.mailbox = new Mailbox(spawn);
     }
 
@@ -182,7 +175,15 @@ final class Actor implements Flow.Subscriber<Message> {
     }
 
     Json inspect() {
-        return body.inspect();
+        if (finished) return null;
+        var id = inspected.incrementAndGet();
+        var result = new CompletableFuture<Json>();
+        inspections.put(id, result);
+        if (!mailbox.inspect(Delivery.of(address, Message.of(INSPECT).with("id", (double) id)))) {
+            inspections.remove(id);
+            return null;
+        }
+        return result.join();
     }
 
     long commands() {
@@ -195,6 +196,10 @@ final class Actor implements Flow.Subscriber<Message> {
 
     boolean finished() {
         return finished;
+    }
+
+    boolean ownsCurrentThread() {
+        return Thread.currentThread() == thread;
     }
 
     /// Whether the definition called this actor settled after the last message
@@ -218,11 +223,8 @@ final class Actor implements Flow.Subscriber<Message> {
 
     /// Whether this actor is in the middle of something.
     ///
-    /// A sweeper must not evict an actor with mail waiting or a step in
-    /// flight. Eviction goes through the mailbox as a control message, so it
-    /// would be handled in order and would not interrupt anything, but it would
-    /// still throw away messages that a sender has already been told were
-    /// accepted.
+    /// A sweeper does not evict an actor with mail waiting or a step in flight.
+    /// Eviction closes admission, so passivation must only select an idle actor.
     boolean busy() {
         return current != null || mailbox.depth() > 0;
     }
@@ -243,20 +245,30 @@ final class Actor implements Flow.Subscriber<Message> {
         thread = Thread.ofVirtual().name("actor:" + address).start(this::loop);
     }
 
-    Mailbox.Admission offer(Delivery delivery) throws InterruptedException {
+    Mailbox.Admission offer(Delivery delivery) {
         if (finished) return Mailbox.Admission.busy;
         return mailbox.offer(delivery);
     }
 
-    void control(Delivery delivery) {
-        mailbox.control(delivery);
+    void self(Delivery delivery) {
+        mailbox.self(delivery);
     }
 
     /// Asks the actor to stop once it reaches this message. Stopping is a
     /// message rather than an interrupt, so it can never arrive in the middle
     /// of a step and leave a command logged but unhandled.
     void stop() {
-        mailbox.control(Delivery.of(address, Message.of(STOP)));
+        mailbox.stop(Delivery.of(address, Message.of(STOP)));
+    }
+
+    void await(long millis) throws InterruptedException {
+        var active = thread;
+        if (active != null) active.join(millis);
+    }
+
+    void interrupt() {
+        var active = thread;
+        if (active != null) active.interrupt();
     }
 
     List<Delivery> abandonedMail() {
@@ -274,6 +286,10 @@ final class Actor implements Flow.Subscriber<Message> {
             while (true) {
                 var delivery = mailbox.take();
                 if (delivery.command().type().equals(STOP)) return;
+                if (delivery.command().type().equals(INSPECT)) {
+                    inspect(delivery.command());
+                    continue;
+                }
                 handle(delivery);
             }
         } catch (InterruptedException e) {
@@ -282,8 +298,11 @@ final class Actor implements Flow.Subscriber<Message> {
             system.died(this, death);
         } finally {
             finished = true;
+            inspections.values().forEach(result -> result.completeExceptionally(
+                    new IllegalStateException("the actor stopped during inspection")));
+            inspections.clear();
             system.trace(address, Trace.Kind.evicted, Json.Object.of()
-                    .with("handled", handled.get())
+                    .with("handled", handled)
                     .with("settled", settled));
             system.unloaded(this);
         }
@@ -374,14 +393,12 @@ final class Actor implements Flow.Subscriber<Message> {
         current = delivery;
         try {
             var step = body.advance(delivery.command());
-            var emitted = body.perform(step.effects());
+            var emitted = system.perform(this, step.effects());
             for (var message : emitted) mailbox.self(new Delivery(message.at(clock()), address, address, null, null));
-            if (seq > 0) log.applied(seq);
-            handled.incrementAndGet();
+            if (seq > 0 && spawn.redelivers()) log.applied(seq);
+            handled++;
             lastAt = clock();
             settled = asks();
-            system.registry().handled(address, delivery.at());
-            losses();
             if (system.tracingMessages()) {
                 system.trace(address, Trace.Kind.handled, Json.Object.of()
                         .with("type", delivery.command().type())
@@ -389,28 +406,6 @@ final class Actor implements Flow.Subscriber<Message> {
             }
         } finally {
             current = null;
-        }
-    }
-
-    /// Publishes a trace when the application has abandoned an effect or thrown
-    /// away a late one since the last message.
-    ///
-    /// [application.Application] counts both and has no callback, so this reads
-    /// the counters after each step and reports the difference. An abandoned
-    /// effect is therefore seen as soon as the step that abandoned it ends. A
-    /// fenced emission is seen later, because an effect that was abandoned may
-    /// finish minutes afterwards and there is no step in progress when it does.
-    /// It is picked up by the next message, or by the periodic gauge.
-    private void losses() {
-        var stopped = body.application().abandoned();
-        if (stopped > seenAbandoned) {
-            seenAbandoned = stopped;
-            system.trace(address, Trace.Kind.abandoned, Json.Object.of().with("total", stopped));
-        }
-        var late = body.application().fenced();
-        if (late > seenFenced) {
-            seenFenced = late;
-            system.trace(address, Trace.Kind.fenced, Json.Object.of().with("total", late));
         }
     }
 
@@ -428,6 +423,17 @@ final class Actor implements Flow.Subscriber<Message> {
         }
     }
 
+    private void inspect(Message request) {
+        var id = (long) request.number("id", 0);
+        var result = inspections.remove(id);
+        if (result == null) return;
+        try {
+            result.complete(body.inspect());
+        } catch (Exception failure) {
+            result.completeExceptionally(failure);
+        }
+    }
+
     /// The timestamp a message an effect produced is stamped with.
     ///
     /// A message from an effect is new to the actor, so it carries the moment
@@ -437,36 +443,4 @@ final class Actor implements Flow.Subscriber<Message> {
         return System.currentTimeMillis();
     }
 
-    // ---- Flow.Subscriber -------------------------------------------------
-    //
-    // An actor subscribes to a publisher of messages, and the mailbox bound
-    // becomes the demand. A publisher is therefore slowed down by a slow actor
-    // instead of filling memory in front of it.
-
-    @Override
-    public void onSubscribe(Flow.Subscription subscription) {
-        this.subscription = subscription;
-        subscription.request(spawn.mailbox());
-    }
-
-    @Override
-    public void onNext(Message message) {
-        try {
-            mailbox.offer(Delivery.of(address, message));
-        } catch (InterruptedException e) {
-            Thread.currentThread().interrupt();
-        }
-        if (subscription != null) subscription.request(1);
-    }
-
-    @Override
-    public void onError(Throwable throwable) {
-        var reason = throwable.getMessage() == null ? throwable.toString() : throwable.getMessage();
-        mailbox.control(Delivery.of(address, Message.error(reason).with("while", "subscription")));
-    }
-
-    @Override
-    public void onComplete() {
-        // the publisher is finished; the actor is not
-    }
 }

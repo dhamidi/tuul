@@ -35,8 +35,9 @@ import java.time.Duration;
 ///
 /// A command is appended before it is handled, and its effects run after that.
 /// A process that stops in between leaves a command in the log whose effects
-/// never happened. [Log#applied()] records how far the effects got, and
-/// everything above that mark is the *tail*.
+/// never happened. A redelivering actor uses [Log#applied()] to record how far
+/// its effects got. Everything above that mark is the *tail*. The default mode
+/// does not read or write the mark.
 ///
 /// The two ways to treat the tail are genuinely different promises, and neither
 /// is free:
@@ -68,9 +69,8 @@ import java.time.Duration;
 /// @param keepsLog whether commands are appended to a log and replayed on
 ///                 summon. When false the actor uses [Log#none()] and starts
 ///                 empty every time it is summoned.
-/// @param mailbox  how many messages may wait before a sender is made to wait
-/// @param patience how long a sender blocks on a full mailbox before it is told
-///                 the actor is busy
+/// @param mailbox  how many inbound messages may wait before a tell returns
+///                 [DeliveryStatus#busy]
 /// @param restarts how many times an actor may die inside `window` before it is
 ///                 quarantined
 /// @param window   the period the restart count is measured over
@@ -83,10 +83,10 @@ import java.time.Duration;
 /// @param redelivers whether commands that were logged but whose effects did
 ///                 not finish are carried out again on the next summon. False
 ///                 by default: see the table above.
-public record Spawn(boolean keepsLog, int mailbox, Duration patience, int restarts, Duration window,
+public record Spawn(boolean keepsLog, int mailbox, int restarts, Duration window,
         Duration effects, Duration idle, Durability durability, boolean redelivers) {
 
-    private static final Spawn DURABLE = new Spawn(true, 1024, Duration.ofSeconds(5), 5,
+    private static final Spawn DURABLE = new Spawn(true, 1024, 5,
             Duration.ofMinutes(1), Duration.ofSeconds(30), Duration.ofMinutes(5), Durability.normal, false);
 
     public Spawn {
@@ -106,29 +106,23 @@ public record Spawn(boolean keepsLog, int mailbox, Duration patience, int restar
     }
 
     public Spawn with(boolean keepsLog) {
-        return new Spawn(keepsLog, mailbox, patience, restarts, window, effects, idle, durability, redelivers);
+        return new Spawn(keepsLog, mailbox, restarts, window, effects, idle, durability, redelivers);
     }
 
     public Spawn mailbox(int mailbox) {
-        return new Spawn(keepsLog, mailbox, patience, restarts, window, effects, idle, durability, redelivers);
-    }
-
-    public Spawn patience(Duration patience) {
-        return new Spawn(keepsLog, mailbox, patience, restarts, window, effects, idle, durability, redelivers);
+        return new Spawn(keepsLog, mailbox, restarts, window, effects, idle, durability, redelivers);
     }
 
     public Spawn restarts(int restarts, Duration window) {
-        return new Spawn(keepsLog, mailbox, patience, restarts, window, effects, idle, durability, redelivers);
+        return new Spawn(keepsLog, mailbox, restarts, window, effects, idle, durability, redelivers);
     }
 
     /// How long the effects of one step may run.
     ///
-    /// An actor bounds this where a plain [application.Application] does not.
-    /// A hung effect inside an actor does not stop one call. It stops the
-    /// mailbox thread, and every sender that blocks on the full mailbox behind
-    /// it stops too. Abandoning a leaked thread is the cheaper failure.
+    /// The actor runtime applies this bound to the external effects of one
+    /// step. Actor-routing effects run inline and do not use this bound.
     public Spawn effects(Duration effects) {
-        return new Spawn(keepsLog, mailbox, patience, restarts, window, effects, idle, durability, redelivers);
+        return new Spawn(keepsLog, mailbox, restarts, window, effects, idle, durability, redelivers);
     }
 
     /// How long this actor may sit unused before it is evicted.
@@ -137,7 +131,7 @@ public record Spawn(boolean keepsLog, int mailbox, Duration patience, int restar
     /// actors that must answer without a replay first, and for undurable actors
     /// whose state has nowhere to come back from.
     public Spawn idle(Duration idle) {
-        return new Spawn(keepsLog, mailbox, patience, restarts, window, effects, idle, durability, redelivers);
+        return new Spawn(keepsLog, mailbox, restarts, window, effects, idle, durability, redelivers);
     }
 
     /// How hard this actor's log works to keep a command it has just appended.
@@ -145,7 +139,7 @@ public record Spawn(boolean keepsLog, int mailbox, Duration patience, int restar
     /// [Durability#normal] is the default and can lose the last few commands to
     /// a power cut. [Durability#full] cannot, and pays one flush per message.
     public Spawn durability(Durability durability) {
-        return new Spawn(keepsLog, mailbox, patience, restarts, window, effects, idle, durability, redelivers);
+        return new Spawn(keepsLog, mailbox, restarts, window, effects, idle, durability, redelivers);
     }
 
     /// Whether the unapplied tail of the log is carried out again on the next
@@ -155,7 +149,7 @@ public record Spawn(boolean keepsLog, int mailbox, Duration patience, int restar
     /// table in this class before doing it, and make the actor's effects
     /// idempotent first.
     public Spawn redelivers(boolean redelivers) {
-        return new Spawn(keepsLog, mailbox, patience, restarts, window, effects, idle, durability, redelivers);
+        return new Spawn(keepsLog, mailbox, restarts, window, effects, idle, durability, redelivers);
     }
 
     /// Whether this actor is ever evicted for sitting idle.

@@ -202,6 +202,19 @@ public final class Journal implements Log {
                 java.lang.Long.toString(seq));
     }
 
+    /// Records whether this log tracks commands for redelivery.
+    ///
+    /// A change from false to true marks the existing history as applied. The
+    /// first stored policy keeps the existing applied mark for compatibility.
+    @Override
+    public void redelivers(boolean enabled) {
+        var previous = setting("redelivers");
+        if (previous != null && java.lang.Boolean.parseBoolean(previous) == enabled) return;
+        if (previous != null && enabled) applied(length);
+        database.execute("insert or replace into meta (name, value) values ('redelivers', ?)",
+                java.lang.Boolean.toString(enabled));
+    }
+
     @Override
     public void close() {
         insert.close();
@@ -224,6 +237,12 @@ public final class Journal implements Log {
             } catch (NumberFormatException e) {
                 return 0;
             }
+        }
+    }
+
+    private String setting(String name) {
+        try (var rows = database.query("select value from meta where name = ?", name)) {
+            return rows.next() ? rows.text(0) : null;
         }
     }
 

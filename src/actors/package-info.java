@@ -22,7 +22,7 @@
 ///         return Application.of(new Counter(0))
 ///                 .on("add", (state, message) -> Step.of(new Counter(state.total() + 1)))
 ///                 .on("total", (state, message) -> Step.of(state,
-///                         Effect.sending("actor.reply",
+///                         ActorEffect.reply(
 ///                                 Message.of("total").with("value", Json.of(state.total())))));
 ///     }
 ///
@@ -65,12 +65,11 @@
 ///
 /// ## Reaching anything else
 ///
-/// A definition never holds a reference to a system. It asks for an effect, and
-/// the system carries it out:
+/// A definition never holds a reference to a system. It creates an
+/// [ActorEffect], and the system runs it:
 ///
 ///   - `actor.tell` sends a message to an address.
 ///   - `actor.reply` answers whoever is waiting.
-///   - `actor.ask` sends a message and names this actor as the reply address.
 ///   - `actor.spawn`, `actor.evict` and `actor.schedule` do what they say.
 ///
 /// Handlers for anything else — a database, an HTTP client, a mailer — are
@@ -78,6 +77,12 @@
 /// application.Effect.Handler)]. They belong there because they own connections
 /// that must outlive an actor being evicted, and keeping them out of a
 /// definition is what leaves a definition pure enough to replay.
+///
+/// [ActorEffect] has no ask operation. An actor sends a request with
+/// [ActorEffect#tell(Address, application.Message)]. The request payload must
+/// contain any correlation and reply address that state needs. The actor uses
+/// [ActorEffect#schedule(java.time.Duration, application.Message)] to request a
+/// timeout message.
 ///
 /// ## Durable, or not
 ///
@@ -136,8 +141,8 @@
 /// ## The types in this package
 ///
 ///   - [ActorSystem] is the front door: define, tell, ask, evict, inspect.
-///   - [Definition] is what you write. [Address] is how you name an instance.
-///     [Spawn] decides how it runs.
+///   - [Definition] is what you write. [ActorEffect] creates runtime effects.
+///   - [Address] names an instance. [Spawn] decides how it runs.
 ///   - [Log] and [Logs] are the store, with [Journal] keeping one SQLite file
 ///     per actor. [Log#none()] is the whole of the undurable case.
 ///   - [Fleet] fans out. [Transport] reaches another system.
@@ -165,20 +170,14 @@
 ///   - **Summoning is restart.** A dead actor is dropped from memory and the
 ///     next message loads it again from its log. That is why there is no
 ///     supervision tree.
-///   - **A full mailbox blocks the sender** for [Spawn#patience()] and then
-///     answers `error.communication` with cause `busy`. A message whose
-///     deadline has already passed is dropped before it is logged, because its
-///     sender has stopped waiting.
-///   - **The effects of one step have no order.** [application.Application]
-///     runs every effect of a step on its own virtual thread and waits for all
-///     of them, so an `actor.tell` and an `actor.reply` asked for by the same
-///     update race. **An actor cannot make an announcement land before the
-///     reply its caller is waiting on.** A post that answers its caller and
-///     announces itself to an index gives the caller a redirect that can reach
-///     a list one mailbox hop behind. Read-your-writes across two actors is
-///     therefore not expressible inside a definition: the caller asks A, waits
-///     for the answer, and then asks B with what A said. Two effects in one
-///     step are only safe when neither one's result is read through the other.
+///   - **A full mailbox does not block the sender.** [ActorSystem#tell(Address,
+///     application.Message)] returns [DeliveryStatus#busy]. An actor sender also
+///     receives `error.communication` with cause `busy`.
+///   - **Actor effects run in list order.** Two tells from one actor to one
+///     destination enter that destination in the same order. External effect
+///     handlers run concurrently and can emit in any order.
+///   - **Self-messages are continuations.** They keep effect order. The actor
+///     handles them before it reads the next inbound message.
 ///   - **A query is logged too.** Every message that enters a mailbox is
 ///     recorded, and a message that only reads the state is still a message. So
 ///     asking a durable counter for its total adds an entry to its log. That
@@ -218,11 +217,9 @@
 ///
 /// A command is appended before it is handled and its effects run afterwards, so
 /// a process that stops in between leaves a command whose effects never
-/// happened. [Log#applied()] records how far the effects got, and
-/// [Spawn#redelivers()] decides what happens to everything above that mark. The
-/// default carries out an effect at most once, which is what this package has
-/// always done; turning redelivery on makes it at least once and requires every
-/// effect of that actor to be idempotent. [Spawn] carries the table.
+/// happened. [Spawn#redelivers()] decides whether the log records an applied
+/// mark. The default suppresses the tail and writes no mark. Redelivery tracks
+/// the mark and requires idempotent effects. [Spawn] contains the full table.
 ///
 /// [Spawn#durability()] decides how hard the log works to keep a command it has
 /// just appended. [Durability#normal] can lose the newest commands to a power

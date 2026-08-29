@@ -1,37 +1,20 @@
 package actors;
 
 import java.time.Instant;
+import java.util.ArrayDeque;
 import java.util.ArrayList;
 import java.util.List;
-import java.util.concurrent.LinkedBlockingDeque;
-import java.util.concurrent.Semaphore;
-import java.util.concurrent.TimeUnit;
 
-/// The queue of one actor, with the rules that decide what gets in.
+/// The FIFO queues of one actor.
 ///
-/// ## Three ways in, one way out
+/// ## Two ways in, one way out
 ///
-/// **Ordinary messages** come from outside and are bounded. A sender meeting a
-/// full mailbox blocks for [Spawn#patience()] and is then told the actor is
-/// busy. Blocking is the right default because it makes backpressure real: a
-/// fan-out over a hundred actors that all feed one slow actor slows down
-/// instead of building an unbounded queue in memory. The cost is that one slow
-/// actor becomes a pause somewhere else, which is why the block is bounded and
-/// the sender is told which actor it was.
+/// **Ordinary messages** come from outside and are bounded. An enqueue does not
+/// wait. It returns `busy` when the queue is full.
 ///
-/// **Control messages** — everything in the `actors.` namespace — go to the
-/// front and ignore the bound. A bounded mailbox that could not accept
-/// `actors.stop` would be impossible to shut down once full, which is exactly
-/// when shutting it down matters.
-///
-/// **Messages an actor produced for itself**, which is what an effect emits, go
-/// to the front and ignore the bound as well. Two reasons. Making the actor's
-/// own thread wait on the actor's own mailbox would deadlock, because that
-/// thread is the only consumer. And handling the feedback before new external
-/// work preserves what [application.Application#dispatch(application.Message...)]
-/// does, where the consequences of a step are finished before anything else
-/// starts. The trade-off is that an actor that emits without end grows its own
-/// queue without end, which is the same runaway a dispatch loop already allows.
+/// **Actor continuations** use a second unbounded queue. The actor is the only
+/// producer. The actor reads continuations in effect order before it reads the
+/// next inbound message.
 ///
 /// ## Shedding
 ///
@@ -46,63 +29,92 @@ final class Mailbox {
     enum Admission {
         /// The message is queued.
         accepted,
-        /// The mailbox stayed full for the whole patience.
+        /// The inbound queue is full.
         busy,
         /// The deadline had already passed when the message arrived.
         expired
     }
 
-    /// One place in the queue. `metered` records whether the message took a
-    /// permit on the way in, so that only those release one on the way out.
-    private record Slot(Delivery delivery, boolean metered) {}
-
-    private final LinkedBlockingDeque<Slot> queue = new LinkedBlockingDeque<>();
-    private final Semaphore room;
-    private final long patience;
+    private final Object lock = new Object();
+    private final ArrayDeque<Delivery> continuations = new ArrayDeque<>();
+    private final ArrayDeque<Delivery> inbound = new ArrayDeque<>();
+    private final int capacity;
+    private boolean accepting = true;
 
     Mailbox(Spawn spawn) {
-        room = new Semaphore(spawn.mailbox());
-        patience = spawn.patience().toMillis();
+        capacity = spawn.mailbox();
     }
 
-    /// Offers a message from outside. Blocks while the mailbox is full, up to
-    /// the patience.
-    Admission offer(Delivery delivery) throws InterruptedException {
+    /// Adds one inbound message without waiting for room.
+    Admission offer(Delivery delivery) {
         if (delivery.expired(Instant.now())) return Admission.expired;
-        if (!room.tryAcquire(patience, TimeUnit.MILLISECONDS)) return Admission.busy;
-        queue.addLast(new Slot(delivery, true));
-        return Admission.accepted;
+        synchronized (lock) {
+            if (!accepting) return Admission.busy;
+            if (inbound.size() >= capacity) return Admission.busy;
+            inbound.addLast(delivery);
+            lock.notify();
+            return Admission.accepted;
+        }
     }
 
-    /// Puts a control message at the front, past the bound.
-    void control(Delivery delivery) {
-        queue.addFirst(new Slot(delivery, false));
-    }
-
-    /// Puts a message the actor produced for itself at the front, past the
-    /// bound.
+    /// Adds one actor continuation in effect order.
     void self(Delivery delivery) {
-        queue.addFirst(new Slot(delivery, false));
+        synchronized (lock) {
+            continuations.addLast(delivery);
+            lock.notify();
+        }
     }
 
-    /// The next message, waiting until there is one.
+    /// Stops admission and adds the stop message after accepted inbound work.
+    void stop(Delivery delivery) {
+        synchronized (lock) {
+            if (!accepting) return;
+            accepting = false;
+            inbound.addLast(delivery);
+            lock.notify();
+        }
+    }
+
+    /// Adds an inspection after all inbound messages that were already accepted.
+    /// Returns false after this mailbox stops admission.
+    boolean inspect(Delivery delivery) {
+        synchronized (lock) {
+            if (!accepting) return false;
+            inbound.addLast(delivery);
+            lock.notify();
+            return true;
+        }
+    }
+
+    /// Returns the next message. Continuations have priority over inbound
+    /// messages.
     Delivery take() throws InterruptedException {
-        var slot = queue.takeFirst();
-        if (slot.metered()) room.release();
-        return slot.delivery();
+        synchronized (lock) {
+            while (continuations.isEmpty() && inbound.isEmpty()) lock.wait();
+            if (!continuations.isEmpty()) return continuations.removeFirst();
+            return inbound.removeFirst();
+        }
     }
 
     /// How many messages are waiting. An inspector reads this to find where
     /// backpressure is biting.
     int depth() {
-        return queue.size();
+        synchronized (lock) {
+            return continuations.size() + inbound.size();
+        }
     }
 
     /// Everything still waiting, so that a dying actor can tell the senders
     /// their messages were never handled.
     List<Delivery> drain() {
-        var slots = new ArrayList<Slot>();
-        queue.drainTo(slots);
-        return slots.stream().map(Slot::delivery).toList();
+        synchronized (lock) {
+            var deliveries = new ArrayList<Delivery>(
+                    continuations.size() + inbound.size());
+            deliveries.addAll(continuations);
+            deliveries.addAll(inbound);
+            continuations.clear();
+            inbound.clear();
+            return List.copyOf(deliveries);
+        }
     }
 }

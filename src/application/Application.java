@@ -53,8 +53,8 @@ import json.Json;
 ///
 /// ## One thread of dispatch
 ///
-/// Handlers run concurrently but only ever emit. The state is touched by the
-/// dispatching thread alone.
+/// External handlers run concurrently and may only emit. The dispatching
+/// thread runs `application.send` directly. Only that thread changes state.
 public final class Application<S> {
 
     private final Map<String, Update<S>> updates = new LinkedHashMap<>();
@@ -73,8 +73,8 @@ public final class Application<S> {
     /// done nothing.
     ///
     /// A caller that cannot afford to wait sets a bound with
-    /// [#patience(Duration)]. An actor does, because a hung effect there stops
-    /// a mailbox and every sender queued behind it.
+    /// [#patience(Duration)]. An actor system schedules its own external effects
+    /// and applies its own bound.
     private Duration patience;
     private S state;
 
@@ -166,17 +166,17 @@ public final class Application<S> {
 
     /// Carries out effects and answers with the messages they emitted.
     ///
-    /// Every effect runs on its own virtual thread and the method returns when
-    /// all of them have finished, or when [#patience(Duration)] runs out.
+    /// The dispatching thread runs `application.send` directly. Every other
+    /// effect runs on its own virtual thread. The method returns when they have
+    /// finished, or when [#patience(Duration)] runs out.
     ///
     /// ## Why this is not a try-with-resources
     ///
     /// An executor closed by try-with-resources does not return from `close()`
     /// until every task has finished, with no way to say how long that may
     /// take. One handler blocked on a socket that never answers would hold the
-    /// step open forever, and for an actor that means a mailbox that never
-    /// moves again and senders that block behind it. So this shuts the executor
-    /// down, waits for the patience, and then interrupts what is left.
+    /// step open forever. This method shuts the executor down, waits for the
+    /// configured patience, and interrupts the remaining tasks.
     ///
     /// ## The trade-off, stated plainly
     ///
@@ -203,12 +203,20 @@ public final class Application<S> {
         if (effects.isEmpty()) return List.of();
         var fence = new Fence(fenced);
         var outstanding = new ConcurrentHashMap<Integer, Effect>();
-        for (var index = 0; index < effects.size(); index++) outstanding.put(index, effects.get(index));
+        for (var index = 0; index < effects.size(); index++) {
+            var effect = effects.get(index);
+            if (effect.type().equals(Effect.SEND)) {
+                run(effect, fence);
+                continue;
+            }
+            outstanding.put(index, effect);
+        }
+        if (outstanding.isEmpty()) return List.copyOf(fence.close());
 
         var effecting = Executors.newVirtualThreadPerTaskExecutor();
-        for (var index = 0; index < effects.size(); index++) {
-            var position = index;
-            var effect = effects.get(index);
+        for (var entry : outstanding.entrySet()) {
+            var position = entry.getKey();
+            var effect = entry.getValue();
             effecting.execute(() -> {
                 try {
                     run(effect, fence);
@@ -223,6 +231,18 @@ public final class Application<S> {
         var emitted = fence.close();
         if (Thread.currentThread().isInterrupted()) emitted.add(Message.error("interrupted while applying effects"));
         return List.copyOf(emitted);
+    }
+
+    /// Runs one effect on the calling thread and emits its result through
+    /// `emit`. This method does not create a thread and does not change state.
+    ///
+    /// If the effect has no handler, this method emits `error`. If the handler
+    /// throws an exception, this method also emits `error`.
+    ///
+    /// A runtime calls this method when it already owns effect scheduling.
+    /// [#perform(List)] schedules a complete concurrent step instead.
+    public void perform(Effect effect, Effect.Emitter emit) {
+        run(effect, emit);
     }
 
     private void waitFor(java.util.concurrent.ExecutorService effecting,

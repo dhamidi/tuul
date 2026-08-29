@@ -40,6 +40,9 @@ public final class ActorsTest {
         travels();
         fans();
         crossesSystems();
+        preservesActorOrder();
+        separatesAskAddresses();
+        tellsWithoutWaiting();
         boundedSteps();
         owns();
         passivates();
@@ -382,7 +385,7 @@ public final class ActorsTest {
     /// A command that was logged but whose effects did not finish is the tail.
     /// What happens to it is a spawn option, and the default loses it.
     private static void marksApplied() throws Exception {
-        // In ordinary running the mark keeps up with the log.
+        // At-most-once actors do not pay for a mark that replay does not read.
         var busy = root();
         var address = Address.of("acting", "1");
         try (var system = ActorSystem.named("test").rooted(busy).define(new Acting())
@@ -394,7 +397,7 @@ public final class ActorsTest {
         }
         try (var logs = new Journals(busy)) {
             var log = logs.open(address);
-            Check.equal("every command that was handled is marked applied", log.length(), log.applied());
+            Check.equal("the default actor does not write an unused applied mark", 0L, log.applied());
             Check.equal("and there were two of them", 2L, log.length());
         }
 
@@ -425,6 +428,23 @@ public final class ActorsTest {
             Check.equal("and the state is unchanged afterwards", 7.0, total(system, tailAddress()));
         }
         Check.equal("a redelivered command is not delivered again on the next summon", 1, ran.get());
+
+        // Changing the policy creates a boundary. Commands written under the
+        // old policy do not become new work.
+        var changed = root();
+        var effects = new AtomicInteger();
+        try (var system = ActorSystem.named("test").rooted(changed).define(new Acting())
+                .effect("record", (effect, emit) -> effects.incrementAndGet())) {
+            system.tell(address, Message.of("add"));
+            settle();
+        }
+        try (var system = ActorSystem.named("test").rooted(changed)
+                .define(new Acting(), Spawn.durable().redelivers(true))
+                .effect("record", (effect, emit) -> effects.incrementAndGet())) {
+            summon(system, address);
+            settle();
+        }
+        Check.equal("enabling redelivery does not repeat effects from the old policy", 1, effects.get());
     }
 
     private static Address tailAddress() {
@@ -462,7 +482,7 @@ public final class ActorsTest {
     /// Loads an actor without sending it anything, so that replay runs and the
     /// log gains no entry the test did not intend.
     private static void summon(ActorSystem system, Address address) {
-        system.subscriber(address);
+        system.activate(address);
     }
 
     // ---- durability ------------------------------------------------------
@@ -833,8 +853,8 @@ public final class ActorsTest {
             return Application.of(new Counter(0))
                     .on("add", (state, message) -> Step.of(new Counter(state.total() + weight * amount(message))))
                     .on("total", (state, message) -> Step.of(state,
-                            Effect.sending(ActorSystem.REPLY,
-                                    Message.of("total").with("value", Json.of(state.total())))));
+                            ActorEffect.reply(Message.of("total")
+                                    .with("value", Json.of(state.total())))));
         }
 
         @Override
@@ -1001,6 +1021,23 @@ public final class ActorsTest {
             }
             Check.that("an ask nobody answers runs out of time", failed);
         }
+
+        var closing = ActorSystem.named("closing").define(silent, Spawn.ephemeral());
+        var pending = closing.ask(silent.at("1"), Message.of("nothing"), Duration.ofMinutes(1));
+        closing.close();
+        Check.that("closing a system fails its pending asks", pending.isCompletedExceptionally());
+        Check.that("a closed system refuses a new ask",
+                closing.ask(silent.at("1"), Message.of("nothing")).isCompletedExceptionally());
+
+        try (var system = ActorSystem.named("test").define(silent, Spawn.ephemeral())) {
+            var refused = false;
+            try {
+                system.ask(silent.at("1"), Message.of("nothing"), Duration.ZERO);
+            } catch (IllegalArgumentException expected) {
+                refused = true;
+            }
+            Check.that("an ask refuses a non-positive deadline", refused);
+        }
     }
 
     // ---- error.communication ---------------------------------------------
@@ -1018,8 +1055,8 @@ public final class ActorsTest {
             public Application<Long> instantiate(Address self) {
                 return Application.of(0L)
                         .on("go", (state, message) -> Step.of(state,
-                                Effect.sending(ActorSystem.TELL, Message.of("hello"))
-                                        .about(ActorSystem.TO, Address.parse(message.string("to", "")).json())))
+                                ActorEffect.tell(Address.parse(message.string("to", "")),
+                                        Message.of("hello"))))
                         .on(Undeliverable.TYPE, (state, message) -> {
                             notices.add(message);
                             return Step.of(state);
@@ -1047,7 +1084,7 @@ public final class ActorsTest {
                     Undeliverable.Cause.unreachable, Undeliverable.causeOf(notices.getFirst()));
         }
 
-        // busy: a mailbox of one, an actor that never finishes, and no patience.
+        // busy: a mailbox of one and an actor that does not finish immediately.
         notices.clear();
         var held = new CountDownLatch(1);
         Definition<Long> slow = new Definition<>() {
@@ -1070,7 +1107,7 @@ public final class ActorsTest {
             }
         };
         try (var system = ActorSystem.named("test")
-                .define(slow, Spawn.ephemeral().mailbox(1).patience(Duration.ofMillis(50)))
+                .define(slow, Spawn.ephemeral().mailbox(1))
                 .define(sender, Spawn.ephemeral())) {
             system.tell(slow.at("1"), Message.of("wait"));
             Thread.sleep(100);
@@ -1326,6 +1363,110 @@ public final class ActorsTest {
 
             var answer = orders.ask(there, Message.of("total"), Duration.ofSeconds(2)).get();
             Check.equal("and an ask across systems comes back", 4.0, number(answer.get("value")));
+        }
+    }
+
+    /// Actor routing runs inline. Two tells from one step keep effect order.
+    /// Self-tells use the continuation queue and do not consume mailbox room.
+    private static void preservesActorOrder() throws Exception {
+        var received = new CopyOnWriteArrayList<String>();
+        Definition<Long> ordered = new Definition<>() {
+            @Override
+            public String type() {
+                return "ordered";
+            }
+
+            @Override
+            public Application<Long> instantiate(Address self) {
+                return Application.of(0L)
+                        .on("start", (state, message) -> Step.of(state,
+                                Effect.send(Message.of("one")), tell(self, "two")))
+                        .on("forward", (state, message) -> Step.of(state,
+                                tell(self.sibling("receiver"), "one"),
+                                tell(self.sibling("receiver"), "two")))
+                        .on("one", (state, message) -> {
+                            received.add("one");
+                            return Step.of(state + 1);
+                        })
+                        .on("two", (state, message) -> {
+                            received.add("two");
+                            return Step.of(state + 1);
+                        });
+            }
+        };
+        try (var system = ActorSystem.named("test").define(ordered, Spawn.ephemeral().mailbox(4))) {
+            var sender = ordered.at("sender");
+            system.spawn(sender, Spawn.ephemeral().mailbox(1));
+            system.tell(sender, Message.of("start"));
+            settle();
+            Check.equal("both self-send spellings keep one effect order",
+                    List.of("one", "two"), List.copyOf(received));
+
+            received.clear();
+            system.tell(sender, Message.of("forward"));
+            settle();
+            Check.equal("tells to another actor keep the order of their effects",
+                    List.of("one", "two"), List.copyOf(received));
+        }
+    }
+
+    private static Effect tell(Address to, String type) {
+        return ActorEffect.tell(to, Message.of(type));
+    }
+
+    /// A foreign reply address cannot complete an ask in the receiving system.
+    private static void separatesAskAddresses() throws Exception {
+        try (var alpha = ActorSystem.named("alpha").define(new Counting(1), Spawn.ephemeral());
+                var beta = ActorSystem.named("beta").define(new Counting(1), Spawn.ephemeral())) {
+            Loopback.of(alpha, beta);
+            beta.tell(Address.of("counter", "remote"), Message.of("add").with("by", Json.of(7)));
+            beta.tell(Address.of("counter", "local"), Message.of("add").with("by", Json.of(3)));
+            settle();
+
+            var remote = alpha.ask(Address.at("beta", "counter", "remote"), Message.of("total"));
+            var local = beta.ask(Address.of("counter", "local"), Message.of("total"));
+            Check.equal("a remote ask receives the remote answer", 7.0,
+                    number(remote.get().get("value")));
+            Check.equal("a local ask receives its own answer", 3.0,
+                    number(local.get().get("value")));
+        }
+    }
+
+    /// A full mailbox rejects a tell without waiting for room.
+    private static void tellsWithoutWaiting() throws Exception {
+        var held = new CountDownLatch(1);
+        Definition<Long> slow = new Definition<>() {
+            @Override
+            public String type() {
+                return "nonblocking";
+            }
+
+            @Override
+            public Application<Long> instantiate(Address self) {
+                return Application.of(0L).on("wait", (state, message) -> {
+                    try {
+                        held.await(2, TimeUnit.SECONDS);
+                    } catch (InterruptedException interrupted) {
+                        Thread.currentThread().interrupt();
+                    }
+                    return Step.of(state);
+                });
+            }
+        };
+        try (var system = ActorSystem.named("test")
+                .define(slow, Spawn.ephemeral().mailbox(1))) {
+            var address = slow.at("1");
+            Check.equal("the first tell is accepted", DeliveryStatus.accepted,
+                    system.tell(address, Message.of("wait")));
+            Thread.sleep(50);
+            Check.equal("one message can wait in the bounded mailbox", DeliveryStatus.accepted,
+                    system.tell(address, Message.of("wait")));
+            var began = System.nanoTime();
+            var status = system.tell(address, Message.of("wait"));
+            var millis = (System.nanoTime() - began) / 1_000_000;
+            Check.equal("a full mailbox reports busy", DeliveryStatus.busy, status);
+            Check.that("a tell does not wait for a full mailbox", millis < 100);
+            held.countDown();
         }
     }
 

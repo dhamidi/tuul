@@ -94,7 +94,8 @@ public interface Log extends AutoCloseable {
     /// somewhere in between. That upper part is the *tail*, and
     /// [Spawn#redelivers()] decides what happens to it on the next summon.
     ///
-    /// A log that records nothing has no tail and answers zero.
+    /// Only an actor with [Spawn#redelivers()] enabled uses this mark. A log
+    /// that records no mark returns zero.
     default long applied() {
         return 0;
     }
@@ -106,6 +107,15 @@ public interface Log extends AutoCloseable {
     /// order, so a high-water mark says exactly what a column of flags would say
     /// and costs one row instead of one per command.
     default void applied(long seq) {
+        // there is nothing to remember
+    }
+
+    /// Selects the recovery policy for future commands.
+    ///
+    /// A log records the policy so that a later change to `redelivers` has a
+    /// defined boundary. When the policy changes from false to true, the log
+    /// marks its current length as applied. Only later commands can redeliver.
+    default void redelivers(boolean enabled) {
         // there is nothing to remember
     }
 

@@ -15,6 +15,7 @@ public final class ApplicationTest {
         loops();
         failsOpen();
         concurrent();
+        sendsDirectly();
         composes();
         envelopes();
     }
@@ -141,6 +142,22 @@ public final class ApplicationTest {
                 .dispatch(Message.of("start"));
         Check.equal("and the effect listed first may finish last",
                 List.of("second", "first"), List.copyOf(order));
+    }
+
+    /// The built-in send effect does not create a virtual thread.
+    private static void sendsDirectly() {
+        var caller = Thread.currentThread();
+        var handler = new java.util.concurrent.atomic.AtomicReference<Thread>();
+        var app = Application.<Integer>of(0)
+                .on("start", (state, message) -> Step.of(state, Effect.send(Message.of("done"))))
+                .on("done", (state, message) -> Step.of(state + 1))
+                .effect(Effect.SEND, (effect, emit) -> {
+                    handler.set(Thread.currentThread());
+                    emit.emit(effect.message());
+                });
+
+        Check.equal("a direct send returns its message", 1, app.dispatch(Message.of("start")));
+        Check.that("the dispatching thread runs a direct send", caller == handler.get());
     }
 
     private static void composes() {

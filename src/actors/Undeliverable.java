@@ -37,8 +37,7 @@ public record Undeliverable(Address to, Cause cause, Message command) {
 
     /// Why a message did not arrive.
     public enum Cause {
-        /// The mailbox stayed full for the whole patience. The actor exists and
-        /// is running; it is behind.
+        /// The inbound mailbox is full. The actor exists and is running.
         busy,
         /// No definition is registered for that type. This is a misspelled
         /// address, not congestion, so it fails at once instead of blocking.
