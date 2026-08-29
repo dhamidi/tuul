@@ -47,6 +47,7 @@ public final class ActorsTest {
         flies();
         readsNothingIntoExistence();
         stamps();
+        shadowing();
         numbers();
     }
 
@@ -110,10 +111,76 @@ public final class ActorsTest {
                     (double) live, number(field(system.inspect(address), "at")));
         }
 
+        // `at` used to be a word a payload could not use: the envelope shared
+        // the payload's namespace, so stamping a delivery would have destroyed a
+        // sender's own `at`, and the stamp had to refuse rather than overwrite.
+        // The two are separate objects now, so both fit and neither guards.
         var sent = Message.of("mark").with("at", 42.0);
-        Check.equal("a message that carries its own timestamp keeps it", 42L, sent.at(999).at());
-        Check.equal("and a message with none is stamped", 999L, Message.of("mark").at(999).at());
+        var stamped = sent.at(999);
+        Check.equal("a payload field called at belongs to the sender", 42L, (long) stamped.number("at", 0));
+        Check.equal("and the delivery is stamped beside it, not over it", 999L, stamped.at());
+        Check.equal("a message with none is stamped", 999L, Message.of("mark").at(999).at());
         Check.equal("a message nobody stamped says zero", 0L, Message.of("mark").at());
+    }
+
+    // ---- the payload may use the envelope's words ------------------------
+
+    /// A payload field called `type` survives everything.
+    ///
+    /// This is the whole reason the envelope exists. `Message.of(type, payload)`
+    /// used to be `payload.with("type", type)`, so a payload carrying its own
+    /// `type` lost it — not refused, not renamed, dropped. `type` is not an
+    /// exotic name: every description javac writes about a symbol has one.
+    ///
+    /// Construction is the cheap half. The half worth checking is that it is
+    /// still there after the message has been through an actor's mailbox, been
+    /// written to a log as a payload and a set of columns, and been read back
+    /// out by a replay in a different process lifetime.
+    private static void shadowing() throws Exception {
+        var payload = Json.Object.of().with("type", "invoice").with("id", Json.of(7));
+        var message = Message.of("note.write", payload);
+        Check.equal("a payload keeps its own type", "invoice", message.string("type", ""));
+        Check.equal("and the envelope keeps the message's", "note.write", message.type());
+
+        var root = root();
+        var address = Address.of("shadowing", "1");
+        try (var system = ActorSystem.named("test").rooted(root).define(new Shadowing())) {
+            system.tell(address, message);
+            settle();
+            Check.equal("an update reads the payload's own type, not the message's",
+                    "invoice", string(field(system.inspect(address), "kept")));
+            Check.equal("and the payload's other fields with it",
+                    7.0, number(field(system.inspect(address), "id")));
+        }
+        try (var system = ActorSystem.named("test").rooted(root).define(new Shadowing())) {
+            Check.equal("and it is all still there when the log is replayed",
+                    "invoice", string(field(system.inspect(address), "kept")));
+            Check.equal("including the rest of the payload",
+                    7.0, number(field(system.inspect(address), "id")));
+        }
+    }
+
+    /// An actor that keeps whatever the payload called `type`.
+    private record Kept(String type, double id) {}
+
+    private static final class Shadowing implements Definition<Kept> {
+
+        @Override
+        public String type() {
+            return "shadowing";
+        }
+
+        @Override
+        public Application<Kept> instantiate(Address self) {
+            return Application.of(new Kept("", 0))
+                    .on("note.write", (state, message) ->
+                            Step.of(new Kept(message.string("type", ""), message.number("id", 0))));
+        }
+
+        @Override
+        public Json inspect(Kept state) {
+            return Json.Object.of().with("kept", state.type()).with("id", state.id());
+        }
     }
 
     /// An actor whose whole state is when it was last spoken to.
@@ -367,7 +434,7 @@ public final class ActorsTest {
     private static void crashed(Path root) {
         try (var logs = new Journals(root)) {
             var log = logs.open(tailAddress());
-            log.append(Message.of("add").with("by", Json.of(7)), System.currentTimeMillis());
+            log.append(Message.of("add").with("by", Json.of(7)).at(System.currentTimeMillis()));
         }
     }
 
@@ -664,8 +731,8 @@ public final class ActorsTest {
             return Application.of(new Counter(0))
                     .on("add", (state, message) -> Step.of(new Counter(state.total() + weight * amount(message))))
                     .on("total", (state, message) -> Step.of(state,
-                            Effect.of(ActorSystem.REPLY).with("message",
-                                    Message.of("total").with("value", Json.of(state.total())).body())));
+                            Effect.of(ActorSystem.REPLY)
+                                    .carrying(Message.of("total").with("value", Json.of(state.total())))));
         }
 
         @Override
@@ -850,7 +917,7 @@ public final class ActorsTest {
                 return Application.of(0L)
                         .on("go", (state, message) -> Step.of(state, Effect.of(ActorSystem.TELL)
                                 .with("to", Address.parse(message.string("to", "")).json())
-                                .with("message", Message.of("hello").body())))
+                                .carrying(Message.of("hello"))))
                         .on(Undeliverable.TYPE, (state, message) -> {
                             notices.add(message);
                             return Step.of(state);
@@ -1222,6 +1289,10 @@ public final class ActorsTest {
 
     private static Json field(Json value, String name) {
         return value instanceof Json.Object object ? object.get(name) : value;
+    }
+
+    private static String string(Json value) {
+        return value instanceof Json.Str(var text) ? text : "";
     }
 
     private static double number(Json value) {

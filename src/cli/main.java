@@ -171,10 +171,30 @@ Message docs(Json.Object values) {
 
 /// `tuul message` — the same application, driven by a JSON message on stdin,
 /// which is how an agent talks to it without going through flags at all.
+///
+/// A message is `{"type": ..., "body": {...}}`. The payload goes inside `body`
+/// rather than beside the type, so that a payload may have a field called
+/// `type` — see [application.Envelope]. `{"type": "project.natives"}` is a
+/// message with an empty payload and needs no `body`.
+///
+/// A field that is neither the envelope's nor inside `body` is refused rather
+/// than read as one or the other. Both guesses are wrong in a way nothing would
+/// report: treated as envelope it is ignored, and treated as payload it brings
+/// back the ambiguity `body` exists to end. Saying so costs one error and
+/// teaches the shape.
 Message stdin() {
     var value = Json.parse(new InputStreamReader(System.in, StandardCharsets.UTF_8));
-    return value instanceof Json.Object body ? new Message(body) : Message.error("a message must be a JSON object");
+    if (!(value instanceof Json.Object document)) return Message.error("a message must be a JSON object");
+    var stray = document.fields().keySet().stream().filter(name -> !ENVELOPE.contains(name)).sorted().toList();
+    if (!stray.isEmpty()) {
+        return Message.error("a message is {\"type\": ..., \"body\": {...}} — "
+                + "move " + String.join(", ", stray) + " inside body");
+    }
+    return Message.from(document);
 }
+
+/// The only fields a message has outside its payload.
+static final java.util.Set<String> ENVELOPE = java.util.Set.of(Message.TYPE, Message.AT, Message.BODY);
 
 int ask(Message message, Writer out, Writer err) {
     return docs.App.of(docs.State.of(directory("src"), directory("vendor")), out, err).dispatch(message).exit();

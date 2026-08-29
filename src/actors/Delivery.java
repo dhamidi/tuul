@@ -28,44 +28,51 @@ import java.time.Instant;
 /// value makes an actor a deterministic function of its input, and it lets a
 /// business deadline computed from it survive replay exactly.
 ///
-/// An update never holds a delivery, so [Actor] stamps this value into the
-/// message and the update reads [application.Message#at()]. The stamp is put on
-/// after the command is logged, so the log holds the intent as it was sent and
-/// the timestamp beside it, and replay stamps the recorded number back.
+/// An update never holds a delivery, and it does not need one: the timestamp is
+/// a field of the message's envelope, so [application.Message#at()] answers it
+/// and [#at()] here reads the same place. It used to be a field of this record
+/// that [Actor] copied into the message before every update, because the
+/// envelope did not exist and the message had nowhere to keep it.
 ///
-/// @param command  the message the actor will handle
+/// @param command  the message the actor will handle, stamped with when it
+///                 arrived
 /// @param to       the actor it is addressed to
 /// @param from     the actor that sent it, or null when it came from outside
 /// @param replyTo  where an `actor.reply` should go, or null
 /// @param deadline when this message stops being worth handling, or null
-/// @param at       when it arrived, in epoch milliseconds
-public record Delivery(Message command, Address to, Address from, Address replyTo, Instant deadline, long at) {
+public record Delivery(Message command, Address to, Address from, Address replyTo, Instant deadline) {
 
     /// A delivery with no routing beyond its destination, stamped now.
     public static Delivery of(Address to, Message command) {
-        return new Delivery(command, to, null, null, null, System.currentTimeMillis());
+        return new Delivery(command.at(System.currentTimeMillis()), to, null, null, null);
     }
 
-    /// A delivery replayed out of a log. It carries the recorded timestamp and
-    /// no routing at all, because none of the routing was recorded.
-    public static Delivery replayed(Address to, Message command, long at) {
-        return new Delivery(command, to, null, null, null, at);
+    /// A delivery replayed out of a log. The command carries the recorded
+    /// timestamp already, and no routing at all, because none of the routing
+    /// was recorded.
+    public static Delivery replayed(Address to, Message command) {
+        return new Delivery(command, to, null, null, null);
+    }
+
+    /// When this message arrived, in epoch milliseconds.
+    public long at() {
+        return command.at();
     }
 
     public Delivery from(Address from) {
-        return new Delivery(command, to, from, replyTo, deadline, at);
+        return new Delivery(command, to, from, replyTo, deadline);
     }
 
     public Delivery replyTo(Address replyTo) {
-        return new Delivery(command, to, from, replyTo, deadline, at);
+        return new Delivery(command, to, from, replyTo, deadline);
     }
 
     public Delivery deadline(Instant deadline) {
-        return new Delivery(command, to, from, replyTo, deadline, at);
+        return new Delivery(command, to, from, replyTo, deadline);
     }
 
     public Delivery to(Address to) {
-        return new Delivery(command, to, from, replyTo, deadline, at);
+        return new Delivery(command, to, from, replyTo, deadline);
     }
 
     /// Whether this message is a control message. Control messages live in the

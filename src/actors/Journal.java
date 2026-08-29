@@ -96,6 +96,7 @@ public final class Journal implements Log {
             create table if not exists meta (name text primary key, value text not null);
             """;
 
+
     Journal(java.nio.file.Path file, Address address, Durability durability) {
         try {
             database = Migrations.durable(APPLICATION).step(COMMANDS).open(file);
@@ -133,9 +134,9 @@ public final class Journal implements Log {
     }
 
     @Override
-    public long append(Message command, long at) {
+    public long append(Message command) {
         var seq = length + 1;
-        insert.run(seq, at, command.type(), command.body().text());
+        insert.run(seq, command.at(), command.type(), command.body().text());
         length = seq;
         return seq;
     }
@@ -144,16 +145,16 @@ public final class Journal implements Log {
     /// a list, so replaying a log with a million commands costs one command of
     /// memory.
     @Override
-    public Stream<Log.Entry> replay(long from, long limit) {
+    public Stream<Message> replay(long from, long limit) {
         var rows = database.query(
-                "select seq, at, body from commands where seq > ? order by seq limit ?", from, limit);
-        var entries = new Spliterators.AbstractSpliterator<Log.Entry>(
+                "select seq, at, type, body from commands where seq > ? order by seq limit ?", from, limit);
+        var entries = new Spliterators.AbstractSpliterator<Message>(
                 Long.MAX_VALUE, Spliterator.ORDERED | Spliterator.NONNULL) {
 
             @Override
-            public boolean tryAdvance(Consumer<? super Log.Entry> action) {
+            public boolean tryAdvance(Consumer<? super Message> action) {
                 if (!rows.next()) return false;
-                action.accept(new Log.Entry(rows.integer(0), rows.integer(1), read(rows.text(2))));
+                action.accept(read(rows.integer(0), rows.integer(1), rows.text(2), rows.text(3)));
                 return true;
             }
         };
@@ -223,8 +224,20 @@ public final class Journal implements Log {
         }
     }
 
-    private static Message read(String body) {
-        if (Json.parse(body) instanceof Json.Object object) return new Message(object);
-        throw new IllegalStateException("a logged command must be an object: " + body);
+    /// One row as the message it recorded.
+    ///
+    /// Every column is an envelope field and the text is the payload, so a
+    /// replayed command carries where it sits, when it arrived and what it is,
+    /// and the body holds nothing but what the sender said. The columns were
+    /// always the real home of these three; the body used to keep a copy of the
+    /// type because the type had nowhere else to live.
+    private static Message read(long seq, long at, String type, String body) {
+        if (!(Json.parse(body) instanceof Json.Object payload)) {
+            throw new IllegalStateException("a logged command must be an object: " + body);
+        }
+        return new Message(payload, Json.Object.of()
+                .with(Message.TYPE, type)
+                .with(Message.AT, (double) at)
+                .with(Log.SEQ, (double) seq));
     }
 }

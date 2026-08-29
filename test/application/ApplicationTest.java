@@ -16,6 +16,44 @@ public final class ApplicationTest {
         failsOpen();
         concurrent();
         composes();
+        envelopes();
+    }
+
+    /// The envelope and the payload do not share a namespace.
+    ///
+    /// A message is two objects, so a payload may use `type`, `at`, or any word
+    /// the envelope needs later. The check that matters is the round trip:
+    /// [Effect#send(Message)] writes a whole message into another message's
+    /// payload as one JSON document, and that document is where an envelope
+    /// would be lost if it were flattened.
+    private static void envelopes() {
+        var message = Message.of("billing.received",
+                Json.Object.of().with("type", "invoice").with("at", Json.of(1)).with("id", Json.of(7)));
+
+        Check.equal("the envelope says what the message is", "billing.received", message.type());
+        Check.equal("and the payload keeps its own type", "invoice", message.string("type", ""));
+        Check.equal("and its own at", 1.0, message.number("at", 0));
+        Check.equal("which is not the delivery stamp", 0L, message.at());
+
+        var written = message.json().text();
+        var read = Message.from(json.Json.parse(written) instanceof Json.Object o ? o : Json.Object.of());
+        Check.equal("a message written as one document reads back the same type",
+                "billing.received", read.type());
+        Check.equal("with its payload's type intact", "invoice", read.string("type", ""));
+
+        var delivered = new ArrayList<Message>();
+        Application.<Integer>of(0)
+                .on("billing.received", (state, incoming) -> Step.of(state, Effect.send(
+                        Message.of("billing.filed", incoming.body()))))
+                .on("billing.filed", (state, filed) -> {
+                    delivered.add(filed);
+                    return Step.of(state);
+                })
+                .dispatch(message);
+        Check.equal("an effect that carries a message keeps its type", "billing.filed",
+                delivered.isEmpty() ? "" : delivered.getFirst().type());
+        Check.equal("and hands on a payload that still has its own",
+                "invoice", delivered.isEmpty() ? "" : delivered.getFirst().string("type", ""));
     }
 
     /// Define the messages, define the effects, dispatch.

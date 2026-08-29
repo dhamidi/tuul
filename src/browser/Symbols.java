@@ -97,7 +97,7 @@ public final class Symbols {
     }
 
     public static Step<Symbol> found(Symbol state, Message message) {
-        return Step.of(state.describing(message.body().without("type")));
+        return Step.of(state.describing(message.body()));
     }
 
     public static Step<Symbol> missing(Symbol state, Message message) {

@@ -64,7 +64,7 @@ public final class App {
 
     private static Step<State> result(State state, Message message) {
         return Step.of(state, Effect.of("docs.print")
-                .with("symbol", message.body().without("type"))
+                .with("symbol", message.body())
                 .with("json", state.json())
                 .with("sections", Json.Array.strings(List.copyOf(state.sections()))));
     }
@@ -85,7 +85,7 @@ public final class App {
     /// question with no name is the first one a reader has.
     private static Step<State> rooted(State state, Message message) {
         return Step.of(state, Effect.of("docs.print")
-                .with("roots", message.body().without("type"))
+                .with("roots", message.body())
                 .with("json", state.json()));
     }
 

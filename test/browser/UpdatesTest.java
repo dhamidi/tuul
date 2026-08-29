@@ -53,15 +53,24 @@ public final class UpdatesTest {
 
     /// What the index answered, and what the page makes of it.
     private static void answering() {
-        var described = Json.Object.of().with("type", Symbols.FOUND).with("class", "json.Json").with("kind", "interface");
-        var found = Symbols.found(Symbol.nothing().asking("json.Json"), new Message(described));
+        var described = Json.Object.of().with("class", "json.Json").with("kind", "interface");
+        var found = Symbols.found(Symbol.nothing().asking("json.Json"), Message.of(Symbols.FOUND, described));
         Check.equal("a description that arrives is kept", "json.Json", found.state().description().string("class", ""));
         Check.that("and the page knows it has one", found.state().found());
         Check.that("the message type is not part of the description",
                 found.state().description().get("type") == null);
         Check.that("finding something asks for nothing further", found.effects().isEmpty());
 
-        var recovered = Symbols.found(Symbol.nothing().failed("something earlier"), new Message(described));
+        // A described symbol may itself be called `type` — javac has a `type`
+        // in every description it writes about one. This used to be impossible
+        // to say: the envelope took the word.
+        var shadowing = Json.Object.of().with("class", "json.Json").with("type", "interface");
+        var kept = Symbols.found(Symbol.nothing(), Message.of(Symbols.FOUND, shadowing));
+        Check.equal("a description with its own type keeps it",
+                "interface", kept.state().description().string("type", ""));
+
+        var recovered = Symbols.found(Symbol.nothing().failed("something earlier"),
+                Message.of(Symbols.FOUND, described));
         Check.that("and a description clears whatever went wrong before it",
                 recovered.state().problem().isEmpty());
 

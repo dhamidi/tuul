@@ -9,9 +9,9 @@ import java.util.stream.Stream;
 ///
 /// A log holds the messages that arrived, in the order they were handled. They
 /// are commands — statements of intent — and not events, and the difference is
-/// what makes an upgrade free. Replaying `{"type":"add","sku":"…"}` through a
-/// new pricing rule produces a total computed by the new rule. Replaying a
-/// recorded `total` would produce the old one forever.
+/// what makes an upgrade free. Replaying `{"type":"add","body":{"sku":"…"}}`
+/// through a new pricing rule produces a total computed by the new rule.
+/// Replaying a recorded `total` would produce the old one forever.
 ///
 /// The cost of that choice is real and worth stating: only the actor's own
 /// definition can interpret its log. Nothing else can read a basket's commands
@@ -36,22 +36,36 @@ import java.util.stream.Stream;
 /// any actor noticing.
 public interface Log extends AutoCloseable {
 
-    /// One entry: where it sits in the history, when it arrived, and what it
-    /// said.
-    record Entry(long seq, long at, Message command) {}
+    /// The envelope field holding where a replayed command sits in the
+    /// history.
+    ///
+    /// A log used to hand back an `Entry` — a sequence number, a timestamp and
+    /// the command. Two of those three are envelope fields now and the third is
+    /// this, so the triple was a wrapper around a message that already carried
+    /// everything it held. The message is the entry.
+    String SEQ = "seq";
+
+    /// Where a replayed command sits in the history, or zero for one that was
+    /// never in a log.
+    static long seq(Message command) {
+        return (long) command.envelope().number(SEQ, 0);
+    }
 
     /// Appends one command and answers with its sequence number. The sequence
     /// starts at one and never has a gap.
-    long append(Message command, long at);
+    ///
+    /// The command carries when it arrived, so nothing is passed beside it.
+    long append(Message command);
 
-    /// Every entry, in order. The stream holds a cursor, so close it.
-    default Stream<Entry> replay() {
+    /// Every command, in order, each carrying its sequence number and the
+    /// moment it arrived. The stream holds a cursor, so close it.
+    default Stream<Message> replay() {
         return replay(0, Long.MAX_VALUE);
     }
 
-    /// Entries from `from` onwards, at most `limit` of them. The stream holds a
-    /// cursor, so close it.
-    Stream<Entry> replay(long from, long limit);
+    /// Commands from `from` onwards, at most `limit` of them. The stream holds
+    /// a cursor, so close it.
+    Stream<Message> replay(long from, long limit);
 
     /// How many entries this log holds.
     long length();
@@ -110,12 +124,12 @@ public interface Log extends AutoCloseable {
         return new Log() {
 
             @Override
-            public long append(Message command, long at) {
+            public long append(Message command) {
                 return 0;
             }
 
             @Override
-            public Stream<Entry> replay(long from, long limit) {
+            public Stream<Message> replay(long from, long limit) {
                 return Stream.of();
             }
 

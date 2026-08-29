@@ -268,7 +268,7 @@ public final class Application<S> {
     }
 
     private static void send(Effect effect, Effect.Emitter emit) {
-        if (effect.get("message") instanceof Json.Object message) emit.emit(new Message(message));
+        emit.emit(Effect.carried(effect));
     }
 
     private static Message failure(Throwable e) {

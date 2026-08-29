@@ -528,12 +528,12 @@ public final class ActorSystem implements AutoCloseable {
         var application = actor.application();
         shared.forEach(application::effect);
         application.effect(TELL, (effect, emit) ->
-                deliver(Delivery.of(Address.from(effect.get("to")), carried(effect)).from(actor.address())));
+                deliver(Delivery.of(Address.from(effect.get("to")), Effect.carried(effect)).from(actor.address())));
         application.effect(ASK, (effect, emit) ->
-                deliver(Delivery.of(Address.from(effect.get("to")), carried(effect))
+                deliver(Delivery.of(Address.from(effect.get("to")), Effect.carried(effect))
                         .from(actor.address())
                         .replyTo(actor.address())));
-        application.effect(REPLY, (effect, emit) -> reply(actor, carried(effect)));
+        application.effect(REPLY, (effect, emit) -> reply(actor, Effect.carried(effect)));
         application.effect(SPAWN, (effect, emit) -> {
             var address = Address.from(effect.get("address"));
             if (effect.get("durable") instanceof Json.Bool(var durable)) {
@@ -569,15 +569,10 @@ public final class ActorSystem implements AutoCloseable {
     /// message a timer delivers should carry the deadline it was armed for, so
     /// that a duplicate firing after a restart is recognised and ignored.
     private void schedule(Address self, Effect effect) {
-        var message = carried(effect);
+        var message = Effect.carried(effect);
         var to = effect.get("to") == null ? self : Address.from(effect.get("to"));
         var after = effect.get("after") instanceof Json.Num(var millis) ? (long) millis : 0L;
         timers.schedule(() -> deliver(Delivery.of(to, message).from(self)), after, TimeUnit.MILLISECONDS);
-    }
-
-    private static Message carried(Effect effect) {
-        if (effect.get("message") instanceof Json.Object body) return new Message(body);
-        return Message.of("");
     }
 
     // ---- lifecycle -------------------------------------------------------
@@ -696,8 +691,8 @@ public final class ActorSystem implements AutoCloseable {
     private <S> Json shadow(Definition<S> definition, Address address, long seq) {
         var application = definition.instantiate(address);
         if (!spawnFor(address).keepsLog() || !logs.exists(address)) return definition.inspect(application.state());
-        try (var entries = logs.open(address).replay(0, seq)) {
-            entries.forEach(entry -> application.advance(entry.command().at(entry.at())));
+        try (var commands = logs.open(address).replay(0, seq)) {
+            commands.forEach(application::advance);
         }
         return definition.inspect(application.state());
     }
@@ -709,7 +704,7 @@ public final class ActorSystem implements AutoCloseable {
     public Stream<Message> history(Address address, long from, int limit) {
         var here = address.here();
         if (!logs.exists(here)) return Stream.of();
-        return logs.open(here).replay(from, limit).map(Log.Entry::command);
+        return logs.open(here).replay(from, limit);
     }
 
     /// The state of many actors, read without summoning any of them.

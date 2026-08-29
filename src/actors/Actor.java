@@ -57,8 +57,8 @@ import json.Json;
 /// log:
 ///
 /// ```
-/// live:    seq 12  {"type":"add", …}          throws, state unchanged
-///          seq 13  {"type":"error", …}        the failure, logged like any message
+/// live:    seq 12  add    {"sku": …}       throws, state unchanged
+///          seq 13  error  {"reason": …}    the failure, logged like any message
 ///
 /// replay:  seq 12  throws again, state unchanged   the same outcome as live
 ///          seq 13  replays                         the same outcome as live
@@ -303,21 +303,21 @@ final class Actor implements Flow.Subscriber<Message> {
     /// properly, effects and all, without being appended a second time.
     private void replay() {
         var quiet = spawn.redelivers() ? log.applied() : java.lang.Long.MAX_VALUE;
-        try (var entries = log.replay()) {
-            entries.forEach(entry -> {
-                if (entry.seq() <= quiet) {
-                    advanceQuietly(entry);
+        try (var commands = log.replay()) {
+            commands.forEach(command -> {
+                if (Log.seq(command) <= quiet) {
+                    advanceQuietly(command);
                     return;
                 }
-                redeliver(entry);
+                redeliver(command);
             });
         }
     }
 
-    private void advanceQuietly(Log.Entry entry) {
-        current = Delivery.replayed(address, entry.command(), entry.at());
+    private void advanceQuietly(Message command) {
+        current = Delivery.replayed(address, command);
         try {
-            body.advance(entry.command().at(entry.at()));
+            body.advance(command);
         } finally {
             current = null;
         }
@@ -328,8 +328,8 @@ final class Actor implements Flow.Subscriber<Message> {
     /// The command is already in the log, so this must not append it again.
     /// Everything else is an ordinary step: the state advances, the effects run,
     /// what they emit goes into the mailbox, and the mark moves up to cover it.
-    private void redeliver(Log.Entry entry) {
-        apply(Delivery.replayed(address, entry.command(), entry.at()), entry.seq());
+    private void redeliver(Message command) {
+        apply(Delivery.replayed(address, command), Log.seq(command));
     }
 
     /// Delivers `actors.resumed` with effects enabled.
@@ -344,7 +344,7 @@ final class Actor implements Flow.Subscriber<Message> {
     }
 
     private void handle(Delivery delivery) {
-        var seq = delivery.control() ? 0 : log.append(delivery.command(), delivery.at());
+        var seq = delivery.control() ? 0 : log.append(delivery.command());
         apply(delivery, seq);
     }
 
@@ -373,9 +373,9 @@ final class Actor implements Flow.Subscriber<Message> {
     private void apply(Delivery delivery, long seq) {
         current = delivery;
         try {
-            var step = body.advance(delivery.command().at(delivery.at()));
+            var step = body.advance(delivery.command());
             var emitted = body.perform(step.effects());
-            for (var message : emitted) mailbox.self(new Delivery(message, address, address, null, null, clock()));
+            for (var message : emitted) mailbox.self(new Delivery(message.at(clock()), address, address, null, null));
             if (seq > 0) log.applied(seq);
             handled.incrementAndGet();
             lastAt = clock();

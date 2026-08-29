@@ -61,13 +61,13 @@ public record Undeliverable(Address to, Cause cause, Message command) {
         return Message.of(TYPE)
                 .with("to", to.json())
                 .with("cause", cause.name())
-                .with("command", command.body());
+                .with("command", command.json());
     }
 
     /// Reads the failed command back out of a notice, which is what a retry
     /// needs.
     public static Message commandOf(Message notice) {
-        if (notice.get("command") instanceof json.Json.Object body) return new Message(body);
+        if (notice.get("command") instanceof json.Json.Object document) return Message.from(document);
         return Message.of("");
     }
 
