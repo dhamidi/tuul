@@ -60,7 +60,8 @@ connection per client, and browsers allow about six per origin over HTTP/1.1.
 The application tuul dogfoods this with is a fast, interactive browser for a
 symbol index — the one `tuul docs` already builds.
 
-These are all plain Java libraries.
+These are all plain Java libraries. They are packages in one Java module,
+named `tuul`.
 
 Structured concurrency here means the lifetime of a task is a block of code,
 not the preview `StructuredTaskScope` API. Tasks are forked into a
@@ -79,5 +80,60 @@ Applications follow The Elm Architecture, with a slight twist:
 - the application runtime applies the effects and applies resulting messages to itself again,
 - anything that accepts a message and state, and returns a new state and effects, can work as an update function,
 - so that applications compose.
+
+## Packages and Java modules
+
+This file used "module" for a package (`json`, `peg`). A Java module in the
+JPMS sense is only `tuul`.
+
+Each directory under `src/` is a Java package. `json`, `actors` and `web.ui`
+are packages. They are not Java modules.
+
+The jar that `tuul install` vendors is one Java module, named `tuul`. A
+project writes `requires tuul` or `import module tuul`. It does not require
+each package as a module.
+
+A Java module per package would add a `module-info.java` to every directory.
+Tuul has no third-party modules to isolate. The packages already call each
+other through `application` and `json`. That is one library, not a set of
+optional products.
+
+The CLI is an unnamed class in `src/cli/main.java`. The unnamed package
+cannot belong to a named module. `tuul install` leaves that class out of
+the library jar. The tool stays on the classpath. The library is
+`module tuul`.
+
+A project uses the same split. `src/web/main.java` is unnamed and stays on
+the classpath. The vendored jar is `tuul`. If the application has no native
+code of its own, native access is `--enable-native-access=tuul`.
+
+A custom runtime from `jlink` needs a named module. `tuul deploy` builds
+that runtime from `module tuul`. The source tree has no `module-info.java`
+yet. Until it does, the jar is an automatic module with the name `tuul`.
+An automatic module still works on the classpath as unnamed code.
+
+## Reload and module layers
+
+UI code is Java that implements `web.ui.Component`. `web.Page` builds a new
+application for each request. The next request can load new classes. A
+request that is already running keeps the old classes.
+
+The JDK type for that swap is a child class loader. When the application is
+a named module, it is a `ModuleLayer`. The parent holds tuul: `application`,
+`actors`, `web`, `sqlite3`, `json`. The child holds the application's views
+and pages.
+
+A change to those sources compiles into a new child. The server replaces
+the handler that `Http.start` calls. Pages that are open refresh through
+Turbo. This reload is not built yet. `tuul dev` in the README restarts the
+process instead.
+
+The child must not load `web.ui`. Views implement types from the parent.
+A second copy of `Component` in the child makes a cast fail.
+
+Actor state does not live in the child. `Definition.inspect` returns JSON
+so a caller never holds the state class across a reload. To change an
+actor, register a new `Definition` and evict it. That path does not use a
+new loader.
 
 

@@ -1,0 +1,27 @@
+# tcl
+
+A Tcl interpreter that holds JVM objects as values. This directory has no
+implementation yet. These documents are the design.
+
+The host passes objects into the interpreter. A script finds those objects,
+calls procs and Java methods, and returns an object.
+
+There is no I/O in this package. The host reads and writes. `eval` accepts a
+`Reader`. The interpreter does not open a file.
+
+One interpreter runs on one thread at a time. The host owns virtual threads,
+streams, and Flow. The script sees objects and method calls.
+
+## Documents
+
+Each document answers one kind of question.
+
+| You want | Read |
+|---|---|
+| To learn by a first program | [tutorial.md](tutorial.md) |
+| To complete a task | [howto.md](howto.md) |
+| A fact, a table, or a rule | [reference.md](reference.md) |
+| To know why the design is this way | [explanation.md](explanation.md) |
+
+Start with the tutorial if you did not use this interpreter before. Use the
+reference when you implement the package or when you write a script.

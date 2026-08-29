@@ -65,6 +65,9 @@ It borrows:
 - The file tree *is* the documentation. A library holds the application;
   entrypoints are thin call-throughs. Open the tree and you can see what the
   app does before reading a line of code.
+- One Java module named `tuul`. Directories under `src/` stay packages.
+  `tuul install` vendors that one module. A project does not declare a
+  module per package.
 
 See [AGENTS.md](./AGENTS.md) for the full set of commandments.
 
@@ -216,6 +219,21 @@ is the FFI wrapper described below. None of them know an entrypoint exists.
 application, and each is a handful of lines: parse input, call the library,
 render output. Compare an entrypoint to its library — if the entrypoint has
 grown business logic of its own, that logic moved to the wrong place.
+
+**The `tuul` module.** `tuul install` vendors one jar. That jar is the Java
+module `tuul`. `src/json` and `src/web` are packages inside it. They are
+not modules of their own.
+
+A project that uses tuul writes `import module tuul` (JDK 24) or
+`requires tuul`. It does not `requires` each package.
+
+Entrypoints stay unnamed classes in `main.java`. The unnamed package cannot
+belong to a named module. The CLI and each project's `src/web/main.java`
+stay on the classpath. The library jar does not contain those classes.
+
+When the application has no native code of its own, enable native access
+for `tuul` only: `--enable-native-access=tuul`. `jlink` needs this named
+module. `tuul deploy` builds a custom runtime from it.
 
 **Dependencies.** There's no manifest for these — `tuul add jackson-databind`
 and `tuul add sqlite-jdbc` populate the two runtime entries directly;
