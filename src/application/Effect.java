@@ -69,7 +69,8 @@ public record Effect(Json.Object body, Json.Object envelope) implements Envelope
         return new Effect(message.body(), Json.Object.of().with(TYPE, type).with(SENDING, message.type()));
     }
 
-    /// The message this effect sends.
+    /// The message this effect sends — the inverse of
+    /// [#sending(String, Message)].
     ///
     /// The envelope is built here rather than carried through: a message's
     /// envelope says what the message is, and an effect's says what the effect
@@ -81,13 +82,13 @@ public record Effect(Json.Object body, Json.Object envelope) implements Envelope
     /// that built it, not a message with no type, so this refuses instead of
     /// inventing one. [Application] turns the throw into an `error` message, so
     /// it is loud and it does not take the loop down.
-    public static Message sent(Effect effect) {
-        var type = effect.envelope().string(SENDING, "");
-        if (type.isEmpty()) {
-            throw new IllegalStateException("the effect " + effect.type()
+    public Message message() {
+        var sending = envelope.string(SENDING, "");
+        if (sending.isEmpty()) {
+            throw new IllegalStateException("the effect " + type()
                     + " does not say what it sends — build it with Effect.sending(type, message)");
         }
-        return Message.of(type, effect.body());
+        return Message.of(sending, body);
     }
 
     /// The same effect with one more envelope field: something about the doing

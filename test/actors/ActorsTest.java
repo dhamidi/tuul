@@ -735,7 +735,7 @@ public final class ActorsTest {
     private static void refusesToSendNothing() {
         var refused = "";
         try {
-            Effect.sent(Effect.of(ActorSystem.REPLY));
+            Effect.of(ActorSystem.REPLY).message();
         } catch (IllegalStateException expected) {
             refused = expected.getMessage();
         }
@@ -768,7 +768,7 @@ public final class ActorsTest {
         Check.equal("what it says is in the body, including a field called `to`",
                 "Ada Lovelace", effect.string("to", ""));
 
-        var message = Effect.sent(effect);
+        var message = effect.message();
         Check.equal("the message that comes out keeps its own type", "parcel", message.type());
         Check.equal("and its own `to`, which was never routing", "Ada Lovelace", message.string("to", ""));
         Check.that("and carries no routing field of the effect's",

@@ -268,7 +268,7 @@ public final class Application<S> {
     }
 
     private static void send(Effect effect, Effect.Emitter emit) {
-        emit.emit(Effect.sent(effect));
+        emit.emit(effect.message());
     }
 
     private static Message failure(Throwable e) {

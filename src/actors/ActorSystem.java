@@ -538,12 +538,12 @@ public final class ActorSystem implements AutoCloseable {
         var application = actor.application();
         shared.forEach(application::effect);
         application.effect(TELL, (effect, emit) ->
-                deliver(Delivery.of(addressed(effect), Effect.sent(effect)).from(actor.address())));
+                deliver(Delivery.of(addressed(effect), effect.message()).from(actor.address())));
         application.effect(ASK, (effect, emit) ->
-                deliver(Delivery.of(addressed(effect), Effect.sent(effect))
+                deliver(Delivery.of(addressed(effect), effect.message())
                         .from(actor.address())
                         .replyTo(actor.address())));
-        application.effect(REPLY, (effect, emit) -> reply(actor, Effect.sent(effect)));
+        application.effect(REPLY, (effect, emit) -> reply(actor, effect.message()));
         application.effect(SPAWN, (effect, emit) -> {
             var address = Address.from(effect.get("address"));
             if (effect.get("durable") instanceof Json.Bool(var durable)) {
@@ -584,7 +584,7 @@ public final class ActorSystem implements AutoCloseable {
     /// message a timer delivers should carry the deadline it was armed for, so
     /// that a duplicate firing after a restart is recognised and ignored.
     private void schedule(Address self, Effect effect) {
-        var message = Effect.sent(effect);
+        var message = effect.message();
         var to = effect.envelope().get(TO) == null ? self : Address.from(effect.envelope().get(TO));
         var after = (long) effect.envelope().number(AFTER, 0);
         timers.schedule(() -> deliver(Delivery.of(to, message).from(self)), after, TimeUnit.MILLISECONDS);
