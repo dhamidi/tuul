@@ -13,11 +13,12 @@ import java.util.Map;
 /// something.
 public sealed interface Recognised {
 
-    /// The route, and the values the path was carrying.
-    record Match(Route route, Map<String, String> variables) implements Recognised {
+    /// The route, its raw path values, and the values parsed by its parameters.
+    record Match(Route route, Map<String, String> variables, Map<String, Object> parameters) implements Recognised {
 
         public Match {
             variables = Map.copyOf(variables);
+            parameters = Map.copyOf(parameters);
         }
 
         /// A named value from the path, for the common case of reading one.

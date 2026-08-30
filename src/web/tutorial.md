@@ -40,22 +40,32 @@ UTF-8 bytes, and closes the response.
 
 ## 2. Name the URLs
 
-Use one `Router` for recognising requests and building links. A route name is
-the same in both directions.
+Use one `Router` for dispatching requests and building links. A `RouteRef`
+names a route, contains its template, and declares the type of each path value.
 
 ```java
-import web.dispatch.Router;
+import web.RouteRef;
+import web.Router;
+import web.StringParameter;
 
+var id = new StringParameter("id");
+var notesRoute = RouteRef.of("notes", "/notes");
+var noteRoute = RouteRef.of("note", "/notes/{id}", id);
+var createNote = RouteRef.of("create-note", "/notes");
+var summarizeNote = RouteRef.of("summarize-note", "/notes/{id}/summary", id);
+var summaryJob = RouteRef.of("summary-job", "/summary-jobs/{id}", id);
+var login = RouteRef.of("login", "/login");
+var logout = RouteRef.of("logout", "/logout");
 var routes = Router.of()
-        .get("notes", "/notes")
-        .get("note", "/notes/{id}")
-        .post("create-note", "/notes")
-        .post("summarize-note", "/notes/{id}/summary")
-        .get("summary-job", "/summary-jobs/{id}")
-        .post("login", "/login")
-        .post("logout", "/logout");
+        .get(notesRoute)
+        .get(noteRoute)
+        .post(createNote)
+        .post(summarizeNote)
+        .get(summaryJob)
+        .post(login)
+        .post(logout);
 
-var noteUrl = routes.path("note", java.util.Map.of("id", "42"));
+var noteUrl = routes.path(noteRoute.with(id, "42"));
 // /notes/42
 ```
 
@@ -64,34 +74,34 @@ the wrong method is a `405`; a path that does not exist is a `404`.
 
 ## 3. Connect handlers to routes
 
-`Routing` dispatches the recognised route. The handler receives route data in
-the request attributes. `Notes` and `Views` are application-owned placeholders.
+Bind handlers on the same router. A typed parameter reads its value from the
+matched request. `Notes` and `Views` are application-owned placeholders.
 
 ```java
-import web.Routing;
 import web.Responses;
 import web.Status;
 
 final class Notes {
-    private final web.dispatch.Router routes;
+    private final web.Router routes;
+    private final web.StringParameter id;
 
-    Notes(web.dispatch.Router routes) {
+    Notes(web.Router routes, web.StringParameter id) {
         this.routes = routes;
+        this.id = id;
     }
 
     void index(web.Request request, web.Response response) throws Exception {
-        var html = Views.notesPage(routes.path("notes")); // application-owned
+        var html = Views.notesPage(routes.path(notesRoute)); // application-owned
         Responses.html(html, response);
     }
 
     void show(web.Request request, web.Response response) throws Exception {
-        var id = web.Routing.variables(request).first("id", "");
-        Responses.html(Views.notePage(id), response); // application-owned
+        Responses.html(Views.notePage(id.get(request)), response); // application-owned
     }
 
     void create(web.Request request, web.Response response) throws Exception {
         // Application-owned persistence and validation go here.
-        Responses.redirect(routes.path("notes"), response);
+        Responses.redirect(routes.path(notesRoute), response);
     }
 
     void save(String title, String body) throws Exception {
@@ -99,19 +109,18 @@ final class Notes {
     }
 }
 
-var notes = new Notes(routes);
-var app = Routing.of(routes)
-        .on("notes", notes::index)
-        .on("note", notes::show)
-        .on("create-note", notes::create)
-        .on("login", Login::handle)       // application-owned
-        .on("logout", Login::logout)      // application-owned
+var notes = new Notes(routes, id);
+var app = routes
+        .on(notesRoute, notes::index)
+        .on(noteRoute, notes::show)
+        .on(createNote, notes::create)
+        .on(login, Login::handle)       // application-owned
+        .on(logout, Login::logout)      // application-owned
         .otherwise((request, response) -> Responses.empty(Status.NOT_FOUND, response));
 ```
 
-`Routing.variables(request)` returns path variables. `Routing.route(request)`
-returns the matched route name. A handler can use either value without parsing
-the path itself.
+`id.get(request)` returns the parsed path value. `Router.route(request)` returns
+the matched `RouteRef`. A handler does not parse the path itself.
 
 ## 4. Learn the application loop
 
@@ -216,12 +225,12 @@ var notesPage = Page.of(() -> new NoteState("", false, ""))
 Use the page as the route handler:
 
 ```java
-var app = Routing.of(routes)
-        .on("notes", notesPage)
-        .on("note", notes::show)
-        .on("create-note", notes::create)
-        .on("login", Login::handle)
-        .on("logout", Login::logout);
+var app = routes
+        .on(notesRoute, notesPage)
+        .on(noteRoute, notes::show)
+        .on(createNote, notes::create)
+        .on(login, Login::handle)
+        .on(logout, Login::logout);
 ```
 
 `Requests.message(request)` uses the matched route name as the message type.
@@ -243,7 +252,7 @@ import web.forms.Form;
 import web.forms.Forms;
 import web.forms.Rules;
 
-var noteForm = Form.at(routes.path("create-note"))
+var noteForm = Form.at(routes, createNote)
         .post()
         .with(Field.text("title").label("Title").required()
                 .rule(Rules.most(120)))
@@ -263,7 +272,7 @@ if (!submission.ok()) {
     return;
 }
 notes.save(submission.text("title", ""), submission.text("body", ""));
-Responses.redirect(routes.path("notes"), response); // 303
+Responses.redirect(routes.path(notesRoute), response); // 303
 ```
 
 `Forms.reject` writes the submission with status `422`. Turbo uses that status
@@ -391,12 +400,11 @@ the definition's type, so callers do not repeat the `note-summary` string.
 
 ```java
 import actors.DeliveryStatus;
-import java.util.Map;
 import java.util.UUID;
 import web.Handler;
 
 Handler startSummary = (request, response) -> {
-    var noteId = web.Routing.variables(request).first("id", "");
+    var noteId = id.get(request);
     var jobId = UUID.randomUUID().toString();
     var job = summaryJobs.at(jobId);
     var delivery = actorSystem.tell(job,
@@ -406,11 +414,11 @@ Handler startSummary = (request, response) -> {
         return;
     }
     web.Responses.redirect(
-            routes.path("summary-job", Map.of("id", jobId)), response);
+            routes.path(summaryJob.with(id, jobId)), response);
 };
 
 Handler summaryStatus = (request, response) -> {
-    var jobId = web.Routing.variables(request).first("id", "");
+    var jobId = id.get(request);
     web.Responses.json(actorSystem.inspect(summaryJobs.at(jobId)), response);
 };
 ```
@@ -471,7 +479,7 @@ After CSRF middleware runs, a page can render its token:
 var token = Csrf.token(request);
 var form = web.ui.Tags.form(
         web.ui.Attributes.method("post"),
-        web.ui.Attributes.action(routes.path("create-note")),
+        web.ui.Attributes.action(routes.path(createNote)),
         web.ui.Attributes.enctype("application/x-www-form-urlencoded"),
         web.ui.Tags.input(web.ui.Attributes.type("hidden"),
                 web.ui.Attributes.name(Csrf.FIELD), web.ui.Attributes.value(token)),
@@ -485,18 +493,18 @@ the same token as the `X-CSRF-Token` header. Safe methods (`GET`, `HEAD`,
 Guard only the routes that need a signed-in session:
 
 ```java
-var signedInOnly = sessions.required(routes.path("login"));
+var signedInOnly = sessions.required(routes.path(login));
 web.Handler guardedCreate = notes::create;
 web.Handler guardedSummary = startSummary.wrappedBy(signedInOnly);
 web.Handler guardedStatus = summaryStatus.wrappedBy(signedInOnly);
-var securedRoutes = Routing.of(routes)
-        .on("notes", notesPage)
-        .on("note", notes::show)
-        .on("create-note", guardedCreate.wrappedBy(signedInOnly))
-        .on("summarize-note", guardedSummary)
-        .on("summary-job", guardedStatus)
-        .on("login", Login::handle)
-        .on("logout", Login::logout);
+var securedRoutes = routes
+        .on(notesRoute, notesPage)
+        .on(noteRoute, notes::show)
+        .on(createNote, guardedCreate.wrappedBy(signedInOnly))
+        .on(summarizeNote, guardedSummary)
+        .on(summaryJob, guardedStatus)
+        .on(login, Login::handle)
+        .on(logout, Login::logout);
 
 var protectedApp = securedRoutes
         .wrappedBy(csrf.middleware())

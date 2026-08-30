@@ -18,6 +18,7 @@ import web.Feature;
 import web.Handler;
 import web.Request;
 import web.Responses;
+import web.RouteRef;
 import web.Status;
 import web.assets.Bundled;
 import web.ui.Attributes;
@@ -32,7 +33,7 @@ import web.ui.Turbo;
 ///
 /// ```
 /// var cable = Cable.of();
-/// routes.on("updates", cable.stream(Topics.fixed("symbols")));
+/// var routes = Router.of().get(Cable.UPDATES, cable.stream(Topics.fixed("symbols")));
 /// cable.broadcast("symbols", Turbo.append("results", row(symbol)));
 /// ```
 ///
@@ -68,7 +69,7 @@ public final class Cable implements AutoCloseable {
     /// The route a page connects to. An application refers to it by this name
     /// and never writes the path, so [#feature(Topics)] can be mounted
     /// anywhere and every link still builds itself.
-    public static final String UPDATES = "web.cable.updates";
+    public static final RouteRef UPDATES = RouteRef.of("web.cable.updates", "/updates");
 
     /// The Stimulus identifier the controller is registered under. [#source]
     /// writes it, the application registers it, and neither should have to
@@ -224,7 +225,7 @@ public final class Cable implements AutoCloseable {
     /// else is this package's and is now said once:
     ///
     /// ```
-    /// Features.of(Routes.of(), Cable.feature(cable, Topics.fixed("symbols")));
+    /// Features.of(Router.of(), cable.feature(Topics.fixed("symbols")));
     /// ```
     ///
     /// That includes [#close()]. The application still holds this cable and
@@ -236,7 +237,7 @@ public final class Cable implements AutoCloseable {
                 .from(Bundled.of(Cable.class, ASSETS))
                 .pin(MODULE, FILE)
                 .body((assets, routes, out) -> source(routes.path(UPDATES)).write(out))
-                .get(UPDATES, "/updates", stream(topics))
+                .get(UPDATES, stream(topics))
                 .closing(this);
     }
 

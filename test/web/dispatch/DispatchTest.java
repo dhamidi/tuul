@@ -2,95 +2,193 @@ package web.dispatch;
 
 import harness.Check;
 import java.util.List;
-import java.util.Map;
+import web.IDParameter;
+import web.Parameter;
+import web.Responses;
+import web.RouteRef;
+import web.Router;
+import web.StringParameter;
+import web.serve.Memory;
 
-/// A router is two claims about one definition: that it recognises the URLs it
-/// builds, and that it builds the URLs it recognises. Most of these tests are
-/// about keeping those two honest; the rest are about the answers a router
-/// gives when a request is nearly right, which is where routers are usually
-/// careless.
+/// Routing has one definition for dispatch and links. These checks keep both
+/// directions together and exercise typed path parameters at that boundary.
 public final class DispatchTest {
+
+    private static final StringParameter NAME = new StringParameter("name");
+    private static final StringParameter MEMBER = new StringParameter("member");
+    private static final IDParameter ID = new IDParameter("id");
+
+    private static final RouteRef SYMBOLS = RouteRef.of("symbols", "/symbols");
+    private static final RouteRef SYMBOL = RouteRef.of("symbol", "/symbols/{name}", NAME);
+    private static final RouteRef MEMBER_ROUTE = RouteRef.of(
+            "member", "/symbols/{name}/members/{member}", NAME, MEMBER);
+    private static final RouteRef INDEX = RouteRef.of("index", "/index");
 
     private DispatchTest() {}
 
-    public static void run() {
+    public static void run() throws Exception {
         recognising();
         constructing();
-        roundTrip();
+        dispatching();
+        typed();
         methods();
         ordering();
+        mounting();
         refusing();
         encoding();
-        mounting();
     }
 
-    /// A mounted table keeps both directions honest under its prefix, and keeps
-    /// its names.
-    private static void mounting() {
-        var feature = Router.of()
-                .get("cable.updates", "/updates")
-                .get("cable.one", "/updates/{id}")
-                .post("cable.send", "/updates");
-        var host = Router.of().get("home", "/").get("search", "/search");
-
-        var mounted = host.mount("/live", feature);
-        Check.equal("a mounted route is recognised under its prefix", "cable.updates",
-                nameOf(mounted.recognise("GET", "/live/updates")));
-        Check.equal("and its path is built from the name it always had", "/live/updates",
-                mounted.path("cable.updates"));
-        Check.equal("variables survive the move", "/live/updates/7",
-                mounted.path("cable.one", Map.of("id", "7")));
-        Check.equal("and are read back out again", "7",
-                valueOf(mounted.recognise("GET", "/live/updates/7"), "id"));
-        Check.equal("the method is not changed by the move", "cable.send",
-                nameOf(mounted.recognise("POST", "/live/updates")));
-        Check.that("the host keeps its own routes", mounted.route("home").isPresent());
-        Check.equal("which are not moved", "/", mounted.path("home"));
-        Check.that("and the unprefixed path of a mounted route is gone",
-                mounted.recognise("GET", "/updates") instanceof Recognised.NotFound);
-
-        Check.equal("mounting at the root leaves paths alone", "/updates",
-                Router.of().mount("", feature).path("cable.updates"));
-        Check.equal("and so does mounting at a bare slash", "/updates",
-                Router.of().mount("/", feature).path("cable.updates"));
-
-        // A prefix and a root template must not make `//`, which is a
-        // different path to everything that reads one.
-        var rooted = Router.of().get("blog.home", "/").get("blog.post", "/{slug}");
-        Check.equal("a mounted root is the prefix itself", "/blog",
-                Router.of().mount("/blog", rooted).path("blog.home"));
-        Check.equal("even when the prefix was written with a trailing slash", "/blog",
-                Router.of().mount("/blog/", rooted).path("blog.home"));
-        Check.equal("and what is under it has one separator", "/blog/hello",
-                Router.of().mount("/blog", rooted).path("blog.post", Map.of("slug", "hello")));
-        Check.equal("which is the path that is recognised", "blog.home",
-                nameOf(Router.of().mount("/blog", rooted).recognise("GET", "/blog")));
-
-        // The collision is the reason mount does not rename: two answers to
-        // path("home") is worse than none, so it is refused rather than
-        // resolved to whichever arrived first.
-        var clash = Router.of().get("home", "/");
-        var collision = refused(() -> Router.of().get("home", "/").mount("/blog", clash));
-        Check.that("mounting a name the host already has is refused: " + collision,
-                collision.contains("home"));
-        Check.that("and the message says which mount found it: " + collision,
-                collision.contains("/blog"));
-        Check.that("a prefix that is not a path is refused",
-                refused(() -> Router.of().mount("blog", clash)).contains("starts with /"));
-
-        // Two features that happen to agree on a name are the same mistake.
-        Check.that("two mounted tables cannot share a name",
-                !refused(() -> Router.of().mount("/a", clash).mount("/b", clash)).isEmpty());
+    private static Router routes() {
+        return Router.of().get(SYMBOLS).get(SYMBOL).get(MEMBER_ROUTE).delete(SYMBOL).post(INDEX);
     }
 
-    /// The message from a route table that refused something, or empty if it
-    /// did not refuse.
-    private static String refused(Runnable mistake) {
-        try {
-            mistake.run();
-            return "";
-        } catch (DispatchException refused) {
-            return refused.getMessage();
+    private static void recognising() {
+        var routes = routes();
+        var found = routes.recognise("GET", "/symbols/json.Json");
+        Check.equal("a path is recognised as its route", "symbol", nameOf(found));
+        Check.equal("raw values survive recognition", "json.Json", valueOf(found, "name"));
+        Check.equal("a route with no variables needs none", "symbols",
+                nameOf(routes.recognise("GET", "/symbols")));
+        Check.that("a missing path is not found",
+                routes.recognise("GET", "/nothing") instanceof Recognised.NotFound);
+        Check.that("a value cannot swallow its separator",
+                routes.recognise("GET", "/symbols/x/members") instanceof Recognised.NotFound);
+    }
+
+    private static void constructing() {
+        var routes = routes();
+        Check.equal("a reference builds its path", "/symbols/json.Json",
+                routes.path(SYMBOL.with(NAME, "json.Json")));
+        Check.equal("a route with no values builds directly", "/symbols", routes.path(SYMBOLS));
+        Check.equal("each typed binding fills one variable", "/symbols/json.Json/members/text",
+                routes.path(MEMBER_ROUTE.with(NAME, "json.Json").with(MEMBER, "text")));
+        Check.throwing("an unbound value is refused", () -> routes.path(SYMBOL));
+        Check.throwing("an unknown reference is refused",
+                () -> routes.path(RouteRef.of("unknown", "/unknown")));
+    }
+
+    private static void dispatching() throws Exception {
+        var post = RouteRef.of("post", "/posts/{id}", ID);
+        var router = Router.of().get(post, (request, response) ->
+                Responses.text("post=" + ID.get(request), response));
+        Check.equal("the router calls the matching handler", "post=7",
+                Memory.handle(router, Memory.get("/posts/7")).text());
+        Check.equal("the same router returns 404", 404,
+                Memory.handle(router, Memory.get("/elsewhere")).status());
+
+        var orphan = Router.of().get(post).otherwise((request, response) ->
+                Responses.text("missing " + Router.route(request).orElseThrow().name(), response));
+        Check.equal("a defined route without a handler reaches otherwise", "missing post",
+                Memory.handle(orphan, Memory.get("/posts/7")).text());
+    }
+
+    private static void typed() throws Exception {
+        var post = RouteRef.of("post", "/posts/{id}", ID);
+        var router = Router.of().get(post, (request, response) -> Responses.text(ID.get(request).toString(), response));
+        Check.equal("an ID is parsed before the handler", "42",
+                Memory.handle(router, Memory.get("/posts/42")).text());
+        Check.equal("an invalid ID does not match the route", 404,
+                Memory.handle(router, Memory.get("/posts/nope")).status());
+        Check.equal("a non-positive ID does not match the route", 404,
+                Memory.handle(router, Memory.get("/posts/0")).status());
+
+        Parameter<Slug> slug = new SlugParameter("slug");
+        var article = RouteRef.of("article", "/articles/{slug}", slug);
+        var custom = Router.of().get(article, (request, response) ->
+                Responses.text(slug.get(request).value(), response));
+        Check.equal("an application parameter parses its own type", "hello-world",
+                Memory.handle(custom, Memory.get("/articles/hello-world")).text());
+        Check.equal("its refusal constrains the route", 404,
+                Memory.handle(custom, Memory.get("/articles/Hello")).status());
+    }
+
+    private record Slug(String value) {}
+
+    private record SlugParameter(String name) implements Parameter<Slug> {
+        @Override
+        public Slug parse(String text) {
+            if (!text.matches("[a-z0-9-]+")) throw new IllegalArgumentException();
+            return new Slug(text);
+        }
+
+        @Override
+        public String format(Slug slug) {
+            return slug.value();
+        }
+    }
+
+    private static void methods() throws Exception {
+        var routes = routes();
+        Check.equal("HEAD uses the GET route", "GET", methodOf(routes.recognise("HEAD", "/symbols/x")));
+        var wrong = routes.recognise("PUT", "/symbols/x");
+        Check.that("a wrong method is not a 404", wrong instanceof Recognised.NotAllowed);
+        Check.equal("Allow includes every method and HEAD", List.of("DELETE", "GET", "HEAD"), allowedBy(wrong));
+
+        var answered = Memory.handle(Router.of().post(INDEX, (request, response) -> {}), Memory.get("/index"));
+        Check.equal("dispatch returns 405 for a wrong method", 405, answered.status());
+        Check.equal("dispatch writes Allow", "POST", answered.header("Allow").orElse(""));
+    }
+
+    private static void ordering() {
+        var variable = RouteRef.of("symbol", "/symbols/{name}", NAME);
+        var fixed = RouteRef.of("new", "/symbols/new");
+        for (var router : List.of(Router.of().get(variable).get(fixed), Router.of().get(fixed).get(variable))) {
+            Check.equal("fixed text wins regardless of definition order", "new",
+                    nameOf(router.recognise("GET", "/symbols/new")));
+        }
+        Check.equal("the table exposes recognition order", "new",
+                Router.of().get(variable).get(fixed).routes().getFirst().name());
+
+        var create = RouteRef.of("create", "/symbols/new");
+        var falling = Router.of().post(create).get(variable);
+        Check.equal("a specific route with the wrong method does not hide a matching route", "symbol",
+                nameOf(falling.recognise("GET", "/symbols/new")));
+    }
+
+    private static void mounting() throws Exception {
+        var updates = RouteRef.of("cable.updates", "/updates");
+        var one = RouteRef.of("cable.one", "/updates/{id}", ID);
+        var feature = Router.of().get(updates, (request, response) -> Responses.text("live", response)).get(one);
+        var home = RouteRef.of("home", "/");
+        var mounted = Router.of().get(home).mount("/live", feature);
+
+        Check.equal("a mounted reference builds under its prefix", "/live/updates", mounted.path(updates));
+        Check.equal("a mounted typed reference keeps its value", "/live/updates/7",
+                mounted.path(one.with(ID, 7L)));
+        Check.equal("a mounted handler answers there", "live",
+                Memory.handle(mounted, Memory.get("/live/updates")).text());
+        Check.equal("its old path is gone", 404, Memory.handle(mounted, Memory.get("/updates")).status());
+        Check.equal("the host route stays where it was", "/", mounted.path(home));
+        Check.throwing("a mount prefix is a path", () -> Router.of().mount("live", feature));
+    }
+
+    private static void refusing() {
+        Check.throwing("an unreadable URI template is refused",
+                () -> RouteRef.of("search", "/search{?q}", new StringParameter("q")));
+        Check.throwing("a broken template is refused", () -> RouteRef.of("broken", "/{id", ID));
+        Check.throwing("a route needs a name", () -> RouteRef.of("", "/"));
+        Check.throwing("every template variable needs a parameter",
+                () -> RouteRef.of("post", "/posts/{id}"));
+        Check.throwing("extra parameters are refused", () -> RouteRef.of("home", "/", ID));
+        Check.throwing("parameter order follows template order",
+                () -> RouteRef.of("member", "/{name}/{member}", MEMBER, NAME));
+        Check.throwing("an invalid typed value cannot build a path",
+                () -> RouteRef.of("post", "/posts/{id}", ID).with(ID, 0L));
+        Check.throwing("one name cannot mean two paths", () -> Router.of()
+                .get(RouteRef.of("same", "/a"))
+                .get(RouteRef.of("same", "/b")));
+        Check.throwing("the same method cannot be defined twice", () -> Router.of().get(SYMBOL).get(SYMBOL));
+    }
+
+    private static void encoding() {
+        var routes = routes();
+        Check.equal("a slash in a value is encoded", "/symbols/a%2Fb",
+                routes.path(SYMBOL.with(NAME, "a/b")));
+        Check.equal("an encoded slash is decoded", "a/b",
+                valueOf(routes.recognise("GET", "/symbols/a%2Fb"), "name"));
+        for (var value : List.of("a b", "50%", "")) {
+            Check.equal("a value survives a build-recognise round trip: " + value, value,
+                    valueOf(routes.recognise("GET", routes.path(SYMBOL.with(NAME, value))), "name"));
         }
     }
 
@@ -98,220 +196,15 @@ public final class DispatchTest {
         return recognised instanceof Recognised.Match match ? match.route().name() : String.valueOf(recognised);
     }
 
-    /// What a recognition found, as something a check can compare. A wrong
-    /// outcome then reads as one failed check naming what came instead, rather
-    /// than a cast that throws and takes every test after it down with it.
-    private static String routeOf(Recognised found) {
-        return found instanceof Recognised.Match match ? match.route().name() : String.valueOf(found);
+    private static String methodOf(Recognised recognised) {
+        return recognised instanceof Recognised.Match match ? match.route().method() : String.valueOf(recognised);
     }
 
-    private static String methodOf(Recognised found) {
-        return found instanceof Recognised.Match match ? match.route().method() : String.valueOf(found);
+    private static String valueOf(Recognised recognised, String name) {
+        return recognised instanceof Recognised.Match match ? match.value(name) : String.valueOf(recognised);
     }
 
-    private static Map<String, String> variablesOf(Recognised found) {
-        return found instanceof Recognised.Match match ? match.variables() : Map.of();
-    }
-
-    private static String valueOf(Recognised found, String name) {
-        return found instanceof Recognised.Match match ? match.value(name) : String.valueOf(found);
-    }
-
-    private static List<String> allowedBy(Recognised found) {
-        return found instanceof Recognised.NotAllowed refused ? refused.allowed() : List.of();
-    }
-
-    private static String pathOf(Recognised found) {
-        return switch (found) {
-            case Recognised.NotFound(var ignored, var path) -> path;
-            case Recognised.NotAllowed(var ignored, var path, var allowed) -> path;
-            case Recognised.Match match -> String.valueOf(match);
-        };
-    }
-
-    /// The table an application would write.
-    private static Router routes() {
-        return Router.of()
-                .get("symbols", "/symbols")
-                .get("symbol", "/symbols/{name}")
-                .get("member", "/symbols/{name}/members/{member}")
-                .delete("symbol", "/symbols/{name}")
-                .post("index", "/index");
-    }
-
-    private static void recognising() {
-        var routes = routes();
-
-        var found = routes.recognise("GET", "/symbols/json.Json");
-        Check.equal("a path that is a route is recognised as that route", "symbol", routeOf(found));
-        Check.equal("and says what the path was carrying", Map.of("name", "json.Json"), variablesOf(found));
-        Check.equal("which can be read by name", "json.Json", valueOf(found, "name"));
-        var symbol = new Recognised.Match(routes.route("symbol").orElseThrow(), Map.of("name", "json.Json"));
-        Check.throwing("but not by a name the route has not got", () -> symbol.value("nope"));
-
-        var several = routes.recognise("GET", "/symbols/json.Json/members/text");
-        Check.equal("every variable in the path comes back",
-                Map.of("name", "json.Json", "member", "text"),
-                variablesOf(several));
-
-        Check.equal("a route with no variables needs none", "symbols", routeOf(routes.recognise("GET", "/symbols")));
-
-        var missing = routes.recognise("GET", "/nothing/here");
-        Check.that("a path that is no route at all is not found", missing instanceof Recognised.NotFound);
-        Check.equal("and the answer says what was asked for", "/nothing/here", pathOf(missing));
-
-        Check.that("a value cannot swallow the separator that ends it",
-                routes.recognise("GET", "/symbols/json.Json/members") instanceof Recognised.NotFound);
-        Check.that("a query is not part of a route, and has to be off the path before asking",
-                routes.recognise("GET", "/symbols?q=json") instanceof Recognised.NotFound);
-    }
-
-    private static void constructing() {
-        var routes = routes();
-
-        Check.equal("a URL is built from the name and the values",
-                "/symbols/json.Json",
-                routes.path("symbol", Map.of("name", "json.Json")));
-        Check.equal("a route with no variables needs no values", "/symbols", routes.path("symbols"));
-        Check.equal("and every variable is filled",
-                "/symbols/json.Json/members/text",
-                routes.path("member", Map.of("name", "json.Json", "member", "text")));
-
-        Check.throwing("a name that is not a route is refused", () -> routes.path("nope"));
-        Check.throwing("and so is a value that was not given",
-                () -> routes.path("member", Map.of("name", "json.Json")));
-        Check.throwing("a null value counts as not given",
-                () -> routes.path("symbol", java.util.Collections.singletonMap("name", null)));
-
-        try {
-            routes.path("member", Map.of("name", "json.Json"));
-        } catch (DispatchException e) {
-            Check.that("and the failure names the variable and the route: " + e.getMessage(),
-                    e.getMessage().contains("member") && e.getMessage().contains("/symbols/{name}/members/{member}"));
-        }
-    }
-
-    /// The claim worth testing above all the others: what a router builds, it
-    /// recognises, and what it recognises gives back what built it.
-    private static void roundTrip() {
-        var routes = routes();
-        var values = Map.of("name", "java.lang.String", "member", "substring");
-
-        for (var route : List.of("symbol", "member", "symbols")) {
-            var path = routes.path(route, values);
-            var found = routes.recognise("GET", path);
-            Check.equal(route + " builds a path its own router recognises: " + path, route, routeOf(found));
-            for (var variable : variablesOf(found).entrySet()) {
-                Check.equal("and " + route + " gives back the " + variable.getKey() + " it was built with",
-                        values.get(variable.getKey()),
-                        variable.getValue());
-            }
-        }
-    }
-
-    private static void methods() {
-        var routes = routes();
-
-        Check.equal("HEAD is answered by the GET route, without the table saying so twice",
-                "GET",
-                methodOf(routes.recognise("HEAD", "/symbols/json.Json")));
-
-        Check.equal("a method the route table spells differently still arrives",
-                "symbols",
-                routeOf(routes.recognise("get", "/symbols")));
-
-        var wrong = routes.recognise("PUT", "/symbols/json.Json");
-        Check.that("a path that is a route but not with this method is not a 404",
-                wrong instanceof Recognised.NotAllowed);
-        Check.equal("and the answer carries what is allowed, HEAD included",
-                List.of("DELETE", "GET", "HEAD"),
-                allowedBy(wrong));
-
-        var post = routes.recognise("GET", "/index");
-        Check.that("a POST-only route does not answer GET", post instanceof Recognised.NotAllowed);
-        Check.equal("and offers only what it has", List.of("POST"), allowedBy(post));
-    }
-
-    /// More than one route can match. The rule is fixed text first, then fewer
-    /// variables, then whoever was written first — so a table can be reordered
-    /// without changing what it does.
-    private static void ordering() {
-        var literalLast = Router.of().get("symbol", "/symbols/{name}").get("new", "/symbols/new");
-        var literalFirst = Router.of().get("new", "/symbols/new").get("symbol", "/symbols/{name}");
-
-        for (var routes : List.of(literalLast, literalFirst)) {
-            Check.equal("fixed text wins over a variable, whichever was written first",
-                    "new",
-                    routeOf(routes.recognise("GET", "/symbols/new")));
-        }
-        Check.equal("and the table reads most specific first",
-                "new",
-                literalLast.routes().getFirst().name());
-
-        var first = Router.of().get("left", "/a/{x}").get("right", "/{y}/b");
-        var other = Router.of().get("right", "/{y}/b").get("left", "/a/{x}");
-        Check.equal("two routes that are equally specific go in the order they were written",
-                "left",
-                routeOf(first.recognise("GET", "/a/b")));
-        Check.equal("which is the only thing that can settle it",
-                "right",
-                routeOf(other.recognise("GET", "/a/b")));
-
-        var falling = Router.of().post("create", "/symbols/new").get("symbol", "/symbols/{name}");
-        var through = falling.recognise("GET", "/symbols/new");
-        Check.equal("a more specific route that refuses the method does not stop a less specific one",
-                "symbol",
-                routeOf(through));
-        Check.equal("which then reads the path as what it is", "new", valueOf(through, "name"));
-    }
-
-    /// A route table is refused where it is written, not where it is used.
-    private static void refusing() {
-        Check.throwing("a query cannot be recognised, so a route may not be built on one",
-                () -> Router.of().get("search", "/search{?q}"));
-        Check.throwing("nor can a reserved expansion", () -> Router.of().get("proxy", "/proxy/{+url}"));
-        Check.throwing("nor an explode", () -> Router.of().get("many", "/things/{ids*}"));
-        Check.throwing("nor a prefix, which throws away what it would give back",
-                () -> Router.of().get("short", "/things/{id:4}"));
-        Check.throwing("a template that is not a template is refused too",
-                () -> Router.of().get("broken", "/things/{id"));
-        Check.throwing("a route needs a name", () -> Router.of().get("", "/things"));
-        Check.throwing("and a method", () -> Router.of().route("things", " ", "/things"));
-
-        try {
-            Router.of().get("search", "/search{?q}");
-        } catch (DispatchException e) {
-            Check.that("and the refusal names the route and the template: " + e.getMessage(),
-                    e.getMessage().contains("search") && e.getMessage().contains("/search{?q}"));
-        }
-
-        Check.throwing("one name cannot mean two URLs",
-                () -> Router.of().get("symbol", "/symbols/{name}").get("symbol", "/types/{name}"));
-        Check.equal("but one name can mean one URL under several methods",
-                "symbol",
-                routeOf(Router.of().get("symbol", "/symbols/{name}").delete("symbol", "/symbols/{name}")
-                        .recognise("DELETE", "/symbols/x")));
-        Check.throwing("and the same route twice is a copy that was not finished",
-                () -> Router.of().get("symbol", "/symbols/{name}").get("symbol", "/symbols/{name}"));
-    }
-
-    /// The encoding is what makes recognition honest: a value cannot contain
-    /// the separator that would end it, because building the URL encoded it.
-    private static void encoding() {
-        var routes = routes();
-
-        Check.equal("a value with a slash in it is encoded on the way out",
-                "/symbols/a%2Fb",
-                routes.path("symbol", Map.of("name", "a/b")));
-        Check.equal("and decoded on the way back in",
-                "a/b",
-                valueOf(routes.recognise("GET", "/symbols/a%2Fb"), "name"));
-        Check.equal("a space survives the round trip",
-                "a b",
-                valueOf(routes.recognise("GET", routes.path("symbol", Map.of("name", "a b"))), "name"));
-        Check.equal("so does a name that is already full of percent signs",
-                "50%",
-                valueOf(routes.recognise("GET", routes.path("symbol", Map.of("name", "50%"))), "name"));
-        Check.equal("an empty value is a value", "", valueOf(routes.recognise("GET", "/symbols/"), "name"));
+    private static List<String> allowedBy(Recognised recognised) {
+        return recognised instanceof Recognised.NotAllowed refused ? refused.allowed() : List.of();
     }
 }

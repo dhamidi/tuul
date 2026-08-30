@@ -1,17 +1,21 @@
 package web.forms;
 
 import java.io.IOException;
-import java.time.LocalDate;
-import java.time.format.DateTimeParseException;
 import java.util.ArrayList;
 import java.util.LinkedHashMap;
 import java.util.List;
+import java.util.Map;
 import java.util.function.Predicate;
 import json.Json;
+import jsonschema.Schema;
+import jsonschema.Unit;
 import web.Middlewares;
+import web.Parameter;
 import web.Parameters;
 import web.Request;
 import web.Requests;
+import web.RouteRef;
+import web.Router;
 
 /// A form, defined once and used three times: to draw itself, to read what
 /// somebody sent, and to draw itself again with what they sent still in it.
@@ -22,14 +26,16 @@ import web.Requests;
 ///         .with(Field.checkbox("all").label("Include private members"));
 ///
 /// var submission = form.capture(request);
-/// if (!submission.ok()) Forms.reject(Views.page(submission), response);
+/// if (submission.ok()) Notes.save(submission);
+/// else Forms.reject(Views.page(submission), response);
 /// ```
 ///
 /// The definition is also the allowlist. A parameter nobody declared is not
 /// captured, so a field that exists in a database and not in the form cannot be
 /// set by somebody who guesses its name — which is the whole of what Rails
 /// spent years learning to call strong parameters.
-public record Form(String name, String action, String method, List<Field> fields, List<Check> checks) {
+public record Form(String name, String action, String method, List<Field> fields, List<Check> checks,
+                   Schema validation) {
 
     /// A rule about the submission as a whole, attached to the field it should
     /// be shown beside. Two dates in the wrong order are nobody's fault
@@ -46,13 +52,23 @@ public record Form(String name, String action, String method, List<Field> fields
     }
 
     public static Form at(String action) {
-        return new Form("form", action, "post", List.of(), List.of());
+        return new Form("form", action, "post", List.of(), List.of(), null);
+    }
+
+    /// A form whose action is a named route. The router applies any mount
+    /// prefix when it builds the action.
+    public static Form at(Router router, RouteRef action) {
+        return at(router.path(action));
     }
 
     /// A form with a name of its own, which is what an id is built from when a
     /// page holds more than one.
     public static Form named(String name, String action) {
-        return new Form(name, action, "post", List.of(), List.of());
+        return new Form(name, action, "post", List.of(), List.of(), null);
+    }
+
+    public static Form named(String name, Router router, RouteRef action) {
+        return named(name, router.path(action));
     }
 
     public Form get() {
@@ -67,19 +83,26 @@ public record Form(String name, String action, String method, List<Field> fields
     /// because a browser can send nothing else, and carries the parameter that
     /// says what it meant — see [web.Middlewares#methodOverride].
     public Form method(String method) {
-        return new Form(name, action, method.toLowerCase(java.util.Locale.ROOT), fields, checks);
+        return new Form(name, action, method.toLowerCase(java.util.Locale.ROOT), fields, checks, validation);
     }
 
     public Form with(Field... added) {
         var next = new ArrayList<>(fields);
         next.addAll(List.of(added));
-        return new Form(name, action, method, next, checks);
+        return new Form(name, action, method, next, checks, validation);
     }
 
     public Form check(String field, String message, Predicate<Json.Object> ok) {
         var next = new ArrayList<>(checks);
         next.add(new Check(field, message, ok));
-        return new Form(name, action, method, fields, next);
+        return new Form(name, action, method, fields, next, validation);
+    }
+
+    /// Applies a compiled JSON Schema after every field and form check passes.
+    /// Errors at a top-level property appear beside that field. Other errors
+    /// appear as form problems.
+    public Form schema(Schema schema) {
+        return new Form(name, action, method, fields, checks, schema);
     }
 
     public Field field(String name) {
@@ -105,7 +128,7 @@ public record Form(String name, String action, String method, List<Field> fields
 
     /// An empty form, for the request that is only asking to see one.
     public Submission blank() {
-        return new Submission(this, Parameters.NONE, Json.Object.of(), List.of(), List.of());
+        return new Submission(this, Parameters.NONE, Json.Object.of(), Map.of(), List.of(), List.of());
     }
 
     /// A form filled in with what is already there, for editing something that
@@ -113,12 +136,23 @@ public record Form(String name, String action, String method, List<Field> fields
     /// sent, so that rendering has only one thing to read.
     public Submission showing(Json.Object values) {
         var text = new LinkedHashMap<String, List<String>>();
+        var parsed = new LinkedHashMap<String, Object>();
         for (var field : fields) {
             var value = values.get(field.name());
             if (value == null || value instanceof Json.Null) continue;
-            text.put(field.name(), texts(value));
+            var submitted = texts(value);
+            text.put(field.name(), submitted);
+            try {
+                parsed.put(field.name(), field.multiple()
+                        ? submitted.stream().map(item -> typed(field.parameter(), item)).toList()
+                        : typed(field.parameter(), submitted.getFirst()));
+            } catch (IllegalArgumentException invalid) {
+                // `showing` still renders application-owned JSON that does not
+                // round-trip through the declared parameter. `capture` is the
+                // operation that validates client input.
+            }
         }
-        return new Submission(this, new Parameters(text), values, List.of(), List.of());
+        return new Submission(this, new Parameters(text), values, parsed, List.of(), List.of());
     }
 
     /// Reads a request against this form, taking the parameters the way
@@ -148,29 +182,33 @@ public record Form(String name, String action, String method, List<Field> fields
     ///    unticked box send `0` is written before the box itself.
     public Submission capture(Parameters submitted) {
         var values = Json.Object.of();
+        var parsed = new LinkedHashMap<String, Object>();
         var problems = new ArrayList<Problem>();
         for (var field : fields) {
             var captured = read(field, submitted, problems);
-            if (captured != null) values = values.with(field.name(), captured);
+            if (captured == null) continue;
+            values = values.with(field.name(), captured.json());
+            parsed.put(field.name(), captured.value());
         }
         if (problems.isEmpty()) verify(values, problems);
-        return new Submission(this, submitted, values, problems, ignored(submitted));
+        if (problems.isEmpty() && validation != null) validate(values, problems);
+        return new Submission(this, submitted, values, parsed, problems, ignored(submitted));
     }
 
     /// The value of one field, or null when there is none to keep. Problems are
     /// added as they are found.
-    private Json read(Field field, Parameters submitted, List<Problem> problems) {
-        if (field.kind() == Field.Kind.BOOLEAN) return ticked(field, submitted, problems);
+    private Captured read(Field field, Parameters submitted, List<Problem> problems) {
+        if (field.widget() == Field.Widget.CHECKBOX) return ticked(field, submitted, problems);
 
         var texts = field.multiple() ? submitted.all(field.name()) : submitted.first(field.name()).stream().toList();
         var answered = texts.stream().anyMatch(text -> !text.isBlank());
         if (!answered) {
             if (field.mandatory()) problems.add(Problem.of(field.name(), "is required"));
-            var kept = field.kind() == Field.Kind.TEXT && submitted.has(field.name());
+            var kept = field.parameter().keepsBlank() && submitted.has(field.name());
             return kept && !field.mandatory() ? empty(field) : null;
         }
 
-        var values = new ArrayList<Json>();
+        var values = new ArrayList<Captured>();
         for (var text : texts) {
             var value = coerce(field, text);
             if (value == null) {
@@ -179,9 +217,12 @@ public record Form(String name, String action, String method, List<Field> fields
             }
             values.add(value);
         }
-        var captured = field.multiple() ? Json.Array.of(values) : values.getFirst();
+        var captured = field.multiple()
+                ? new Captured(Json.Array.of(values.stream().map(Captured::json).toList()),
+                        values.stream().map(Captured::value).toList())
+                : values.getFirst();
         for (var rule : field.rules()) {
-            var problem = rule.check(captured);
+            var problem = rule.check(captured.json());
             if (problem.isPresent()) {
                 problems.add(Problem.of(field.name(), problem.get()));
                 return captured;
@@ -190,46 +231,51 @@ public record Form(String name, String action, String method, List<Field> fields
         return captured;
     }
 
-    private static Json empty(Field field) {
-        return field.multiple() ? Json.Array.of(List.of(Json.of(""))) : Json.of("");
+    private static Captured empty(Field field) {
+        var empty = parsed(field.parameter(), "");
+        return field.multiple()
+                ? new Captured(Json.Array.of(List.of(empty.json())), List.of(empty.value()))
+                : empty;
     }
 
     /// A checkbox says yes by being there. The last value wins so that the
     /// hidden `0` written in front of it is only the answer when the box itself
     /// sent nothing.
-    private static Json ticked(Field field, Parameters submitted, List<Problem> problems) {
+    private static Captured ticked(Field field, Parameters submitted, List<Problem> problems) {
         var values = submitted.all(field.name());
         var ticked = !values.isEmpty() && !NO.contains(values.getLast().strip().toLowerCase(java.util.Locale.ROOT));
         if (field.mandatory() && !ticked) problems.add(Problem.of(field.name(), "must be checked"));
-        return Json.of(ticked);
+        return parsed(field.parameter(), ticked ? "1" : "0");
     }
 
     private static final List<String> NO = List.of("", "0", "false", "off", "no");
 
-    /// The text as the kind it claims to be, or null if it is not one.
-    private static Json coerce(Field field, String text) {
-        var value = text.strip();
+    /// The text as the parameter type, or null if it is not one.
+    private static Captured coerce(Field field, String text) {
         try {
-            return switch (field.kind()) {
-                case TEXT -> Json.of(text);
-                case NUMBER -> Json.of(Long.parseLong(value));
-                case DECIMAL -> Json.of(Double.parseDouble(value));
-                case DATE -> Json.of(LocalDate.parse(value).toString());
-                case BOOLEAN -> Json.of(!NO.contains(value.toLowerCase(java.util.Locale.ROOT)));
-            };
-        } catch (NumberFormatException | DateTimeParseException notThat) {
+            return parsed(field.parameter(), text);
+        } catch (IllegalArgumentException notThat) {
             return null;
         }
     }
 
     private static String unparseable(Field field) {
-        return switch (field.kind()) {
-            case NUMBER -> "must be a whole number";
-            case DECIMAL -> "must be a number";
-            case DATE -> "must be a date, as YYYY-MM-DD";
-            case TEXT, BOOLEAN -> "is not valid";
-        };
+        return field.parameter().invalid();
     }
+
+    @SuppressWarnings("unchecked")
+    private static <T> Captured parsed(Parameter<?> parameter, String text) {
+        var typed = (Parameter<T>) parameter;
+        var value = typed.parse(text);
+        return new Captured(typed.json(value), value);
+    }
+
+    @SuppressWarnings("unchecked")
+    private static <T> T typed(Parameter<?> parameter, String text) {
+        return ((Parameter<T>) parameter).parse(text);
+    }
+
+    private record Captured(Json json, Object value) {}
 
     /// The checks that are about more than one field. They are only asked when
     /// every field is otherwise fine: telling somebody their passwords do not
@@ -238,6 +284,31 @@ public record Form(String name, String action, String method, List<Field> fields
         for (var check : checks) {
             if (!check.ok().test(values)) problems.add(Problem.of(check.field(), check.message()));
         }
+    }
+
+    private void validate(Json.Object values, List<Problem> problems) {
+        for (var unit : validation.validate(values).errors()) {
+            if (!(unit instanceof Unit.Error error)) continue;
+            problems.add(Problem.of(field(error), error.message()));
+        }
+    }
+
+    private String field(Unit.Error error) {
+        var location = error.at().instanceLocation();
+        if (location.startsWith("/") && location.length() > 1) {
+            var end = location.indexOf('/', 1);
+            var field = pointer(location.substring(1, end < 0 ? location.length() : end));
+            if (has(field)) return field;
+        }
+        if (error.params() instanceof Json.Object params) {
+            var missing = params.string("missingProperty", "");
+            if (has(missing)) return missing;
+        }
+        return "";
+    }
+
+    private static String pointer(String token) {
+        return token.replace("~1", "/").replace("~0", "~");
     }
 
     /// What arrived and was not asked for. Not a problem — a form is submitted

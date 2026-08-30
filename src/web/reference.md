@@ -131,29 +131,33 @@ redirect. A route that needs a browser redirect can test
 
 ### Routing
 
-`web.dispatch.Router` is the route table. Create it with `Router.of()` and add
-routes with `route`, `get`, `post`, `put`, `patch`, `delete`, or `with(Route)`.
-`Route.of(name, method, template)` creates a route. Route names must be unique
-for a template, and a name/method pair cannot repeat.
+`RouteRef.of(name, template, parameters...)` defines a named route. Each URI
+template variable has one `Parameter<?>` with the same name and in the same
+order. Bind a value with `reference.with(parameter, value)`.
+
+`Router.of()` creates an immutable handler. Add routes with `route`, `get`,
+`post`, `put`, `patch`, or `delete`. The overload that accepts a handler defines
+and binds the route in one call. `on(reference, handler)` binds a route that was
+defined earlier.
 
 `recognise(method, path)` returns:
 
-- `Recognised.Match(route, variables)` for a method and path match;
+- `Recognised.Match(route, variables, parameters)` for a method and path match;
 - `Recognised.NotAllowed(method, path, allowed)` for a path with another
   method; and
 - `Recognised.NotFound(method, path)` for no path match.
 
 Methods compare uppercased. A GET route accepts HEAD. Query text is not part of
 the path. Match order is more literal text, fewer variables, then definition
-order. `path(name, variables)` expands every template variable and refuses a
-missing value. `mount(prefix, router)` moves templates under a prefix, keeps
-route names, and refuses collisions.
+order. `path(reference)` expands every bound template variable and refuses a
+missing value. `mount(prefix, router)` moves routes and handlers under a prefix,
+keeps references, and refuses collisions.
 
-`Routing.of(router)` is a handler. Add a route handler with `on(name, handler)`;
-the name must exist. Add a fallback with `otherwise(handler)`. `wrappedBy`
-adds middleware outside dispatch. `Routing.route(request)` and
-`Routing.variables(request)` read the attributes set for a matched request.
-An unhandled existing route is `404`. A wrong method is `405` with `Allow`.
+Add a fallback with `otherwise(handler)`. `wrappedBy` adds middleware outside
+dispatch. `Router.route(request)` reads the matched reference.
+`Router.params(request)` reads raw path values. `parameter.get(request)` reads
+one parsed value. An invalid typed path value does not match the route. An
+unhandled existing route is `404`. A wrong method is `405` with `Allow`.
 Middleware also sees requests that become `404`.
 
 ### Page
@@ -169,7 +173,7 @@ request and is not durable. Use an actor for durable state or work.
 `Feature` declares a named group of routes, handlers, assets, import-map pins,
 head/body contributions, middleware, and closeable resources. `Features.of(own,
 features)` rejects duplicate feature names, mounts feature routes, serves the
-asset route, composes middleware, and returns `Features.routing()`.
+asset route, composes middleware, and returns `Features.router()`.
 
 Feature order is meaningful: files are searched first-to-last, head/body
 contributions and pins are written in that order, middleware is wrapped in that
@@ -206,10 +210,12 @@ Neither defines a user model or password verification.
 
 ### Forms
 
-`Form.at(action)` and `Form.named(name, action)` create POST forms. `get`,
+`Form.at(action)` and `Form.named(name, action)` create POST forms. Their
+`Router, RouteRef` overloads resolve a named action, including its mount. `get`,
 `post`, `method`, `with`, and `check` return changed definitions. `Field` has
 constructors such as `text`, `textarea`, `password`, `email`, `url`, `search`,
-`hidden`, `number`, `decimal`, `date`, `checkbox`, and `choice`. Field modifiers
+`hidden`, `number`, `integer`, `id`, `decimal`, `date`, `checkbox`, and `choice`.
+`Field.of(parameter)` uses any `Parameter<T>` for parsing. Field modifiers
 include `label`, `hint`, `required`, `repeated`, `options`, `rule`, and `type`.
 
 `Form.capture(request)` reads normal request parameters. `capture(parameters)`
@@ -217,6 +223,11 @@ does not throw for user input. It returns a `Submission` with typed values,
 problems, ignored fields, and original submitted text. `blank` and `showing`
 create render states. `Submission.message(type)` creates an application
 message carrying values, `ok`, and problems.
+
+`Submission.value(parameter)` returns the captured Java value. `Form.schema`
+applies a compiled JSON Schema after parameter parsing and form checks pass.
+Top-level property errors appear beside that field. Other schema errors appear
+as form problems.
 
 `Rules` supplies `least`, `most`, `matching`, `email`, numeric bounds,
 `oneOf`, text predicates, and number predicates. `Forms.html` draws the whole

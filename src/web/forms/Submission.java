@@ -1,10 +1,14 @@
 package web.forms;
 
 import java.util.ArrayList;
+import java.util.Collections;
+import java.util.LinkedHashMap;
 import java.util.List;
+import java.util.Map;
 import java.util.Optional;
 import application.Message;
 import json.Json;
+import web.Parameter;
 import web.Parameters;
 
 /// What came of reading a request against a form: the values, what was wrong,
@@ -19,10 +23,12 @@ public record Submission(
         Form form,
         Parameters submitted,
         Json.Object values,
+        Map<String, Object> parsed,
         List<Problem> problems,
         List<String> ignored) {
 
     public Submission {
+        parsed = Collections.unmodifiableMap(new LinkedHashMap<>(parsed));
         problems = List.copyOf(problems);
         ignored = List.copyOf(ignored);
     }
@@ -80,6 +86,33 @@ public record Submission(
 
     public Optional<Json> value(String field) {
         return Optional.ofNullable(values.get(field));
+    }
+
+    /// The captured value as the same parameter type that parsed the field.
+    /// Returns empty when the field has no captured value.
+    public <T> Optional<T> value(Parameter<T> parameter) {
+        var field = form.fields().stream()
+                .filter(candidate -> candidate.parameter().equals(parameter))
+                .findFirst();
+        if (field.isEmpty() || field.get().multiple()) return Optional.empty();
+        return Optional.ofNullable(cast(parsed.get(parameter.name())));
+    }
+
+    /// Every captured value of a repeated field, in submission order. Returns
+    /// an empty list for a scalar field or a field with no captured value.
+    public <T> List<T> values(Parameter<T> parameter) {
+        var field = form.fields().stream()
+                .filter(candidate -> candidate.parameter().equals(parameter))
+                .findFirst();
+        if (field.isEmpty() || !field.get().multiple()) return List.of();
+        var values = parsed.get(parameter.name());
+        if (!(values instanceof List<?> list)) return List.of();
+        return list.stream().map(Submission::<T>cast).toList();
+    }
+
+    @SuppressWarnings("unchecked")
+    private static <T> T cast(Object value) {
+        return (T) value;
     }
 
     public String text(String field, String fallback) {

@@ -5,33 +5,33 @@ import java.util.Locale;
 import uritemplates.Part;
 import uritemplates.Template;
 import uritemplates.TemplateException;
+import web.RouteRef;
 
-/// A name, a method and a URI template — the whole of what a route is.
+/// One registered method of a [RouteRef].
 ///
-/// The name is what an application refers to, so that nothing writes a URL by
-/// hand: renaming a route then breaks the place that builds the URL, which a
-/// compiler or a test will find, rather than producing a 404 at run time, which
-/// only a user will.
-///
-/// The template must be one that can be read backwards, and that is checked
-/// here rather than when a request arrives. A template a router cannot
-/// recognise is a mistake in the route table, and the difference between
-/// finding it in a test and finding it in production is only where it is
-/// refused.
-public record Route(String name, String method, Template template) {
+/// The template can differ from the reference after a router mounts it. The
+/// reference keeps its identity while this template gains the mount prefix.
+public record Route(RouteRef reference, String method, Template template) {
 
     public Route {
-        if (name.isBlank()) throw new DispatchException("a route needs a name");
-        if (method.isBlank()) throw new DispatchException("route " + name + " needs a method");
+        if (method.isBlank()) throw new DispatchException("route " + reference.name() + " needs a method");
         method = method.toUpperCase(Locale.ROOT);
         if (!template.matchable()) {
-            throw new DispatchException("route " + name + " cannot be recognised: " + template.text()
+            throw new DispatchException("route " + reference.name() + " cannot be recognised: " + template.text()
                     + " — only {var} and {/var}, without modifiers, can be read backwards");
         }
     }
 
-    public static Route of(String name, String method, String template) {
-        return new Route(name, method, read(name, template));
+    public static Route of(RouteRef reference, String method) {
+        return of(reference, method, reference.template());
+    }
+
+    public static Route of(RouteRef reference, String method, String template) {
+        return new Route(reference, method, read(reference.name(), template));
+    }
+
+    public String name() {
+        return reference.name();
     }
 
     /// Whether this route answers a request made with this method. A GET route
@@ -48,7 +48,7 @@ public record Route(String name, String method, Template template) {
     }
 
     /// How many characters of the template are fixed text. More of them means a
-    /// more specific route — see [Router#recognise].
+    /// more specific route — see [Routes#recognise].
     public int literals() {
         var length = 0;
         for (var part : template.parts()) {
@@ -77,6 +77,6 @@ public record Route(String name, String method, Template template) {
 
     @Override
     public String toString() {
-        return method + " " + template.text() + " (" + name + ")";
+        return method + " " + template.text() + " (" + name() + ")";
     }
 }

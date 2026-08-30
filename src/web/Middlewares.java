@@ -15,8 +15,8 @@ import java.util.Set;
 /// mount prefix off the path on the way in — is gone: it moved where a request
 /// was recognised and could not move where a link was written, so an
 /// application that used it answered correctly and rendered every URL on every
-/// page wrong. [web.dispatch.Router#mount(String, Router)] moves the templates
-/// instead, which moves both. Mounting is a thing you do to a route table, not
+/// page wrong. [web.Router#mount(String, Router)] moves the routes
+/// instead, which moves both. Mounting is a thing you do to a router, not
 /// to a request.
 public final class Middlewares {
 

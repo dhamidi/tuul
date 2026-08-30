@@ -83,7 +83,7 @@ public final class Assets {
     /// file tuul has ever shipped.
     ///
     /// ```
-    /// Features.of(Routes.of(), Ui.feature(), cable.feature(topics)).assets();
+    /// Features.of(Router.of(), Ui.feature(), cable.feature(topics)).assets();
     /// ```
     public static Assets standard(List<Path> loadPaths) {
         var all = new ArrayList<>(loadPaths);

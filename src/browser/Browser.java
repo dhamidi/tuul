@@ -7,7 +7,6 @@ import java.io.Writer;
 import java.nio.file.Files;
 import java.nio.file.Path;
 import java.util.List;
-import java.util.Map;
 import java.util.concurrent.ExecutorService;
 import java.util.concurrent.Executors;
 import markdown.Links;
@@ -28,7 +27,7 @@ import web.assets.Bundled;
 import web.cable.Cable;
 import web.cable.Topics;
 import web.Negotiate;
-import web.dispatch.Router;
+import web.Router;
 import web.forms.Submission;
 import web.ui.Html;
 import web.serve.Http;
@@ -152,7 +151,7 @@ public final class Browser implements AutoCloseable {
     }
 
     public Router routes() {
-        return wiring.routes();
+        return wiring.router();
     }
 
     public Assets assets() {
@@ -167,7 +166,7 @@ public final class Browser implements AutoCloseable {
     /// rather than a bare status, since somebody who mistyped a symbol name is
     /// still reading documentation and should be given the search box back.
     public Handler handler() {
-        return wiring.routing()
+        return wiring.router()
                 .on(Routes.HOME, searching())
                 .on(Routes.SEARCH, searching())
                 .on(Routes.SYMBOL, showing())
@@ -185,8 +184,8 @@ public final class Browser implements AutoCloseable {
     /// that can be shared and reloaded.
     private Page<Found> searching() {
         return Page.of(Found::nothing)
-                .on(Routes.HOME, Symbols::searched)
-                .on(Routes.SEARCH, Symbols::searched)
+                .on(Routes.HOME.name(), Symbols::searched)
+                .on(Routes.SEARCH.name(), Symbols::searched)
                 .on(Symbols.MATCHED, Symbols::matched)
                 .on("error", Symbols::unsearched)
                 .effect(Symbols.SEARCH, Symbols.searching(index, MATCHES))
@@ -211,7 +210,7 @@ public final class Browser implements AutoCloseable {
 
     private Page<Symbol> showing() {
         return Page.of(Symbol::nothing)
-                .on(Routes.SYMBOL, Symbols::asked)
+                .on(Routes.SYMBOL.name(), Symbols::asked)
                 .on(Symbols.FOUND, Symbols::found)
                 .on(Symbols.MISSING, Symbols::missing)
                 .on("error", Symbols::failed)
@@ -221,8 +220,8 @@ public final class Browser implements AutoCloseable {
 
     private Page<Documents.State> documents() {
         return Page.of(Documents.State::nothing)
-                .on(Routes.DOCUMENT_KIND, Documents::asked)
-                .on(Routes.DOCUMENT, Documents::asked)
+                .on(Routes.DOCUMENT_KIND.name(), Documents::asked)
+                .on(Routes.DOCUMENT.name(), Documents::asked)
                 .on(Documents.FOUND, Documents::found)
                 .on(Documents.MISSING, Documents::missing)
                 .on("error", Documents::failed)
@@ -277,22 +276,18 @@ public final class Browser implements AutoCloseable {
     }
 
     private String documentPath(String packageName, json.Json.Object document) {
-        var variables = new java.util.LinkedHashMap<String, Object>();
-        variables.put("name", packageName);
-        variables.put("kind", document.string("kind", ""));
         var slug = document.string("slug", "");
-        if (slug.isEmpty()) return routes().path(Routes.DOCUMENT_KIND, variables);
-        variables.put("slug", slug);
-        return routes().path(Routes.DOCUMENT, variables);
+        if (slug.isEmpty()) return routes().path(Routes.DOCUMENT_KIND
+                .with(Routes.NAME, packageName).with(Routes.KIND, document.string("kind", "")));
+        return routes().path(Routes.DOCUMENT.with(Routes.NAME, packageName)
+                .with(Routes.KIND, document.string("kind", "")).with(Routes.SLUG, slug));
     }
 
     private String documentPath(Document document) {
-        var variables = new java.util.LinkedHashMap<String, Object>();
-        variables.put("name", document.packageName());
-        variables.put("kind", document.kind());
-        if (document.slug().isEmpty()) return routes().path(Routes.DOCUMENT_KIND, variables);
-        variables.put("slug", document.slug());
-        return routes().path(Routes.DOCUMENT, variables);
+        if (document.slug().isEmpty()) return routes().path(Routes.DOCUMENT_KIND
+                .with(Routes.NAME, document.packageName()).with(Routes.KIND, document.kind()));
+        return routes().path(Routes.DOCUMENT.with(Routes.NAME, document.packageName())
+                .with(Routes.KIND, document.kind()).with(Routes.SLUG, document.slug()));
     }
 
     /// A symbol answers as a page or as the same JSON `tuul docs --json`
@@ -324,7 +319,8 @@ public final class Browser implements AutoCloseable {
     /// link claims the page exists; brackets only claim the name does.
     private markdown.Links referencing(String scope) {
         return References.of(index, scope, (symbol, member) ->
-                wiring.routes().path(Routes.SYMBOL, Map.of("name", symbol)) + (member.isEmpty() ? "" : "#" + member));
+                wiring.router().path(Routes.SYMBOL.with(Routes.NAME, symbol))
+                        + (member.isEmpty() ? "" : "#" + member));
     }
 
     /// The tree as a page. The sidebar shows it on every page; this is the same

@@ -28,7 +28,7 @@ public final class Requests {
     /// which consumes it — a handler that wants the raw bytes should take them
     /// before asking for this.
     public static Parameters params(Request request) throws IOException {
-        return Routing.variables(request).and(request.query()).and(request.form());
+        return Router.params(request).and(request.query()).and(request.form());
     }
 
     /// The message this request is, for an application to update on.
@@ -43,6 +43,6 @@ public final class Requests {
                 .with("method", request.method())
                 .with("path", request.path())
                 .with("params", params.json());
-        return Message.of(Routing.route(request).orElse(REQUEST), body);
+        return Message.of(Router.route(request).map(RouteRef::name).orElse(REQUEST), body);
     }
 }

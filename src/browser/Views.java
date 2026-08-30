@@ -8,7 +8,6 @@ import browser.Symbols.Symbol;
 import java.util.ArrayList;
 import java.util.HashMap;
 import java.util.List;
-import java.util.Map;
 import java.util.regex.Pattern;
 import json.Json;
 import markdown.Links;
@@ -17,7 +16,7 @@ import symbols.Index;
 import symbols.Catalog;
 import web.Contribution;
 import web.Features;
-import web.dispatch.Router;
+import web.Router;
 import web.forms.Forms;
 import web.forms.Submission;
 import web.ui.Attribute;
@@ -110,7 +109,7 @@ public final class Views {
     /// import map it imports through.
     public static Html page(Features wiring, String heading, Submission search,
                             List<Catalog.Root> roots, Node... content) {
-        var routes = wiring.routes();
+        var routes = wiring.router();
         return document(
                 lang("en"),
                 head(
@@ -440,8 +439,9 @@ public final class Views {
 
     private static String documentPath(Router routes, String packageName, String kind, String slug) {
         return slug.isEmpty()
-                ? routes.path(Routes.DOCUMENT_KIND, Map.of("name", packageName, "kind", kind))
-                : routes.path(Routes.DOCUMENT, Map.of("name", packageName, "kind", kind, "slug", slug));
+                ? routes.path(Routes.DOCUMENT_KIND.with(Routes.NAME, packageName).with(Routes.KIND, kind))
+                : routes.path(Routes.DOCUMENT.with(Routes.NAME, packageName).with(Routes.KIND, kind)
+                        .with(Routes.SLUG, slug));
     }
 
     /// A name held by a package is a type when its last segment is capitalised,
@@ -622,7 +622,7 @@ public final class Views {
     }
 
     private static String symbolPath(Router routes, String symbol) {
-        return routes.path(Routes.SYMBOL, Map.of("name", symbol));
+        return routes.path(Routes.SYMBOL.with(Routes.NAME, symbol));
     }
 
     private static List<String> one(Json.Object description, String key) {

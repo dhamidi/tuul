@@ -6,9 +6,15 @@ import java.util.ArrayList;
 import java.util.LinkedHashMap;
 import java.util.List;
 import json.Json;
+import jsonschema.Store;
 import web.Headers;
+import web.IntegerParameter;
+import web.Parameter;
 import web.Parameters;
 import web.Request;
+import web.RouteRef;
+import web.Router;
+import web.StringParameter;
 
 /// A form is one definition doing three jobs, and these tests are mostly about
 /// the third: that what somebody typed survives a failed submission and comes
@@ -23,6 +29,9 @@ public final class FormsTest {
         capturing();
         answering();
         coercing();
+        typedParameters();
+        routeActions();
+        schemas();
         repeating();
         checkboxes();
         allowlist();
@@ -104,6 +113,83 @@ public final class FormsTest {
         Check.equal("a decimal keeps its fraction", Json.of(1.5), right.values().get("weight"));
         Check.equal("a date is normalised to the way it is written down", Json.of("2026-08-28"),
                 right.values().get("due"));
+    }
+
+    private static void typedParameters() {
+        var count = new IntegerParameter("count");
+        Parameter<Code> code = new CodeParameter("code");
+        var form = Form.at("/x").with(Field.of(count), Field.of(code));
+
+        var captured = form.capture(submitted("count", "7", "code", "ABC-12"));
+        Check.equal("a standard parameter gives a form its typed value", 7,
+                captured.value(count).orElseThrow());
+        Check.equal("an application parameter does the same", new Code("ABC-12"),
+                captured.value(code).orElseThrow());
+        Check.equal("its default JSON shape is its formatted text", Json.of("ABC-12"),
+                captured.values().get("code"));
+
+        var wrong = form.capture(submitted("count", "seven", "code", "lower"));
+        Check.equal("a standard parser supplies its form problem", List.of("must be a whole number"),
+                wrong.problems("count"));
+        Check.equal("an application parser supplies its form problem", List.of("must be an uppercase code"),
+                wrong.problems("code"));
+
+        var repeated = Form.at("/x").with(Field.of(code).repeated())
+                .capture(submitted("code", "ABC-1", "code", "XYZ-2"));
+        Check.equal("a repeated typed field keeps every Java value",
+                List.of(new Code("ABC-1"), new Code("XYZ-2")), repeated.values(code));
+    }
+
+    private record Code(String value) {}
+
+    private record CodeParameter(String name) implements Parameter<Code> {
+        @Override
+        public Code parse(String text) {
+            if (!text.matches("[A-Z]+-[0-9]+")) throw new IllegalArgumentException();
+            return new Code(text);
+        }
+
+        @Override
+        public String format(Code code) {
+            return code.value();
+        }
+
+        @Override
+        public String invalid() {
+            return "must be an uppercase code";
+        }
+    }
+
+    private static void routeActions() {
+        var id = new IntegerParameter("id");
+        var edit = RouteRef.of("edit", "/posts/{id}/edit", id);
+        var mounted = Router.of().mount("/admin", Router.of().get(edit));
+        Check.equal("a form action follows a mounted route reference", "/admin/posts/7/edit",
+                Form.at(mounted, edit.with(id, 7)).action());
+    }
+
+    private static void schemas() {
+        var properties = Json.Object.of()
+                .with("name", Json.Object.of().with("type", "string"))
+                .with("age", Json.Object.of().with("type", "integer").with("minimum", 18));
+        var schema = Store.of().compile(Json.Object.of()
+                .with("type", "object")
+                .with("properties", properties)
+                .with("required", Json.Array.strings(List.of("name"))));
+        var form = Form.at("/people")
+                .with(Field.text("name"), Field.integer("age"))
+                .schema(schema);
+
+        var rejected = form.capture(submitted("age", "16"));
+        Check.equal("a schema property error appears beside its field", List.of("must be >= 18"),
+                rejected.problems("age"));
+        Check.equal("a schema required error appears beside the missing field",
+                List.of("must have required property 'name'"),
+                rejected.problems("name"));
+        Check.that("schema errors reject the form", !rejected.ok());
+
+        Check.that("a schema accepts parsed form JSON",
+                form.capture(submitted("name", "Ada", "age", "37")).ok());
     }
 
     private static void repeating() {

@@ -47,7 +47,7 @@ public final class UpdatesTest {
         var blank = Symbols.asked(Symbol.nothing(), request(Routes.SYMBOL, Map.of("name", "   ")));
         Check.that("a name of nothing but space is no name", blank.effects().isEmpty());
 
-        var paramless = Symbols.asked(Symbol.nothing(), Message.of(Routes.SYMBOL));
+        var paramless = Symbols.asked(Symbol.nothing(), Message.of(Routes.SYMBOL.name()));
         Check.that("nor is a message carrying no parameters at all", paramless.effects().isEmpty());
     }
 
@@ -199,9 +199,9 @@ public final class UpdatesTest {
 
     /// A request as [web.Requests] hands one to an update: the parameters
     /// merged under `params`, whatever they came from.
-    private static Message request(String route, Map<String, String> params) {
+    private static Message request(web.RouteRef route, Map<String, String> params) {
         var values = Json.Object.of();
         for (var entry : params.entrySet()) values = values.with(entry.getKey(), entry.getValue());
-        return Message.of(route, Json.Object.of().with("params", values));
+        return Message.of(route.name(), Json.Object.of().with("params", values));
     }
 }

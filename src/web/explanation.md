@@ -97,11 +97,14 @@ field-level problems back to the browser.
 
 ## Why routing is one table in two directions
 
-`Router` recognises a method and path and expands a named route into a path.
-The same template does both jobs. A route that matches the path but refuses the
-method returns `Recognised.NotAllowed` and its allowed methods. `Routing` turns
-that into a `405` with an `Allow` header. A missing path is `NotFound` and is a
-`404`.
+`Router` recognises a method and path, dispatches the handler, and expands a
+`RouteRef` into a path. The same template does both directions. A route that
+matches the path but refuses the method becomes a `405` with an `Allow` header.
+A missing path becomes a `404`.
+
+A `RouteRef` declares the parameter types in its template. Recognition parses
+them before dispatch. A parser refusal makes that route a non-match. Path
+construction uses the same parameter to format the value.
 
 Routes are sorted by fixed text, then variable count, then definition order.
 Mounting a router moves templates, not only incoming paths. That keeps the URL

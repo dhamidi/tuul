@@ -32,27 +32,25 @@
 ///
 /// ## Routing
 ///
-/// A [web.dispatch.Router] holds named routes. [web.Routing] is that router as
-/// a handler. Routes are named because a name works in both directions: it
-/// recognises a path, and it builds one.
+/// A [web.Router] binds each named [web.RouteRef] to a handler. The same router
+/// dispatches incoming requests and builds outgoing paths. A [web.Parameter]
+/// parses each path value before the handler runs.
 ///
 /// ```
-/// var routes = Router.of()
-///         .get("posts", "/posts")
-///         .get("post", "/posts/{slug}")
-///         .post("create", "/posts");
+/// var slug = new StringParameter("slug");
+/// var posts = RouteRef.of("posts", "/posts");
+/// var post = RouteRef.of("post", "/posts/{slug}", slug);
+/// var create = RouteRef.of("create", "/posts");
 ///
-/// var app = Routing.of(routes)
-///         .on("posts", Posts::index)
-///         .on("post", Posts::show)
-///         .on("create", Posts::create);
+/// var app = Router.of()
+///         .get(posts, Posts::index)
+///         .get(post, Posts::show)
+///         .post(create, Posts::create);
 /// ```
 ///
-/// A handler reads what the path carried with
-/// [web.Routing#variables(web.Request)]. It reads the name of the route that
-/// matched with [web.Routing#route(web.Request)]. Write
-/// `routes.path("post", Map.of("slug", "hello"))` for a link, and no handler
-/// writes a URL as a string.
+/// A handler reads a typed path value with [web.Parameter#get(web.Request)].
+/// Write `app.path(post.with(slug, "hello"))` for a link. A mounted router
+/// builds the mounted path from the same reference.
 ///
 /// ## Request values and answers
 ///
@@ -75,8 +73,8 @@
 /// ```
 /// var wiring = Features.of(routes, Ui.feature(), cable.feature(Topics.fixed("posts")));
 ///
-/// var app = wiring.routing()
-///         .on("posts", Posts::index)
+/// var app = wiring.router()
+///         .on(posts, Posts::index)
 ///         .otherwise(NotFound::page);
 /// ```
 ///
@@ -148,7 +146,7 @@
 ///   - [web.Request] is what arrived. [web.Response] is what a server is
 ///     writing. [web.Headers] and [web.Parameters] are the parts of both.
 ///   - [web.Responses] writes an answer. [web.Status] names the codes.
-///   - [web.Routing] dispatches. [web.Requests] turns a request into a message.
+///   - [web.Router] dispatches. [web.Requests] turns a request into a message.
 ///   - [web.Page] is a handler that is an application.
 ///
 /// ## Why a request is a record and a response is an interface

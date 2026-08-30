@@ -7,7 +7,7 @@ import java.util.HashSet;
 import java.util.List;
 import java.util.Locale;
 import json.Json;
-import web.dispatch.Router;
+import web.Router;
 import web.ui.Attributes;
 import web.ui.HtmlException;
 import web.ui.Props;

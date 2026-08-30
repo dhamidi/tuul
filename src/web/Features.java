@@ -9,19 +9,18 @@ import java.util.Map;
 import java.util.concurrent.atomic.AtomicBoolean;
 import web.assets.Assets;
 import web.assets.Importmap;
-import web.dispatch.Router;
 
-/// An application's features, composed: one route table, one asset pipeline,
+/// An application's features, composed: one router, one asset pipeline, and
 /// one import map.
 ///
 /// This is what an application builds instead of repeating each feature's
-/// wiring by hand. It takes the application's own routes and the features it
+/// wiring by hand. It takes the application's own router and the features it
 /// uses, and answers the four things a page needs — where the URLs are, where
 /// the files are, what the bare specifiers mean, and what answers each route.
 ///
 /// ```
-/// var wiring = Features.of(Routes.of(), Ui.feature(), Cable.feature(cable, topics));
-/// var handler = wiring.routing().on(Routes.HOME, home()).otherwise(missing());
+/// var wiring = Features.of(Router.of(), Ui.feature(), cable.feature(topics));
+/// var handler = wiring.router().get(HOME, home()).otherwise(missing());
 /// ```
 ///
 /// **It serves the assets itself.** Every application with an import map needs
@@ -57,25 +56,24 @@ import web.dispatch.Router;
 /// yourself last unless you have a reason.
 public final class Features implements AutoCloseable {
 
-    /// The route that answers for a file. Named so that it can be replaced by
-    /// an application that wants to serve assets some other way, and so that a
-    /// 404 from it can be told apart from a 404 from anything else.
-    public static final String ASSET = "web.assets.file";
+    /// The logical or digested filename in [#ASSET].
+    public static final StringParameter FILE = new StringParameter("file");
+
+    /// The route that answers for a file. An application can replace its
+    /// handler without restating its path.
+    public static final RouteRef ASSET = RouteRef.of("web.assets.file", Assets.PREFIX + "/{file}", FILE);
 
     private final List<Feature> features;
-    private final Router routes;
+    private final Router router;
     private final Assets assets;
     private final Importmap modules;
-    private final Map<String, Handler> handlers;
     private final AtomicBoolean closed = new AtomicBoolean();
 
-    private Features(List<Feature> features, Router routes, Assets assets, Importmap modules,
-                     Map<String, Handler> handlers) {
+    private Features(List<Feature> features, Router router, Assets assets, Importmap modules) {
         this.features = List.copyOf(features);
-        this.routes = routes;
+        this.router = router;
         this.assets = assets;
         this.modules = modules;
-        this.handlers = Map.copyOf(handlers);
     }
 
     public static Features of(Router own, Feature... features) {
@@ -104,21 +102,19 @@ public final class Features implements AutoCloseable {
             for (var pin : feature.pins().entrySet()) modules = modules.pin(pin.getKey(), pin.getValue());
         }
 
-        var handlers = new LinkedHashMap<String, Handler>();
-        var routes = own;
+        var router = own;
         for (var feature : features) {
-            routes = routes.mount(feature.mount(), feature.routes());
-            handlers.putAll(feature.handlers());
+            router = router.mount(feature.mount(), feature.router());
         }
 
-        routes = routes.get(ASSET, assets.prefix() + "/{file}");
-        handlers.put(ASSET, serving(assets));
-        return new Features(features, routes, assets, modules, handlers);
+        router = router.get(ASSET, serving(assets));
+        return new Features(features, router, assets, modules);
     }
 
-    /// Every URL this application answers: its own, and every feature's.
-    public Router routes() {
-        return routes;
+    /// Every route and handler from the application and its features.
+    /// Feature middleware already wraps the returned router.
+    public Router router() {
+        return router.wrappedBy(middleware());
     }
 
     public Assets assets() {
@@ -143,7 +139,7 @@ public final class Features implements AutoCloseable {
     public Markup head() {
         return out -> {
             for (var feature : features) {
-                for (var contribution : feature.head()) contribution.write(assets, routes, out);
+                for (var contribution : feature.head()) contribution.write(assets, router, out);
             }
             modules.write(assets, out);
         };
@@ -158,7 +154,7 @@ public final class Features implements AutoCloseable {
     public Markup body() {
         return out -> {
             for (var feature : features) {
-                for (var contribution : feature.body()) contribution.write(assets, routes, out);
+                for (var contribution : feature.body()) contribution.write(assets, router, out);
             }
         };
     }
@@ -167,25 +163,9 @@ public final class Features implements AutoCloseable {
         return features;
     }
 
-    /// The features' handlers, already bound, and their middleware already
-    /// wrapped around everything.
-    ///
-    /// An application adds its own with [Routing#on] and ends with
-    /// [Routing#otherwise], and both carry the stack forward — so there is no
-    /// step at the end to forget. A feature that asks for a session or a token
-    /// check gets it by being named, which is the whole point of being named.
-    ///
-    /// See the note on order above: the first feature named is the outermost
-    /// wrapper and sees a request first.
-    public Routing routing() {
-        var routing = Routing.of(routes);
-        for (var handler : handlers.entrySet()) routing = routing.on(handler.getKey(), handler.getValue());
-        return routing.wrappedBy(middleware());
-    }
-
     /// Every feature's middleware, as one, outermost first.
     ///
-    /// Answered separately as well as applied by [#routing()], because a test
+    /// Answered separately as well as applied by [#router()], because a test
     /// that wants to prove what the stack does should not have to build a route
     /// table to see it.
     public Middleware middleware() {

@@ -1,6 +1,6 @@
 package web.dispatch;
 
-/// A mistake in a route table, or in a use of one.
+/// A mistake in a route definition, or in a use of one.
 ///
 /// Every one of these is a programming error rather than a bad request: a route
 /// that cannot be recognised, a name that is not a route, a URL built without

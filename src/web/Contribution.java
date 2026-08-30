@@ -3,7 +3,6 @@ package web;
 import java.io.IOException;
 import java.io.Writer;
 import web.assets.Assets;
-import web.dispatch.Router;
 
 /// Something a feature puts in the page.
 ///
@@ -17,7 +16,7 @@ import web.dispatch.Router;
 /// because both of the things it needs are known only after every feature is
 /// composed. A file's URL carries the digest of its content, so [Assets] has to
 /// have read it; and a feature's own route may have been mounted under a
-/// prefix, so [Router] has to hold the composed table. A feature that resolved
+/// prefix, so [Router] has to hold the composed routes. A feature that resolved
 /// either at construction time would be right until an application mounted it
 /// somewhere.
 ///

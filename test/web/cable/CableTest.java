@@ -230,7 +230,7 @@ public final class CableTest {
     private static void markup() throws Exception {
         String source;
         try (var cable = Cable.of()) {
-            var wiring = web.Features.of(web.dispatch.Router.of(), cable.feature(Topics.fixed("symbols")));
+            var wiring = web.Features.of(web.Router.of(), cable.feature(Topics.fixed("symbols")));
             var written = new StringWriter();
             wiring.body().write(written);
             source = written.toString();

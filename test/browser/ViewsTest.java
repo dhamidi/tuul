@@ -5,7 +5,7 @@ import browser.Symbols.Symbol;
 import harness.Check;
 import java.util.List;
 import json.Json;
-import web.dispatch.Router;
+import web.Router;
 import web.ui.Html;
 
 /// The views, which are pure functions from a value to markup.

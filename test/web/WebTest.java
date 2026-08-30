@@ -21,7 +21,6 @@ import java.util.concurrent.CopyOnWriteArrayList;
 import java.util.concurrent.CountDownLatch;
 import java.util.concurrent.TimeUnit;
 import web.assets.Assets;
-import web.dispatch.Router;
 import web.serve.Http;
 import web.serve.Memory;
 import web.ui.Tags;
@@ -261,14 +260,18 @@ public final class WebTest {
     }
 
     private static void routing() throws Exception {
+        var name = new StringParameter("name");
+        var symbol = RouteRef.of("symbol", "/symbols/{name}", name);
+        var index = RouteRef.of("index", "/index");
+        var orphan = RouteRef.of("orphan", "/orphan");
         var routes = Router.of()
-                .get("symbol", "/symbols/{name}")
-                .delete("symbol", "/symbols/{name}")
-                .post("index", "/index")
-                .get("orphan", "/orphan");
-        var routing = Routing.of(routes)
-                .on("symbol", (request, response) -> Responses.text(
-                        Routing.route(request).orElse("?") + ":" + Routing.variables(request).first("name", ""),
+                .get(symbol)
+                .delete(symbol)
+                .post(index)
+                .get(orphan);
+        var routing = routes
+                .on(symbol, (request, response) -> Responses.text(
+                        Router.route(request).map(RouteRef::name).orElse("?") + ":" + name.get(request),
                         response));
 
         Check.equal("a recognised route reaches its handler with what the path carried",
@@ -284,9 +287,9 @@ public final class WebTest {
                 Memory.handle(routing.otherwise((request, response) -> Responses.text("gone", response)),
                         get("/nothing")).text());
         Check.throwing("handling a route that does not exist is refused where it is written",
-                () -> Routing.of(routes).on("nope", (request, response) -> {}));
+                () -> routes.on(RouteRef.of("nope", "/nope"), (request, response) -> {}));
         Check.that("a request that never met a router carries no variables",
-                Routing.variables(get("/")).isEmpty());
+                Router.params(get("/")).isEmpty());
     }
 
     private static void middleware() {
@@ -372,9 +375,11 @@ public final class WebTest {
     /// A request becomes a message, an update returns a state, the state is
     /// rendered — the whole architecture, in one handler.
     private static void pages() throws Exception {
-        var routes = Router.of().get("symbol", "/symbols/{name}");
+        var name = new StringParameter("name");
+        var symbol = RouteRef.of("symbol", "/symbols/{name}", name);
+        var routes = Router.of().get(symbol);
         var page = Page.of(() -> "nothing")
-                .on("symbol", (state, message) -> Step.of(
+                .on(symbol.name(), (state, message) -> Step.of(
                         "looking", application.Effect.of("look")
                                 .with("name", message.body().get("params").toString())))
                 .on("found", (state, message) -> Step.of(message.string("name", "")))
@@ -382,17 +387,17 @@ public final class WebTest {
                         .with("name", "found " + effect.string("name", ""))))
                 .render((state, request, response) -> Responses.text(state, response));
 
-        var answered = Memory.handle(Routing.of(routes).on("symbol", page), get("/symbols/json.Json?q=1"));
+        var answered = Memory.handle(routes.on(symbol, page), get("/symbols/json.Json?q=1"));
         Check.that("the route named the message, and the path and query reached the update: " + answered.text(),
                 answered.text().contains("json.Json") && answered.text().contains("q"));
 
         var broken = Page.of(() -> "before")
-                .on("symbol", (state, message) -> {
+                .on(symbol.name(), (state, message) -> {
                     throw new IllegalStateException("no");
                 })
                 .render((state, request, response) -> Responses.text(state, response));
         Check.equal("an update that throws renders the state it had, rather than a stack trace",
-                "before", Memory.handle(Routing.of(routes).on("symbol", broken), get("/symbols/x")).text());
+                "before", Memory.handle(routes.on(symbol, broken), get("/symbols/x")).text());
     }
 
     /// The same handler, on a socket. If the two bindings disagree the

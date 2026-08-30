@@ -14,8 +14,9 @@ import java.util.concurrent.atomic.AtomicInteger;
 import web.Handler;
 import web.Request;
 import web.Response;
-import web.Routing;
-import web.dispatch.Router;
+import web.RouteRef;
+import web.Router;
+import web.StringParameter;
 import web.serve.Http;
 import web.ui.Html;
 import web.ui.Turbo;
@@ -373,38 +374,46 @@ public final class HyperspecTest {
     private static final Map<String, String[]> NOTES = new LinkedHashMap<>();
     private static final Map<String, String> SESSIONS = new LinkedHashMap<>();
     private static final AtomicInteger NEXT = new AtomicInteger(1);
+    private static final StringParameter NOTE_ID = new StringParameter("id");
+    private static final RouteRef HOME = RouteRef.of("home", "/");
+    private static final RouteRef SIGN_IN = RouteRef.of("sign-in", "/session/new");
+    private static final RouteRef SESSION = RouteRef.of("session", "/session");
+    private static final RouteRef NOTES_ROUTE = RouteRef.of("notes", "/notes");
+    private static final RouteRef COMPOSE = RouteRef.of("compose", "/notes/new");
+    private static final RouteRef CREATE = RouteRef.of("create", "/notes");
+    private static final RouteRef NOTE = RouteRef.of("note", "/notes/{id}", NOTE_ID);
 
     private static Handler notes() {
         NOTES.clear();
         SESSIONS.clear();
         NEXT.set(1);
         var routes = Router.of()
-                .get("home", "/")
-                .get("sign-in", "/session/new")
-                .post("session", "/session")
-                .get("notes", "/notes")
-                .get("compose", "/notes/new")
-                .post("create", "/notes")
-                .get("note", "/notes/{id}");
-        return Routing.of(routes)
-                .on("home", (request, response) -> render(response, a(href("/session/new"), text("Sign in"))))
-                .on("sign-in", (request, response) -> render(response, form(id("sign-in"),
+                .get(HOME)
+                .get(SIGN_IN)
+                .post(SESSION)
+                .get(NOTES_ROUTE)
+                .get(COMPOSE)
+                .post(CREATE)
+                .get(NOTE);
+        return routes
+                .on(HOME, (request, response) -> render(response, a(href("/session/new"), text("Sign in"))))
+                .on(SIGN_IN, (request, response) -> render(response, form(id("sign-in"),
                         action("/session"), method("post"),
                         input(type("text"), name("who")),
                         button(type("submit"), text("Continue")))))
-                .on("session", HyperspecTest::signIn)
-                .on("notes", (request, response) -> render(response, div(
+                .on(SESSION, HyperspecTest::signIn)
+                .on(NOTES_ROUTE, (request, response) -> render(response, div(
                         a(href("/notes/new"), text("New note")),
                         Html.fragment(NOTES.values().stream().map(note -> (Html) article(
                                 flag("itemscope"), attribute("itemtype", "https://tuul.dev/Note"),
                                 a(attribute("itemprop", "url"), href("/notes/" + note[0]), text(note[1])),
                                 span(attribute("itemprop", "id"), text(note[0])))).toList()))))
-                .on("compose", (request, response) -> render(response, form(id("new-note"),
+                .on(COMPOSE, (request, response) -> render(response, form(id("new-note"),
                         action("/notes"), method("post"),
                         input(type("text"), name("title")),
                         button(type("submit"), text("Create")))))
-                .on("create", HyperspecTest::create)
-                .on("note", HyperspecTest::show);
+                .on(CREATE, HyperspecTest::create)
+                .on(NOTE, HyperspecTest::show);
     }
 
     private static void signIn(Request request, Response response) throws Exception {
@@ -420,7 +429,7 @@ public final class HyperspecTest {
     }
 
     private static void show(Request request, Response response) throws Exception {
-        var note = NOTES.get(Routing.variables(request).first("id", ""));
+        var note = NOTES.get(NOTE_ID.get(request));
         if (note == null) {
             response.status(404).close();
             return;

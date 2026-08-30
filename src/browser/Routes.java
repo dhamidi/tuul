@@ -1,13 +1,14 @@
 package browser;
 
-import web.dispatch.Router;
+import web.RouteRef;
+import web.Router;
+import web.StringParameter;
 
 /// Every URL the browser has of its own, named once.
 ///
-/// Nothing below builds a path by writing one out: a link asks the router for
-/// the route by name and gives it the variables. Renaming a route then breaks
-/// the page that links to it, at compile time or at the first test, rather than
-/// producing a 404 for somebody reading documentation.
+/// Nothing below builds a path by writing one out. A link gives the router one
+/// of these references with its typed values bound. Renaming a reference then
+/// breaks the page at compile time instead of producing a user-facing 404.
 ///
 /// The stream of updates and the URL that serves a file are not here. They
 /// belong to [web.cable.Cable] and to [web.Features], which bring them along
@@ -16,36 +17,44 @@ import web.dispatch.Router;
 /// [web.assets.Assets] was already sure about.
 public final class Routes {
 
-    public static final String HOME = "home";
+    public static final StringParameter NAME = new StringParameter("name");
 
-    public static final String SEARCH = "search";
+    public static final StringParameter KIND = new StringParameter("kind");
 
-    public static final String SYMBOL = "symbol";
+    public static final StringParameter SLUG = new StringParameter("slug");
 
-    public static final String DOCUMENT_KIND = "document-kind";
+    public static final RouteRef HOME = RouteRef.of("home", "/");
 
-    public static final String DOCUMENT = "document";
+    public static final RouteRef SEARCH = RouteRef.of("search", "/search");
+
+    public static final RouteRef SYMBOL = RouteRef.of("symbol", "/symbols/{name}", NAME);
+
+    public static final RouteRef DOCUMENT_KIND = RouteRef.of(
+            "document-kind", "/symbols/{name}/{kind}", NAME, KIND);
+
+    public static final RouteRef DOCUMENT = RouteRef.of(
+            "document", "/symbols/{name}/{kind}/{slug}", NAME, KIND, SLUG);
 
     /// What there is, as a page. The sidebar shows the same thing, and this is
     /// where its opener goes for a reader whose scripts never arrived — which
     /// is why it exists as a URL and not only as a panel.
-    public static final String TREE = "tree";
+    public static final RouteRef TREE = RouteRef.of("tree", "/tree");
 
     /// The path every client asks for whether or not a page mentions one. A
     /// `<link rel="icon">` stops a browser asking, and stops nothing else —
     /// so answering here costs one route and removes a class of 404 for good.
-    public static final String FAVICON = "favicon";
+    public static final RouteRef FAVICON = RouteRef.of("favicon", "/favicon.ico");
 
     private Routes() {}
 
     public static Router of() {
         return Router.of()
-                .get(HOME, "/")
-                .get(SEARCH, "/search")
-                .get(SYMBOL, "/symbols/{name}")
-                .get(DOCUMENT_KIND, "/symbols/{name}/{kind}")
-                .get(DOCUMENT, "/symbols/{name}/{kind}/{slug}")
-                .get(TREE, "/tree")
-                .get(FAVICON, "/favicon.ico");
+                .get(HOME)
+                .get(SEARCH)
+                .get(SYMBOL)
+                .get(DOCUMENT_KIND)
+                .get(DOCUMENT)
+                .get(TREE)
+                .get(FAVICON);
     }
 }

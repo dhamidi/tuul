@@ -6,7 +6,6 @@ import java.util.ArrayList;
 import java.util.HashSet;
 import java.util.regex.Pattern;
 import java.util.List;
-import java.util.Map;
 import json.Json;
 import web.Headers;
 import web.serve.Memory;
@@ -46,11 +45,11 @@ public final class HandlerTest {
                     routes.route(name).isPresent());
         }
         Check.equal("a symbol's path is built from its name", "/symbols/json.Json",
-                routes.path(Routes.SYMBOL, Map.of("name", "json.Json")));
+                routes.path(Routes.SYMBOL.with(Routes.NAME, "json.Json")));
         Check.that("and reading it back finds the route that built it",
-                routes.recognise("GET", routes.path(Routes.SYMBOL, Map.of("name", "json.Json")))
+                routes.recognise("GET", routes.path(Routes.SYMBOL.with(Routes.NAME, "json.Json")))
                         instanceof web.dispatch.Recognised.Match match
-                        && match.route().name().equals(Routes.SYMBOL));
+                        && match.route().reference().equals(Routes.SYMBOL));
 
         Check.equal("the front page answers", 200, Memory.handle(browser.handler(), Memory.get("/")).status());
         Check.equal("so does a search", 200, Memory.handle(browser.handler(), Memory.get("/search?q=json")).status());

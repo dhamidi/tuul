@@ -1,7 +1,7 @@
 package browser;
 
 import json.Json;
-import web.dispatch.Router;
+import web.Router;
 import web.forms.Field;
 import web.forms.Form;
 import web.forms.Submission;

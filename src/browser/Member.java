@@ -5,11 +5,10 @@ import static web.ui.Tags.text;
 
 import java.util.ArrayList;
 import java.util.List;
-import java.util.Map;
 import java.util.regex.Pattern;
 import json.Json;
 import markdown.Links;
-import web.dispatch.Router;
+import web.Router;
 import web.ui.Component;
 import web.ui.Html;
 import web.ui.Microdata;
@@ -68,7 +67,7 @@ public record Member(Router routes, Links links, Props props, Json.Object member
         while (names.find()) {
             if (names.start() > written) parts.add(text(signature.substring(written, names.start())));
             parts.add(Ui.anchor(
-                    Props.of("href", routes.path(Routes.SYMBOL, Map.of("name", names.group())), "frame", Turbo.TOP),
+                    Props.of("href", routes.path(Routes.SYMBOL.with(Routes.NAME, names.group())), "frame", Turbo.TOP),
                     text(names.group())));
             written = names.end();
         }
