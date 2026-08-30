@@ -5,10 +5,12 @@ import harness.Check;
 import java.io.IOException;
 import java.io.StringWriter;
 import java.nio.file.Path;
+import java.time.Duration;
 import java.util.LinkedHashMap;
 import java.util.List;
 import java.util.Map;
 import java.util.Optional;
+import java.util.concurrent.atomic.AtomicReference;
 import json.Json;
 import symbols.Catalog;
 import symbols.Document;
@@ -88,6 +90,16 @@ public final class DocsTest {
         var text = ask(root, Message.of("docs.query").with("search", "Greeter"));
         Check.that("text search identifies a dependency origin when it is useful",
                 text.out().contains("greeting.Greeter  [example:greeting:1.0]"));
+        Check.equal("a search that answers before five seconds stays quiet", "", text.err());
+
+        var delay = new AtomicReference<Duration>();
+        var waiting = ask(root, Message.of("docs.query").with("search", "Greeter"), (duration, output) -> {
+            delay.set(duration);
+            output.write();
+            return () -> {};
+        });
+        Check.equal("the indexing notice waits for five seconds of inactivity", Duration.ofSeconds(5), delay.get());
+        Check.equal("an inactive search reports that it is indexing", "indexing...\n", waiting.err());
 
         var json = ask(root, Message.of("docs.query").with("search", "Greeter").with("json", true));
         var matches = Json.parse(json.out()) instanceof Json.Object response
@@ -123,6 +135,15 @@ public final class DocsTest {
         var err = new StringWriter();
         var state = App.of(State.of(List.of(root), List.of(), Path.of("fixture-index")), out, err,
                 (_, _, _) -> catalog())
+                .dispatch(message);
+        return new Answer(state.exit(), out.toString(), err.toString());
+    }
+
+    private static Answer ask(Path root, Message message, App.Inactivity inactivity) throws IOException {
+        var out = new StringWriter();
+        var err = new StringWriter();
+        var state = App.of(State.of(List.of(root), List.of(), Path.of("fixture-index")), out, err,
+                (_, _, _) -> catalog(), inactivity)
                 .dispatch(message);
         return new Answer(state.exit(), out.toString(), err.toString());
     }

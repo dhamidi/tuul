@@ -7,10 +7,15 @@ import application.Step;
 import java.io.IOException;
 import java.io.Writer;
 import java.nio.file.Path;
+import java.time.Duration;
 import java.util.ArrayList;
 import java.util.LinkedHashSet;
 import java.util.List;
 import java.util.Set;
+import java.util.concurrent.Executors;
+import java.util.concurrent.TimeUnit;
+import java.util.concurrent.atomic.AtomicBoolean;
+import java.util.concurrent.atomic.AtomicReference;
 import json.Json;
 import symbols.Docs;
 import symbols.Catalog;
@@ -30,6 +35,8 @@ public final class App {
     /// enough to read.
     private static final int MATCHES = 20;
 
+    private static final Duration INDEXING_NOTICE = Duration.ofSeconds(5);
+
     private App() {}
 
     public static Application<State> of(State initial, Writer out, Writer err) {
@@ -39,6 +46,11 @@ public final class App {
     /// Creates the docs application with the catalog factory that runs symbol
     /// queries. The factory receives the paths carried by each query effect.
     public static Application<State> of(State initial, Writer out, Writer err, CatalogFactory catalogs) {
+        return of(initial, out, err, catalogs, App::after);
+    }
+
+    static Application<State> of(State initial, Writer out, Writer err, CatalogFactory catalogs,
+            Inactivity inactivity) {
         return Application.of(initial)
                 .on("docs.query", App::query)
                 .on("docs.result", App::result)
@@ -46,10 +58,28 @@ public final class App {
                 .on("docs.roots", App::rooted)
                 .on("docs.missing", App::missing)
                 .on("error", App::failed)
-                .effect("symbols.lookup", (effect, emit) -> look(effect, emit, catalogs))
-                .effect("symbols.search", (effect, emit) -> search(effect, emit, catalogs))
+                .effect("symbols.lookup", (effect, emit) -> waiting(err, inactivity,
+                        () -> look(effect, emit, catalogs)))
+                .effect("symbols.search", (effect, emit) -> waiting(err, inactivity,
+                        () -> search(effect, emit, catalogs)))
                 .effect("docs.print", (effect, _) -> print(effect, out))
                 .effect("docs.report", (effect, _) -> report(effect, err));
+    }
+
+    @FunctionalInterface
+    interface Inactivity {
+        Pending after(Duration duration, Output output) throws IOException;
+    }
+
+    @FunctionalInterface
+    interface Pending extends AutoCloseable {
+        @Override
+        void close() throws IOException;
+    }
+
+    @FunctionalInterface
+    interface Output {
+        void write() throws IOException;
     }
 
     private static Step<State> query(State state, Message message) {
@@ -298,6 +328,43 @@ public final class App {
 
     private static void report(Effect effect, Writer err) throws IOException {
         err.write(effect.string("line", "") + "\n");
+        err.flush();
+    }
+
+    private static void waiting(Writer err, Inactivity inactivity, Output query) throws IOException {
+        try (var pending = inactivity.after(INDEXING_NOTICE, () -> status(err))) {
+            query.write();
+        }
+    }
+
+    private static Pending after(Duration duration, Output output) {
+        var timer = Executors.newSingleThreadScheduledExecutor(
+                Thread.ofVirtual().name("docs-inactivity", 0).factory());
+        var active = new AtomicBoolean(true);
+        var failed = new AtomicReference<IOException>();
+        var gate = new Object();
+        var pending = timer.schedule(() -> {
+            synchronized (gate) {
+                if (!active.get()) return;
+                try {
+                    output.write();
+                } catch (IOException exception) {
+                    failed.set(exception);
+                }
+            }
+        }, duration.toMillis(), TimeUnit.MILLISECONDS);
+        return () -> {
+            synchronized (gate) {
+                active.set(false);
+                pending.cancel(false);
+            }
+            timer.shutdownNow();
+            if (failed.get() != null) throw failed.get();
+        };
+    }
+
+    private static void status(Writer err) throws IOException {
+        err.write("indexing...\n");
         err.flush();
     }
 
