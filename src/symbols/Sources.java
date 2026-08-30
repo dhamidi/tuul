@@ -41,12 +41,12 @@ public final class Sources {
     /// diagnostics by supplying another [Compiler].
     public static Map<String, byte[]> compile(List<Path> roots, List<Path> dependencies, Compiler compiler)
             throws IOException {
-        var sources = find(roots);
+        var sources = files(roots);
         if (sources.isEmpty()) return Map.of();
         var memory = new Memory();
         var module = sources.stream().anyMatch(path -> path.getFileName().toString().equals("module-info.java"));
         var result = compiler.compile(new Compiler.Request(
-                sources, dependencies, module, Runtime.version().feature(), false), memory);
+                sources, dependencies, module, Runtime.version().feature(), true), memory);
         if (!result.ok()) throw new IOException("javac failed:\n" + report(result.problems()));
         return memory.classes();
     }
@@ -65,7 +65,7 @@ public final class Sources {
     /// An entrypoint holds no symbol worth documenting: it is one method that
     /// reads arguments and calls a library. So the index leaves it out, and a
     /// project may have as many entrypoints as it needs.
-    private static List<Path> find(List<Path> roots) throws IOException {
+    public static List<Path> files(List<Path> roots) throws IOException {
         var sources = new ArrayList<Path>();
         for (var root : roots) {
             if (!Files.isDirectory(root)) continue;
@@ -74,6 +74,21 @@ public final class Sources {
             }
         }
         return sources;
+    }
+
+    /// Reads class files already produced by a matching build or docs cache.
+    public static Map<String, byte[]> read(Path root) throws IOException {
+        if (!Files.isDirectory(root)) return Map.of();
+        var classes = new LinkedHashMap<String, byte[]>();
+        try (var tree = Files.walk(root)) {
+            for (var path : tree.filter(file -> file.toString().endsWith(".class")).sorted().toList()) {
+                var relative = root.relativize(path).toString();
+                var name = relative.substring(0, relative.length() - ".class".length())
+                        .replace(path.getFileSystem().getSeparator(), ".");
+                classes.put(name, Files.readAllBytes(path));
+            }
+        }
+        return Map.copyOf(classes);
     }
 
     /// Whether this file holds symbols worth compiling: Java, and not an

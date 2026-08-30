@@ -80,9 +80,16 @@ public final class Browser implements AutoCloseable {
         this.cable = cable;
     }
 
-    /// A browser over a project's index, watching it for changes.
+    /// Opens the last committed project index and returns without waiting for a
+    /// rebuild. Starts one background refresh when the sources are stale.
+    ///
+    /// The returned browser shows an indexing state if no complete generation
+    /// exists. Close the browser to stop its refresh and file watcher.
     public static Browser of(List<Path> sources, List<Path> vendor) throws IOException {
-        return of(Index.of(sources, vendor), Index.INDEX);
+        var cable = Cable.of();
+        var work = background(cable, Index.INDEX, sources, vendor);
+        return new Browser(Index.catalog(Index.INDEX), Features.of(Routes.of(), Ui.feature(),
+                cable.feature(Topics.fixed(INDEX)), own(work)), cable);
     }
 
     /// A browser over an index that is already open. `watched` is the file to
@@ -230,6 +237,7 @@ public final class Browser implements AutoCloseable {
             response.status(status).header("Content-Type", "application/json");
             var description = state.description();
             (description.get("doc") instanceof json.Json.Str ? description.without("documents") : description)
+                    .without("links")
                     .write(response.writer());
             return;
         }
@@ -243,7 +251,6 @@ public final class Browser implements AutoCloseable {
     private Links documentLinks(json.Json.Object description) {
         var packageName = description.string("package", "");
         var symbols = referencing(packageName);
-        var documents = index.documents(packageName);
         return new Links() {
             @Override
             public String destination(String label) {
@@ -258,13 +265,25 @@ public final class Browser implements AutoCloseable {
                 if (path.contains(":") || path.contains("/") || Document.name(Path.of(path)).isEmpty()) {
                     return destination;
                 }
-                return documents.stream()
-                        .filter(document -> Path.of(document.source()).getFileName().toString().equals(path))
+                return description.list("links").stream()
+                        .filter(json.Json.Object.class::isInstance)
+                        .map(json.Json.Object.class::cast)
+                        .filter(document -> document.string("file", "").equals(path))
                         .findFirst()
-                        .map(document -> documentPath(document) + fragment)
+                        .map(document -> documentPath(packageName, document) + fragment)
                         .orElse(destination);
             }
         };
+    }
+
+    private String documentPath(String packageName, json.Json.Object document) {
+        var variables = new java.util.LinkedHashMap<String, Object>();
+        variables.put("name", packageName);
+        variables.put("kind", document.string("kind", ""));
+        var slug = document.string("slug", "");
+        if (slug.isEmpty()) return routes().path(Routes.DOCUMENT_KIND, variables);
+        variables.put("slug", slug);
+        return routes().path(Routes.DOCUMENT, variables);
     }
 
     private String documentPath(Document document) {
@@ -361,6 +380,11 @@ public final class Browser implements AutoCloseable {
     private static ExecutorService watch(Cable cable, Path index) {
         if (index == null) return null;
         var watching = Executors.newVirtualThreadPerTaskExecutor();
+        watch(cable, index, watching);
+        return watching;
+    }
+
+    private static void watch(Cable cable, Path index, ExecutorService watching) {
         watching.submit(() -> {
             var seen = modified(index);
             while (!Thread.currentThread().isInterrupted()) {
@@ -372,7 +396,20 @@ public final class Browser implements AutoCloseable {
             }
             return null;
         });
-        return watching;
+    }
+
+    /// Starts the read-only browser immediately, then brings its database current
+    /// on a background virtual thread. No request owns or starts this work.
+    private static ExecutorService background(Cable cable, Path index, List<Path> sources, List<Path> vendor) {
+        var work = Executors.newVirtualThreadPerTaskExecutor();
+        watch(cable, index, work);
+        work.submit(() -> {
+            try (var coordinator = Index.of(sources, vendor, index)) {
+                if (coordinator.ensureCurrent()) cable.broadcast(INDEX, Turbo.refresh());
+            }
+            return null;
+        });
+        return work;
     }
 
     private static long modified(Path file) {

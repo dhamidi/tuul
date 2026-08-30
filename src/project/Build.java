@@ -12,6 +12,7 @@ import java.util.ArrayList;
 import java.util.Comparator;
 import java.util.List;
 import compiler.Compiler;
+import compiler.Compilation;
 import symbols.Vendor;
 
 /// Compiles a project onto disk: the libraries together, then each entrypoint
@@ -51,6 +52,8 @@ public final class Build {
         if (Files.isRegularFile(descriptor)) librarySources.addFirst(descriptor);
 
         var libraryFingerprint = fingerprint(libraryRoots, descriptor, vendor.stamp());
+        var compileFingerprint = Compilation.fingerprint(
+                librarySources, dependencies, Files.isRegularFile(descriptor), Runtime.version().feature(), true);
         Result libraries;
         if (current(layout, "libraries", libraryFingerprint, layout.classes())) {
             libraries = new Result(written(layout.classes()), List.of());
@@ -61,6 +64,7 @@ public final class Build {
             resources(libraryRoots, layout.src(), layout.classes());
             remember(layout, "libraries", libraryFingerprint);
         }
+        remember(layout, "libraries.compile", compileFingerprint);
 
         var classes = libraries.classes();
         var entrypoints = layout.entrypoints();

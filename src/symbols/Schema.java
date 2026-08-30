@@ -23,8 +23,9 @@ final class Schema {
     /// file answer differently — version 2 stopped indexing private members,
     /// version 4 added where a symbol is written and made packages and modules
     /// symbols in their own right. Version 5 carries a symbol's modifiers into
-    /// search. Version 6 adds package documents and their search rows.
-    static final int VERSION = 6;
+    /// search. Version 6 adds package documents and their search rows. Version
+    /// 7 stores the root summary that lets a browser start without discovery.
+    static final int VERSION = 7;
 
     /// The whole format. It stores types, members, parameters, tags, package
     /// documents, and the origin of each stored item.
@@ -127,6 +128,24 @@ final class Schema {
             );
 
             create index document_of_package on document (origin, package, source);
+
+            -- A browser must be able to draw its first page without walking
+            -- sources, jars, or the runtime image. The coordinator writes the
+            -- summary and the catalog only reads it.
+            create table root (
+                position integer not null,
+                name     text    not null,
+                label    text    not null,
+                primary key (position),
+                unique (name)
+            ) without rowid;
+
+            create table root_item (
+                root     integer not null references root (position) on delete cascade,
+                position integer not null,
+                name     text    not null,
+                primary key (root, position)
+            ) without rowid;
             """;
 
     /// Full text search over every symbol and every doc comment. Porter
@@ -228,5 +247,28 @@ final class Schema {
                 .step(TABLES)
                 .step(SEARCH)
                 .open(file);
+    }
+
+    /// Opens only a complete schema that already exists. Unlike [#open(Path)],
+    /// this method never creates, migrates, or replaces a file.
+    static Database read(Path file) throws IOException {
+        if (!java.nio.file.Files.isRegularFile(file)) throw new IOException("no index at " + file);
+        var database = Database.readOnly(file);
+        try {
+            if (number(database, "application_id") != APPLICATION || number(database, "user_version") != VERSION) {
+                throw new IOException("the index is not a current tuul index: " + file);
+            }
+            database.script("pragma foreign_keys = on; pragma busy_timeout = 5000;");
+            return database;
+        } catch (RuntimeException | IOException unreadable) {
+            database.close();
+            throw unreadable;
+        }
+    }
+
+    private static long number(Database database, String pragma) {
+        try (var rows = database.query("pragma " + pragma)) {
+            return rows.next() ? rows.integer(0) : 0;
+        }
     }
 }

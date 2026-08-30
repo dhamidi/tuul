@@ -129,6 +129,10 @@ public final class Symbols {
     public static Effect.Handler looking(Catalog index) {
         return (effect, emit) -> {
             var name = effect.string("symbol", "");
+            if (!index.ready()) {
+                emit.emit(Message.error("documentation is being indexed"));
+                return;
+            }
             emit.emit(index.lookup(name)
                     .map(type -> Message.of(FOUND, Docs.describe(type, false,
                             type.kind() == symbols.TypeInfo.Kind.PACKAGE ? index.documents(type.name()) : List.of())))
@@ -147,6 +151,10 @@ public final class Symbols {
             var query = effect.string("query", "");
             if (query.isEmpty()) {
                 emit.emit(Message.of(MATCHED).with("matches", Json.Array.of(List.of())));
+                return;
+            }
+            if (!index.ready()) {
+                emit.emit(Message.error("documentation is being indexed"));
                 return;
             }
             var seen = new java.util.LinkedHashSet<String>();

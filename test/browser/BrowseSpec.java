@@ -10,6 +10,7 @@ import java.nio.file.Path;
 import java.util.ArrayList;
 import java.util.List;
 import symbols.Index;
+import symbols.Catalog;
 import web.hyperspec.Hyperspec;
 import web.hyperspec.Outcome;
 import web.serve.Http;
@@ -63,8 +64,15 @@ public final class BrowseSpec {
         var results = new ArrayList<Result>();
         var index = Files.createTempDirectory("tuul-browse-spec");
         index.toFile().deleteOnExit();
-        try (var symbols = Index.of(List.of(Checkout.at("src")), List.of(), index.resolve("index.db"));
-                var browser = Browser.of(symbols, null);
+        var file = index.resolve("index.db");
+        try (var coordinator = Index.of(List.of(Checkout.at("src")), List.of(), file)) {
+            coordinator.ensureCurrent();
+            coordinator.lookup("java.base");
+            coordinator.lookup("java.io.Reader");
+            coordinator.lookup("java.io.Writer");
+        }
+        try (Catalog catalog = Index.catalog(file);
+                var browser = Browser.of(catalog, null);
                 var server = Http.start(browser.handler(), 0)) {
             var service = URI.create("http://localhost:" + server.port());
             for (var name : NAMES) {

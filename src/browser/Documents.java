@@ -68,21 +68,32 @@ public final class Documents {
             var packageName = effect.string("package", "");
             var kind = effect.string("kind", "");
             var slug = effect.string("slug", "");
-            var documents = index.documents(packageName, kind);
-            var selected = slug.isEmpty()
-                    ? documents.stream().filter(document -> document.slug().isEmpty()).findFirst()
-                    : index.document(packageName, kind, slug);
+            if (!index.ready()) {
+                emit.emit(Message.error("documentation is being indexed"));
+                return;
+            }
+            var page = index.documentPage(packageName, kind, slug);
+            var all = page.documents();
+            var documents = all.stream().filter(document -> document.kind().equals(kind)).toList();
+            var selected = page.selected();
             if (selected.isEmpty() && (!slug.isEmpty() || documents.isEmpty())) {
                 emit.emit(Message.of(MISSING).with("document", path(packageName, kind, slug)));
                 return;
             }
             var listed = Json.Array.of(documents.stream()
-                    .map(document -> (Json) document.describe().without("doc").without("source"))
+                    .map(document -> (Json) document.describe().without("doc")
+                            .with("file", java.nio.file.Path.of(document.source()).getFileName().toString())
+                            .without("source"))
                     .toList());
-            var description = selected.map(document -> document.describe().with("documents", listed))
+            var links = Json.Array.of(all.stream()
+                    .map(document -> (Json) document.describe().without("doc")
+                            .with("file", java.nio.file.Path.of(document.source()).getFileName().toString())
+                            .without("source"))
+                    .toList());
+            var description = selected.map(document -> document.describe().with("documents", listed).with("links", links))
                     .orElseGet(() -> Json.Object.of()
                             .with("package", packageName).with("kind", kind).with("slug", "")
-                            .with("title", title(kind)).with("documents", listed));
+                            .with("title", title(kind)).with("documents", listed).with("links", links));
             emit.emit(Message.of(FOUND, description));
         };
     }

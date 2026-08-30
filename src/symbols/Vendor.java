@@ -66,7 +66,23 @@ public final class Vendor {
         for (var jar : binaries) {
             stamp.append(jar).append(':');
             try {
-                stamp.append(Files.size(jar)).append(':').append(Files.getLastModifiedTime(jar).toMillis());
+                stamp.append(Files.size(jar)).append(':').append(Files.getLastModifiedTime(jar).toInstant());
+            } catch (IOException gone) {
+                stamp.append("gone");
+            }
+            stamp.append('\n');
+        }
+        return stamp.toString();
+    }
+
+    /// The source jars that contribute dependency documentation. This stamp is
+    /// separate because changing prose must not invalidate project compilation.
+    public String sourceStamp() {
+        var stamp = new StringBuilder();
+        for (var jar : new java.util.TreeSet<>(sources.values())) {
+            stamp.append(jar).append(':');
+            try {
+                stamp.append(Files.size(jar)).append(':').append(Files.getLastModifiedTime(jar).toInstant());
             } catch (IOException gone) {
                 stamp.append("gone");
             }

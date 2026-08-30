@@ -31,11 +31,10 @@ public final class Database implements AutoCloseable {
     private final String name;
     private boolean open = true;
 
-    private Database(String name) {
+    private Database(String name, int flags) {
         this.name = name;
         var out = arena.allocate(ADDRESS);
-        var status = Api.sqlite3_open_v2(
-                arena.allocateFrom(name), out, Api.SQLITE_OPEN_READWRITE | Api.SQLITE_OPEN_CREATE, MemorySegment.NULL);
+        var status = Api.sqlite3_open_v2(arena.allocateFrom(name), out, flags, MemorySegment.NULL);
         handle = out.get(ADDRESS, 0);
         if (status == Api.SQLITE_OK) return;
 
@@ -46,12 +45,20 @@ public final class Database implements AutoCloseable {
     }
 
     public static Database open(Path file) {
-        return new Database(file.toString());
+        return new Database(file.toString(), Api.SQLITE_OPEN_READWRITE | Api.SQLITE_OPEN_CREATE);
+    }
+
+    /// Opens an existing database without permission to change it.
+    ///
+    /// A catalog uses this path. It cannot create a missing file, migrate a
+    /// schema, or accidentally turn a read into index work.
+    public static Database readOnly(Path file) {
+        return new Database(file.toString(), Api.SQLITE_OPEN_READONLY);
     }
 
     /// A database that lives and dies with this object.
     public static Database memory() {
-        return new Database(":memory:");
+        return new Database(":memory:", Api.SQLITE_OPEN_READWRITE | Api.SQLITE_OPEN_CREATE);
     }
 
     /// The version of SQLite that is actually loaded, which is the only version

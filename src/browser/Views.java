@@ -150,7 +150,7 @@ public final class Views {
     /// The project is open and the rest are closed, because a reader of a
     /// project came for the project, and ninety JDK modules unfolded is a wall.
     public static Html tree(Router routes, List<Catalog.Root> roots) {
-        if (roots.isEmpty()) return Html.nothing();
+        if (roots.isEmpty()) return Ui.prose(text("Indexing documentation…"));
         return Ui.stack(Props.of("gap", "none"),
                 Html.each(roots, root -> Ui.disclosure(
                         root.name().equals(Index.PROJECT) ? Props.of("label", root.label()).on("open")

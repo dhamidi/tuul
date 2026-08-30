@@ -10,6 +10,8 @@ import java.util.List;
 import java.util.Map;
 import java.util.Set;
 import java.util.concurrent.atomic.AtomicInteger;
+import java.util.concurrent.CountDownLatch;
+import java.util.concurrent.TimeUnit;
 import java.util.jar.JarEntry;
 import java.util.jar.JarOutputStream;
 import compiler.Compiler;
@@ -21,6 +23,8 @@ public final class SymbolsTest {
     public static void run() throws IOException {
         documentNames();
         controlledCompilation();
+        joinsCompilation();
+        markdownDoesNotCompile();
     }
 
     private static void documentNames() {
@@ -91,6 +95,76 @@ public final class SymbolsTest {
             Check.equal("the index discovers only package documents", List.of("first"),
                     index.documents("symbols").stream().map(Document::slug).toList());
         }
+    }
+
+    /// Two synchronous callers for one fingerprint wait for the same javac job.
+    private static void joinsCompilation() throws IOException {
+        var root = Files.createTempDirectory("tuul-joined-symbols");
+        var source = Files.createDirectories(root.resolve("symbols"));
+        Files.writeString(source.resolve("Fixture.java"), "package symbols; final class Fixture {}");
+        var indexFile = root.resolve("build/index.db");
+        var calls = new AtomicInteger();
+        var compiling = new CountDownLatch(1);
+        var release = new CountDownLatch(1);
+        Compiler compiler = (request, classes) -> {
+            calls.incrementAndGet();
+            compiling.countDown();
+            try {
+                if (!release.await(5, TimeUnit.SECONDS)) throw new IOException("the joined compile was not released");
+            } catch (InterruptedException stopped) {
+                Thread.currentThread().interrupt();
+                throw new IOException("the joined compile was interrupted", stopped);
+            }
+            try (var in = SymbolsTest.class.getResourceAsStream("SymbolsTest$Fixture.class");
+                    var out = classes.open("symbols.SymbolsTest$Fixture")) {
+                in.transferTo(out);
+            }
+            return new Compiler.Result(1, List.of());
+        };
+        try (var first = Index.of(List.of(root), List.of(), indexFile, compiler);
+                var second = Index.of(List.of(root), List.of(), indexFile, compiler)) {
+            var one = Thread.startVirtualThread(first::ensureCurrent);
+            try {
+                Check.that("the first indexing job starts", compiling.await(5, TimeUnit.SECONDS));
+                var two = Thread.startVirtualThread(second::ensureCurrent);
+                release.countDown();
+                one.join();
+                two.join();
+            } catch (InterruptedException stopped) {
+                Thread.currentThread().interrupt();
+                throw new IOException("waiting for joined indexing was interrupted", stopped);
+            }
+            Check.equal("concurrent callers compile one fingerprint once", 1, calls.get());
+        }
+    }
+
+    /// Package prose has its own fingerprint and publication path.
+    private static void markdownDoesNotCompile() throws IOException {
+        var root = Files.createTempDirectory("tuul-markdown-symbols");
+        var source = Files.createDirectories(root.resolve("symbols"));
+        Files.writeString(source.resolve("Fixture.java"), "package symbols; final class Fixture {}");
+        var guide = source.resolve("guide.md");
+        Files.writeString(guide, "# First\n\nOne.\n");
+        var indexFile = root.resolve("build/index.db");
+        var calls = new AtomicInteger();
+        Compiler compiler = (request, classes) -> {
+            calls.incrementAndGet();
+            try (var in = SymbolsTest.class.getResourceAsStream("SymbolsTest$Fixture.class");
+                    var out = classes.open("symbols.SymbolsTest$Fixture")) {
+                in.transferTo(out);
+            }
+            return new Compiler.Result(1, List.of());
+        };
+        try (var first = Index.of(List.of(root), List.of(), indexFile, compiler)) {
+            first.ensureCurrent();
+        }
+        Files.writeString(guide, "# Second\n\nTwo, changed.\n");
+        try (var second = Index.of(List.of(root), List.of(), indexFile, compiler)) {
+            second.ensureCurrent();
+            Check.that("a Markdown edit publishes the new document",
+                    second.document("symbols", "guide", "").orElseThrow().body().contains("changed"));
+        }
+        Check.equal("a Markdown-only refresh does not call javac", 1, calls.get());
     }
 
     /// A project may have more than one entrypoint, and asking about it still
@@ -766,19 +840,17 @@ public final class SymbolsTest {
 
         private final Map<String, TypeInfo> types = new LinkedHashMap<>();
         private final List<symbols.Document> documents = new java.util.ArrayList<>();
-        private String stamp = "";
-        private boolean complete;
+        private String sourceStamp = "";
+        private String documentStamp = "";
+        private boolean sourceComplete;
+        private boolean documentComplete;
 
         @Override
-        public Snapshot origin(String kind, String location, String current) {
-            var fresh = stamp.equals(current);
-            if (!fresh) {
-                stamp = current;
-                types.clear();
-                documents.clear();
-                complete = false;
-            }
-            return new Snapshot(1, fresh, complete);
+        public java.util.Optional<Snapshot> inspect(String kind, String location, String current) {
+            var kept = location.equals("documents") ? documentStamp : sourceStamp;
+            if (kept.isEmpty()) return java.util.Optional.empty();
+            var done = location.equals("documents") ? documentComplete : sourceComplete;
+            return java.util.Optional.of(new Snapshot(1, kept.equals(current), done));
         }
 
         @Override
@@ -820,11 +892,24 @@ public final class SymbolsTest {
         }
 
         @Override
-        public void write(long origin, Map<String, TypeInfo> written, List<symbols.Document> found, boolean complete) {
+        public void publish(String kind, String location, String current,
+                Map<String, TypeInfo> written, List<symbols.Document> found) {
+            if (location.equals("documents")) {
+                documentStamp = current;
+                documents.clear();
+                documents.addAll(found);
+                documentComplete = true;
+                return;
+            }
+            sourceStamp = current;
+            types.clear();
             types.putAll(written);
-            documents.clear();
-            documents.addAll(found);
-            this.complete = this.complete || complete;
+            sourceComplete = true;
+        }
+
+        @Override
+        public void publishIncremental(String kind, String location, String current, Map<String, TypeInfo> written) {
+            types.putAll(written);
         }
 
         @Override

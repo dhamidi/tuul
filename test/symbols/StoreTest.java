@@ -18,6 +18,7 @@ public final class StoreTest {
         roundTrip();
         documents();
         staleness();
+        publication();
         searching();
         constraints();
         rebuilds();
@@ -42,10 +43,10 @@ public final class StoreTest {
 
     private static void documents() throws IOException {
         try (var store = Store.open(index("documents")).orElseThrow()) {
-            var origin = store.origin("project", "sources", "one");
             var tutorial = new Document("invoicing", "tutorial", "first", "First invoice",
                     "# First invoice\n\nCreate a fixed amount.\n", "src/invoicing/tutorial-01-first.md");
-            store.write(origin.id(), Map.of("invoicing.Invoice", invoice()), List.of(tutorial), true);
+            store.publish("project", "sources", "one", Map.of("invoicing.Invoice", invoice()), List.of(tutorial));
+            var origin = store.inspect("project", "sources", "one").orElseThrow();
 
             Check.equal("a document comes back as it went in", tutorial,
                     store.document(origin.id(), "invoicing", "tutorial", "first").orElseThrow());
@@ -55,11 +56,11 @@ public final class StoreTest {
                     store.search("fixed amount", 10).stream()
                             .filter(match -> match.kind().equals("tutorial"))
                             .findFirst().orElseThrow().symbol());
-            store.write(origin.id(), Map.of("invoicing", invoicing()), false);
+            store.publishIncremental("project", "sources", "one", Map.of("invoicing", invoicing()));
             Check.that("an incremental symbol write keeps package documents",
                     store.document(origin.id(), "invoicing", "tutorial", "first").isPresent());
 
-            store.origin("project", "sources", "two");
+            store.publish("project", "sources", "two", Map.of(), List.of());
             Check.that("a changed stamp forgets package documents",
                     store.documents(origin.id(), "invoicing", "").isEmpty());
             Check.that("and forgets their search rows",
@@ -71,10 +72,10 @@ public final class StoreTest {
     /// than useless: it is quietly wrong.
     private static void roundTrip() throws IOException {
         try (var store = Store.open(index("round-trip")).orElseThrow()) {
-            var origin = store.origin("project", "sources", "first");
-            Check.that("a new origin is not fresh", !origin.fresh());
-
-            store.write(origin.id(), Map.of("invoicing.Invoice", invoice()), true);
+            Check.that("an unpublished origin is absent",
+                    store.inspect("project", "sources", "first").isEmpty());
+            store.publish("project", "sources", "first", Map.of("invoicing.Invoice", invoice()), List.of());
+            var origin = store.inspect("project", "sources", "first").orElseThrow();
             var read = store.type(origin.id(), "invoicing.Invoice").orElseThrow();
             Check.equal("a type comes back as it went in", invoice(), read);
             Check.equal("with its members in order",
@@ -89,7 +90,7 @@ public final class StoreTest {
             Check.that("a name it does not hold is simply absent",
                     store.type(origin.id(), "invoicing.Ledger").isEmpty());
 
-            store.write(origin.id(), Map.of("invoicing.Invoice", invoice()), true);
+            store.publishIncremental("project", "sources", "first", Map.of("invoicing.Invoice", invoice()));
             Check.equal("writing the same type again replaces it rather than doubling it",
                     List.of("invoicing.Invoice"), store.names(origin.id()));
 
@@ -101,7 +102,7 @@ public final class StoreTest {
             // A package is a symbol, so it is stored as one. Anything the index
             // forgets is a question that works cold and fails warm, which is
             // worse than one that never worked.
-            store.write(origin.id(), Map.of("invoicing", invoicing()), false);
+            store.publishIncremental("project", "sources", "first", Map.of("invoicing", invoicing()));
             var read_ = store.type(origin.id(), "invoicing").orElseThrow();
             Check.equal("a package comes back as it went in", invoicing(), read_);
             Check.equal("still a package", TypeInfo.Kind.PACKAGE, read_.kind());
@@ -121,27 +122,54 @@ public final class StoreTest {
     /// The stamp is the whole contract: same stamp, same facts.
     private static void staleness() throws IOException {
         try (var store = Store.open(index("staleness")).orElseThrow()) {
-            var first = store.origin("project", "sources", "one");
-            store.write(first.id(), Map.of("invoicing.Invoice", invoice()), true);
+            store.publish("project", "sources", "one", Map.of("invoicing.Invoice", invoice()), List.of());
+            var first = store.inspect("project", "sources", "one").orElseThrow();
 
-            var again = store.origin("project", "sources", "one");
+            var again = store.inspect("project", "sources", "one").orElseThrow();
             Check.that("an unchanged stamp is fresh", again.fresh());
             Check.that("and complete, so a miss means the name does not exist", again.complete());
 
-            var moved = store.origin("project", "sources", "two");
+            var moved = store.inspect("project", "sources", "two").orElseThrow();
             Check.that("a changed stamp is not fresh", !moved.fresh());
-            Check.that("nor complete", !moved.complete());
+            Check.that("the previous generation remains complete", moved.complete());
             Check.equal("it is the same origin", first.id(), moved.id());
-            Check.equal("and it has forgotten what it held", List.of(), store.names(moved.id()));
-            Check.that("including the type itself", store.type(moved.id(), "invoicing.Invoice").isEmpty());
+            Check.equal("and it still holds its names", List.of("invoicing.Invoice"), store.names(moved.id()));
+            Check.that("including the type itself", store.type(moved.id(), "invoicing.Invoice").isPresent());
+        }
+    }
+
+    /// A freshness check is not publication. Readers keep the old complete
+    /// generation until all replacement rows and their stamp commit together.
+    private static void publication() throws IOException {
+        var file = index("publication");
+        try (var store = Store.open(file).orElseThrow()) {
+            store.publish("project", "sources", "one", Map.of("invoicing.Invoice", invoice()), List.of());
+            var stale = store.inspect("project", "sources", "two").orElseThrow();
+            Check.that("inspecting a changed fingerprint reports stale", !stale.fresh());
+            Check.that("and leaves the last complete generation readable",
+                    store.type(stale.id(), "invoicing.Invoice").isPresent());
+
+            store.publish("project", "sources", "two", Map.of("invoicing.Ledger", invoice()), List.of());
+            Check.that("publication replaces the old rows",
+                    store.type(stale.id(), "invoicing.Invoice").isEmpty());
+            Check.that("and exposes the replacement rows",
+                    store.type(stale.id(), "invoicing.Ledger").isPresent());
+
+            var roots = List.of(new Catalog.Root("project", "This project", List.of("invoicing")));
+            store.publishRoots(roots);
+            Check.equal("the browser root summary makes the round trip", roots, store.roots());
+        }
+        try (var catalog = Index.catalog(file)) {
+            Check.that("the persistent catalog is ready without source paths", catalog.ready());
+            Check.that("and reads the committed replacement", catalog.lookup("invoicing.Ledger").isPresent());
         }
     }
 
     /// FTS5 earns its place by finding what a person half-remembers.
     private static void searching() throws IOException {
         try (var store = Store.open(index("searching")).orElseThrow()) {
-            var origin = store.origin("project", "sources", "one");
-            store.write(origin.id(), Map.of("invoicing.Invoice", invoice()), true);
+            store.publish("project", "sources", "one", Map.of("invoicing.Invoice", invoice()), List.of());
+            var origin = store.inspect("project", "sources", "one").orElseThrow();
 
             Check.equal("a symbol is found by its own documentation",
                     "invoicing.Invoice", store.search("fixed amount", 5).getFirst().symbol());
@@ -171,7 +199,7 @@ public final class StoreTest {
                     store.search("...", 5).isEmpty() && store.search("-", 5).isEmpty()
                             && store.search("()", 5).isEmpty());
 
-            store.origin("project", "sources", "two");
+            store.publish("project", "sources", "two", Map.of(), List.of());
             Check.that("and forgetting a type forgets it from the search as well",
                     store.search("fixed amount", 5).isEmpty());
         }
@@ -182,7 +210,7 @@ public final class StoreTest {
     private static void constraints() throws IOException {
         var file = index("constraints");
         try (var store = Store.open(file).orElseThrow()) {
-            store.origin("project", "sources", "one");
+            store.publish("project", "sources", "one", Map.of(), List.of());
         }
         try (var database = Database.open(file)) {
             database.execute("pragma foreign_keys = on");
@@ -202,21 +230,21 @@ public final class StoreTest {
     private static void rebuilds() throws IOException {
         var older = index("older");
         try (var store = Store.open(older).orElseThrow()) {
-            store.write(store.origin("project", "sources", "one").id(), Map.of("invoicing.Invoice", invoice()), true);
+            store.publish("project", "sources", "one", Map.of("invoicing.Invoice", invoice()), List.of());
         }
         try (var database = Database.open(older)) {
             database.execute("pragma user_version = " + (Schema.VERSION + 99));
         }
         try (var store = Store.open(older).orElseThrow()) {
             Check.that("an index from another version is built again, not read",
-                    !store.origin("project", "sources", "one").fresh());
+                    store.inspect("project", "sources", "one").isEmpty());
         }
 
         var corrupt = index("corrupt");
         Files.writeString(corrupt, "this is not a database, it is a note about one\n");
         try (var store = Store.open(corrupt).orElseThrow()) {
-            var origin = store.origin("project", "sources", "one");
-            store.write(origin.id(), Map.of("invoicing.Invoice", invoice()), true);
+            store.publish("project", "sources", "one", Map.of("invoicing.Invoice", invoice()), List.of());
+            var origin = store.inspect("project", "sources", "one").orElseThrow();
             Check.equal("and so is a file that was never one at all",
                     List.of("invoicing.Invoice"), store.names(origin.id()));
         }
@@ -224,7 +252,8 @@ public final class StoreTest {
         var missing = index("nested/deeper/index.db");
         try (var store = Store.open(missing).orElseThrow()) {
             Check.that("an index makes the directory it lives in", Files.isRegularFile(missing));
-            Check.that("and works there", store.origin("project", "sources", "one").id() > 0);
+            store.publish("project", "sources", "one", Map.of(), List.of());
+            Check.that("and works there", store.inspect("project", "sources", "one").orElseThrow().id() > 0);
         }
     }
 

@@ -16,6 +16,10 @@ public interface CatalogFactory {
 
     /// Returns the factory used by command-line symbol queries.
     static CatalogFactory system() {
-        return Index::of;
+        return (sources, vendor, index) -> {
+            var catalog = Index.of(sources, vendor, index);
+            catalog.ensureCurrent();
+            return catalog;
+        };
     }
 }

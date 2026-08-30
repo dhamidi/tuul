@@ -1,16 +1,18 @@
 /// Serves the symbol index as searchable HTML and JSON documentation.
 ///
 /// [browser.Browser] is the application entry point. Call
-/// [browser.Browser#of(java.util.List,java.util.List)] to open project sources.
+/// [browser.Browser#of(java.util.List,java.util.List)] to open the last
+/// committed index and start a background refresh.
 /// Call [browser.Browser#handler()] to embed the application. Call
 /// [browser.Browser#serve(java.util.List,java.util.List,int,java.io.Writer)] to
 /// run the HTTP server.
 ///
 /// ## Architecture
 ///
-/// The browser reads a [symbols.Catalog]. It does not compile Java source for
-/// each request. An HTML page normally costs an index query and a streamed
-/// render.
+/// The browser reads a [symbols.Catalog]. No HTTP request compiles Java,
+/// discovers sources, or writes the index. An HTML page costs index queries and
+/// a streamed render. A cold browser shows an indexing state until the
+/// background coordinator publishes a complete generation.
 ///
 /// The application uses the same message flow for search, symbols, and package
 /// documents:

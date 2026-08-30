@@ -5,9 +5,11 @@ import java.lang.classfile.Attributes;
 import java.lang.classfile.ClassFile;
 import java.io.UncheckedIOException;
 import java.net.URI;
+import java.nio.channels.FileChannel;
 import java.nio.file.FileSystems;
 import java.nio.file.Files;
 import java.nio.file.Path;
+import java.nio.file.StandardOpenOption;
 import java.security.MessageDigest;
 import java.util.ArrayList;
 import java.util.HashMap;
@@ -17,8 +19,12 @@ import java.util.List;
 import java.util.Map;
 import java.util.Optional;
 import java.util.TreeSet;
+import java.util.concurrent.CompletableFuture;
+import java.util.concurrent.CompletionException;
+import java.util.concurrent.ConcurrentHashMap;
 import java.util.function.Supplier;
 import compiler.Compiler;
+import compiler.Compilation;
 import sqlite3.SqliteException;
 
 /// Every symbol tuul can answer questions about, in the order it looks: the
@@ -30,10 +36,13 @@ import sqlite3.SqliteException;
 /// do not survive compilation: the file on disk for the project, the
 /// `-sources.jar` for a dependency, `lib/src.zip` for the JDK.
 ///
-/// All of that is expensive and almost none of it changes, so the answers are
-/// kept in a [Store] between runs. A lookup starts there, and only falls
-/// through to javac when the sources have moved on. The compile is lazy for the
-/// same reason: a question the index can answer must not pay for one.
+/// [#ensureCurrent()] compares independent source and document fingerprints.
+/// It compiles changed Java sources and publishes complete replacement rows.
+/// It publishes changed Markdown without compiling Java. A successful build
+/// remains in `index.db` for later processes.
+///
+/// Call [#catalog(Path)] when a caller must only read committed rows. That
+/// catalog has no source paths and cannot start compilation.
 public final class Index implements Catalog {
 
     /// Derived data, and deliberately under `build/`: deleting it costs the
@@ -61,7 +70,9 @@ public final class Index implements Catalog {
     private final List<Path> roots;
     private final Vendor vendor;
     private final Optional<IndexStore> store;
-    private final String stamp;
+    private final String sourceStamp;
+    private final String documentStamp;
+    private final Path index;
     private final Compiler compiler;
     private Map<String, byte[]> classes;
 
@@ -71,11 +82,16 @@ public final class Index implements Catalog {
     /// walking the JDK's modules for every page would be a walk per page.
     private List<Catalog.Root> groups;
 
-    private Index(List<Path> roots, Vendor vendor, Optional<IndexStore> store, String stamp, Compiler compiler) {
+    private static final ConcurrentHashMap<String, CompletableFuture<Boolean>> BUILDING = new ConcurrentHashMap<>();
+
+    private Index(List<Path> roots, Vendor vendor, Optional<IndexStore> store, Inventory inventory, Path index,
+            Compiler compiler) {
         this.roots = List.copyOf(roots);
         this.vendor = vendor;
         this.store = store;
-        this.stamp = stamp;
+        this.sourceStamp = inventory.sources();
+        this.documentStamp = inventory.documents();
+        this.index = index;
         this.compiler = compiler;
     }
 
@@ -98,7 +114,7 @@ public final class Index implements Catalog {
     public static Index of(List<Path> sourceRoots, List<Path> vendorRoots, Path index, Compiler compiler)
             throws IOException {
         var vendor = Vendor.of(vendorRoots);
-        return new Index(sourceRoots, vendor, IndexStore.open(index), stamp(sourceRoots, vendor), compiler);
+        return new Index(sourceRoots, vendor, IndexStore.open(index), Inventory.of(sourceRoots, vendor), index, compiler);
     }
 
     /// Opens an index with a caller-supplied compiler and store. Closing the
@@ -106,7 +122,13 @@ public final class Index implements Catalog {
     public static Index of(List<Path> sourceRoots, List<Path> vendorRoots, Compiler compiler, IndexStore store)
             throws IOException {
         var vendor = Vendor.of(vendorRoots);
-        return new Index(sourceRoots, vendor, Optional.of(store), stamp(sourceRoots, vendor), compiler);
+        return new Index(sourceRoots, vendor, Optional.of(store), Inventory.of(sourceRoots, vendor), INDEX, compiler);
+    }
+
+    /// Opens only the last committed database. This catalog cannot compile,
+    /// discover source files, or write index rows.
+    public static Catalog catalog(Path index) {
+        return new PersistentCatalog(index);
     }
 
     /// Looks up a symbol by name. `a.b.Outer.Inner` also matches the nested
@@ -122,7 +144,7 @@ public final class Index implements Catalog {
 
     @Override
     public Optional<Document> document(String packageName, String kind, String slug) {
-        return documents(packageName, kind).stream().filter(document -> document.slug().equals(slug)).findFirst();
+        return documentPage(packageName, kind, slug).selected();
     }
 
     @Override
@@ -132,9 +154,9 @@ public final class Index implements Catalog {
 
     @Override
     public List<Document> documents(String packageName, String kind) {
-        var origin = origin("project", "sources", stamp);
+        ensureCurrent();
+        var origin = snapshot("project", "documents", documentStamp);
         if (origin.isPresent()) {
-            if (!origin.get().fresh() || !origin.get().complete()) indexProject();
             try {
                 return store.orElseThrow().documents(origin.get().id(), packageName, kind);
             } catch (SqliteException unavailable) {
@@ -145,6 +167,14 @@ public final class Index implements Catalog {
                 .filter(document -> document.packageName().equals(packageName))
                 .filter(document -> kind.isEmpty() || document.kind().equals(kind))
                 .toList();
+    }
+
+    @Override
+    public DocumentPage documentPage(String packageName, String kind, String slug) {
+        var documents = documents(packageName);
+        return new DocumentPage(
+                documents.stream().filter(document -> document.kind().equals(kind) && document.slug().equals(slug))
+                        .findFirst(), documents);
     }
 
     /// A module, or a package, wherever it is: the project's, a dependency's, or
@@ -158,7 +188,8 @@ public final class Index implements Catalog {
         if (name.isEmpty() || name.contains("$")) return Optional.empty();
         return module(name)
                 .or(() -> store.isEmpty() ? projectPackage(name) : Optional.empty())
-                .or(() -> grouped("vendor", "vendor", vendor.stamp(), name, () -> vendoredPackage(name)))
+                .or(() -> grouped("vendor", "vendor", vendor.stamp() + vendor.sourceStamp(), name,
+                        () -> vendoredPackage(name)))
                 .or(() -> grouped("platform", System.getProperty("java.home"), Runtime.version().toString(), name,
                         () -> platformPackage(name)));
     }
@@ -167,13 +198,13 @@ public final class Index implements Catalog {
     /// answered from the index rather than by walking a module again.
     private Optional<TypeInfo> grouped(String kind, String location, String stamp, String name,
             Supplier<Optional<TypeInfo>> build) {
-        var origin = origin(kind, location, stamp);
+        var origin = snapshot(kind, location, stamp);
         if (origin.isPresent() && origin.get().fresh()) {
             var kept = kept(origin.get().id(), name);
             if (kept.isPresent()) return kept;
         }
         var built = build.get();
-        built.ifPresent(group -> origin.ifPresent(where -> remember(where.id(), Map.of(name, group), false)));
+        built.ifPresent(group -> remember(kind, location, stamp, Map.of(name, group)));
         return built;
     }
 
@@ -410,6 +441,7 @@ public final class Index implements Catalog {
     /// is a file and not a symbol; an empty root is left out, since a project
     /// with no dependencies should not be told it has a dependencies section.
     public List<Catalog.Root> roots() {
+        ensureCurrent();
         if (groups == null) {
             var found = new ArrayList<Catalog.Root>();
             add(found, new Catalog.Root(PROJECT, "This project", projectPackages()));
@@ -431,7 +463,7 @@ public final class Index implements Catalog {
     /// Where there is none, they are worked out from the names — which is the
     /// same answer by the longer road.
     private List<String> projectPackages() {
-        var origin = origin("project", "sources", stamp);
+        var origin = snapshot("project", "sources", sourceStamp);
         if (origin.isPresent() && origin.get().fresh() && origin.get().complete()) {
             try {
                 var kept = store.orElseThrow().names(origin.get().id(), TypeInfo.Kind.PACKAGE);
@@ -469,7 +501,7 @@ public final class Index implements Catalog {
     /// Every type name known from source. Vendored and JDK types are found on
     /// demand rather than enumerated.
     public List<String> names() {
-        var origin = origin("project", "sources", stamp);
+        var origin = snapshot("project", "sources", sourceStamp);
         if (origin.isPresent() && origin.get().fresh() && origin.get().complete()) {
             try {
                 return store.orElseThrow().names(origin.get().id());
@@ -496,7 +528,7 @@ public final class Index implements Catalog {
     }
 
     private Optional<TypeInfo> project(String name) {
-        var origin = origin("project", "sources", stamp);
+        var origin = snapshot("project", "sources", sourceStamp);
         if (origin.isPresent() && origin.get().fresh()) {
             var kept = kept(origin.get().id(), name);
             if (kept.isPresent()) return kept;
@@ -509,7 +541,7 @@ public final class Index implements Catalog {
     }
 
     private Optional<TypeInfo> vendored(String name) {
-        return remembered("vendor", "vendor", vendor.stamp(), name, this::vendoredOrigin);
+        return remembered("vendor", "vendor", vendor.stamp() + vendor.sourceStamp(), name, this::vendoredOrigin);
     }
 
     /// The JDK is stamped with its own version. It is the one origin that never
@@ -523,14 +555,13 @@ public final class Index implements Catalog {
     /// point enumerating a jar nobody asked about. So a miss here means *not
     /// indexed yet* rather than *not there*, and falls through to the work.
     private Optional<TypeInfo> remembered(String kind, String location, String stamp, String name, SymbolOrigin origins) {
-        var origin = origin(kind, location, stamp);
+        var origin = snapshot(kind, location, stamp);
         if (origin.isPresent() && origin.get().fresh()) {
             var kept = kept(origin.get().id(), name);
             if (kept.isPresent()) return kept;
         }
         var built = built(name, origins);
-        built.ifPresent(found -> origin.ifPresent(where ->
-                remember(where.id(), Map.of(found.name(), found.type()), false)));
+        built.ifPresent(found -> remember(kind, location, stamp, Map.of(found.name(), found.type())));
         return built.map(Found::type);
     }
 
@@ -560,25 +591,19 @@ public final class Index implements Catalog {
         return Optional.empty();
     }
 
-    /// The index is an optimisation, never a gate. An index that is busy —
-    /// another tuul is writing it — or that cannot be read at all means the
-    /// answer comes the slow way, not that there is no answer.
-    private Optional<IndexStore.Snapshot> origin(String kind, String location, String stamp) {
+    /// Checks freshness without changing the generation a catalog can read.
+    private Optional<IndexStore.Snapshot> snapshot(String kind, String location, String stamp) {
         try {
-            return store.map(kept -> kept.origin(kind, location, stamp));
+            return store.flatMap(kept -> kept.inspect(kind, location, stamp));
         } catch (SqliteException unavailable) {
             return Optional.empty();
         }
     }
 
     /// Writing what was learned is worth doing and not worth failing over.
-    private void remember(long origin, Map<String, TypeInfo> types, boolean complete) {
-        remember(origin, types, List.of(), complete);
-    }
-
-    private void remember(long origin, Map<String, TypeInfo> types, List<Document> documents, boolean complete) {
+    private void remember(String kind, String location, String stamp, Map<String, TypeInfo> types) {
         try {
-            store.orElseThrow().write(origin, types, documents, complete);
+            store.orElseThrow().publishIncremental(kind, location, stamp, types);
         } catch (SqliteException unavailable) {
             // the next run will learn it again
         }
@@ -588,15 +613,93 @@ public final class Index implements Catalog {
     /// whole tree at once is what earns the right to say a name is *not* there
     /// without compiling again.
     private void indexProject() {
-        var origin = origin("project", "sources", stamp);
-        if (origin.isEmpty()) return;
-        if (origin.get().fresh() && origin.get().complete()) return;
+        ensureCurrent();
+    }
 
-        var comments = new HashMap<String, Map<String, Javadoc.Comment>>();
-        var types = new LinkedHashMap<String, TypeInfo>();
-        compile().forEach((name, bytes) -> types.put(name, documented(Classes.inspect(bytes), name, comments)));
-        types.putAll(packagesOf(types));
-        remember(origin.get().id(), types, discoveredDocuments(), true);
+    /// Makes the project symbols, documents, and root summary current.
+    /// Returns true if this call publishes project symbols or documents.
+    ///
+    /// Callers for the same fingerprint join one in-process job. Separate
+    /// processes wait on the index lock. The process that gets the lock checks
+    /// freshness again. It does not compile if another process already
+    /// published the requested fingerprint.
+    ///
+    /// Compilation and parsing finish before a write transaction starts. A
+    /// failed build leaves the previous complete rows unchanged.
+    public boolean ensureCurrent() {
+        if (store.isEmpty()) {
+            compile();
+            discoveredDocuments();
+            return true;
+        }
+        var key = index.toAbsolutePath().normalize() + "\n" + sourceStamp + "\n" + documentStamp;
+        var started = new CompletableFuture<Boolean>();
+        var running = BUILDING.putIfAbsent(key, started);
+        if (running != null) return joined(running);
+        try {
+            var changed = lockedRefresh();
+            started.complete(changed);
+            return changed;
+        } catch (Throwable failed) {
+            started.completeExceptionally(failed);
+            if (failed instanceof RuntimeException runtime) throw runtime;
+            throw new IllegalStateException(failed);
+        } finally {
+            BUILDING.remove(key, started);
+        }
+    }
+
+    private boolean lockedRefresh() throws IOException {
+        var lock = index.resolveSibling(index.getFileName() + ".lock");
+        if (lock.getParent() != null) Files.createDirectories(lock.getParent());
+        try (var channel = FileChannel.open(lock, StandardOpenOption.CREATE, StandardOpenOption.WRITE);
+                var held = channel.lock()) {
+            return refresh();
+        }
+    }
+
+    private boolean refresh() {
+        var changed = false;
+        List<String> projectSummary = List.of();
+        var source = snapshot("project", "sources", sourceStamp);
+        if (source.isEmpty() || !source.get().fresh() || !source.get().complete()) {
+            var comments = new HashMap<String, Map<String, Javadoc.Comment>>();
+            var types = new LinkedHashMap<String, TypeInfo>();
+            compile().forEach((name, bytes) -> types.put(name, documented(Classes.inspect(bytes), name, comments)));
+            types.putAll(packagesOf(types));
+            projectSummary = types.values().stream()
+                    .filter(type -> type.kind() == TypeInfo.Kind.PACKAGE).map(TypeInfo::name).sorted().toList();
+            store.orElseThrow().publish("project", "sources", sourceStamp, types, List.of());
+            changed = true;
+        } else {
+            projectSummary = store.orElseThrow().names(source.get().id(), TypeInfo.Kind.PACKAGE);
+        }
+
+        var documents = snapshot("project", "documents", documentStamp);
+        if (documents.isEmpty() || !documents.get().fresh() || !documents.get().complete()) {
+            store.orElseThrow().publish(
+                    "project", "documents", documentStamp, Map.of(), discoveredDocuments());
+            changed = true;
+        }
+
+        if (changed || store.orElseThrow().roots().isEmpty()) {
+            var summaries = new ArrayList<Catalog.Root>();
+            add(summaries, new Catalog.Root(PROJECT, "This project", projectSummary));
+            add(summaries, new Catalog.Root(DEPENDENCIES, "Dependencies", vendor.packages()));
+            add(summaries, new Catalog.Root(PLATFORM, "The JDK", platformModules()));
+            store.orElseThrow().publishRoots(List.copyOf(summaries));
+            groups = List.copyOf(summaries);
+        }
+        return changed;
+    }
+
+    private static boolean joined(CompletableFuture<Boolean> running) {
+        try {
+            return running.join();
+        } catch (CompletionException failed) {
+            if (failed.getCause() instanceof RuntimeException runtime) throw runtime;
+            throw failed;
+        }
     }
 
     /// Reads each package document as source text. The normalized identity must
@@ -651,7 +754,34 @@ public final class Index implements Catalog {
     private Map<String, byte[]> compile() {
         if (classes != null) return classes;
         try {
+            var sources = Sources.files(roots);
+            var module = sources.stream().anyMatch(path -> path.getFileName().toString().equals("module-info.java"));
+            var fingerprint = Compilation.fingerprint(
+                    sources, vendor.classpath(), module, Runtime.version().feature(), true);
+            var build = index.getParent() == null ? Path.of("build") : index.getParent();
+            var built = build.resolve("classes");
+            var builtStamp = build.resolve(".tuul/libraries.compile.stamp");
+            if (Files.isDirectory(built) && Files.isRegularFile(builtStamp)
+                    && Files.readString(builtStamp).equals(fingerprint)) {
+                classes = Sources.read(built);
+                return classes;
+            }
+
+            var cached = build.resolve(".tuul/docs").resolve(fingerprint);
+            var complete = cached.resolve("complete");
+            if (Files.isRegularFile(complete)) {
+                classes = Sources.read(cached.resolve("classes"));
+                return classes;
+            }
+
             classes = Sources.compile(roots, vendor.classpath(), compiler);
+            for (var written : classes.entrySet()) {
+                var file = cached.resolve("classes").resolve(written.getKey().replace('.', '/') + ".class");
+                Files.createDirectories(file.getParent());
+                Files.write(file, written.getValue());
+            }
+            Files.createDirectories(cached);
+            Files.writeString(complete, fingerprint);
         } catch (IOException e) {
             throw new UncheckedIOException(e);
         }
@@ -706,24 +836,31 @@ public final class Index implements Catalog {
                 .orElse(located);
     }
 
-    /// What the project looked like when it was indexed: every source file's
-    /// path, size and modification time, and the jars it is compiled against.
-    /// Anything that would change what javac produces changes this.
-    private static String stamp(List<Path> roots, Vendor vendor) throws IOException {
-        var digest = new StringBuilder();
-        for (var root : roots) {
-            if (!Files.isDirectory(root)) continue;
-            try (var tree = Files.walk(root)) {
-                for (var path : tree.filter(Files::isRegularFile)
-                        .filter(file -> file.toString().endsWith(".java") || Document.name(file).isPresent())
-                        .sorted().toList()) {
-                    digest.append(path).append(':').append(Files.size(path)).append(':')
-                            .append(Files.getLastModifiedTime(path).toMillis()).append('\n');
+    /// One source walk produces the independent stamps used by compilation and
+    /// package documents. A Markdown edit therefore cannot make javac current.
+    private record Inventory(String sources, String documents) {
+
+        private static Inventory of(List<Path> roots, Vendor vendor) throws IOException {
+            var sources = new StringBuilder();
+            var documents = new StringBuilder();
+            for (var root : roots) {
+                if (!Files.isDirectory(root)) continue;
+                try (var tree = Files.walk(root)) {
+                    for (var path : tree.filter(Files::isRegularFile).sorted().toList()) {
+                        var line = path + ":" + Files.size(path) + ":"
+                                + Files.getLastModifiedTime(path).toInstant() + "\n";
+                        if (path.toString().endsWith(".java")
+                                && !path.getFileName().toString().equals(Sources.ENTRYPOINT)) {
+                            sources.append(line);
+                        }
+                        if (Document.name(path).isPresent()) documents.append(line);
+                    }
                 }
             }
+            sources.append(vendor.stamp()).append(Runtime.version()).append("|release=")
+                    .append(Runtime.version().feature()).append("|debug=true");
+            return new Inventory(fingerprint(sources.toString()), fingerprint(documents.toString()));
         }
-        digest.append(vendor.stamp());
-        return fingerprint(digest.toString());
     }
 
     private static String fingerprint(String text) {

@@ -17,11 +17,10 @@ import sqlite3.Statement;
 /// of `String.java` to read one doc comment. None of that changes between two
 /// runs where nothing on disk changed, so none of it is done twice.
 ///
-/// Every fact is filed under the [Origin] it came from, and an origin carries
-/// a stamp: what the sources looked like when it was written. A stamp that
-/// still matches means the facts still hold. One that does not means the facts
-/// are gone — not corrected, gone — because a half-updated index is worse than
-/// no index at all.
+/// Every fact is filed under the [Origin] it came from. An origin carries the
+/// fingerprint that produced its last complete rows. A freshness check does
+/// not change those rows. Publication replaces the rows and fingerprint in one
+/// transaction.
 final class Store implements IndexStore {
 
     /// Where a body of facts came from, and whether what we have of it is still
@@ -49,37 +48,45 @@ final class Store implements IndexStore {
         }
     }
 
-    /// Finds or makes the origin for a stamp. An origin whose stamp has moved
-    /// on forgets everything it held, in the same transaction that records the
-    /// new stamp.
-    @Override
-    public Snapshot origin(String kind, String location, String stamp) {
-        try (var rows = database.query(
-                "select id, stamp, complete from origin where kind = ? and location = ?", kind, location)) {
-            if (!rows.next()) {
-                database.execute("insert into origin (kind, location, stamp) values (?, ?, ?)", kind, location, stamp);
-                return new Snapshot(database.lastId(), false, false);
-            }
-            var id = rows.integer(0);
-            if (rows.text(1).equals(stamp)) return new Snapshot(id, true, rows.integer(2) != 0);
-            forget(id, stamp);
-            return new Snapshot(id, false, false);
+    /// Opens an existing index for catalog reads only.
+    static Optional<Store> read(Path file) {
+        try {
+            return Optional.of(new Store(Schema.read(file)));
+        } catch (IOException | sqlite3.SqliteException unavailable) {
+            return Optional.empty();
         }
     }
 
-    private void forget(long origin, String stamp) {
-        database.transaction(() -> {
-            database.execute("delete from type where origin = ?", origin);
-            database.execute("delete from document where origin = ?", origin);
-            database.execute("update origin set stamp = ?, complete = 0 where id = ?", stamp, origin);
-        });
+    @Override
+    public synchronized Optional<Snapshot> inspect(String kind, String location, String stamp) {
+        try (var rows = database.query(
+                "select id, stamp, complete from origin where kind = ? and location = ?", kind, location)) {
+            if (!rows.next()) return Optional.empty();
+            return Optional.of(new Snapshot(rows.integer(0), rows.text(1).equals(stamp), rows.integer(2) != 0));
+        }
+    }
+
+    /// The last complete generation, regardless of whether the source tree has
+    /// moved on since it was published.
+    synchronized Optional<Long> complete(String kind, String location) {
+        try (var rows = database.query(
+                "select id from origin where kind = ? and location = ? and complete = 1", kind, location)) {
+            return rows.next() ? Optional.of(rows.integer(0)) : Optional.empty();
+        }
+    }
+
+    synchronized Optional<Long> stored(String kind, String location) {
+        try (var rows = database.query(
+                "select id from origin where kind = ? and location = ?", kind, location)) {
+            return rows.next() ? Optional.of(rows.integer(0)) : Optional.empty();
+        }
     }
 
     /// Everything known about one type, or nothing. The name it answers with is
     /// the one a reader would write, which is not always the one it is filed
     /// under.
     @Override
-    public Optional<TypeInfo> type(long origin, String name) {
+    public synchronized Optional<TypeInfo> type(long origin, String name) {
         try (var rows = database.query(
                 "select id, kind, modifiers, superclass, doc, source, line from type where origin = ? and name = ?",
                 origin, name)) {
@@ -104,7 +111,7 @@ final class Store implements IndexStore {
     }
 
     @Override
-    public Optional<Document> document(long origin, String packageName, String kind, String slug) {
+    public synchronized Optional<Document> document(long origin, String packageName, String kind, String slug) {
         try (var rows = database.query("""
                 select title, body, source from document
                 where origin = ? and package = ? and kind = ? and slug = ?
@@ -115,7 +122,7 @@ final class Store implements IndexStore {
     }
 
     @Override
-    public List<Document> documents(long origin, String packageName, String kind) {
+    public synchronized List<Document> documents(long origin, String packageName, String kind) {
         var found = new ArrayList<Document>();
         var sql = "select kind, slug, title, body, source from document where origin = ? and package = ?"
                 + (kind.isEmpty() ? "" : " and kind = ?") + " order by source";
@@ -143,7 +150,7 @@ final class Store implements IndexStore {
     /// Every type name an origin holds, which is only meaningful for one that
     /// was indexed all at once.
     @Override
-    public List<String> names(long origin) {
+    public synchronized List<String> names(long origin) {
         return strings("select name from type where origin = ? order by id", origin);
     }
 
@@ -151,7 +158,7 @@ final class Store implements IndexStore {
     /// the order a listing is read in, where `names` answers in the order
     /// things were indexed.
     @Override
-    public List<String> names(long origin, TypeInfo.Kind kind) {
+    public synchronized List<String> names(long origin, TypeInfo.Kind kind) {
         return strings("select name from type where origin = ? and kind = ? order by name", origin, kind.name());
     }
 
@@ -192,7 +199,7 @@ final class Store implements IndexStore {
     /// its nested types: somebody typing a bare name means the thing with that
     /// name, and a package is not something they should have to remember.
     @Override
-    public List<Catalog.Match> search(String text, int limit) {
+    public synchronized List<Catalog.Match> search(String text, int limit) {
         var match = query(text);
         if (match.isBlank()) return List.of();
 
@@ -222,36 +229,105 @@ final class Store implements IndexStore {
         return List.copyOf(found);
     }
 
-    /// Writes what was learned, in one transaction. `complete` marks an origin
-    /// that was indexed in full rather than a type at a time.
-    ///
-    /// Types are filed under their binary name — `a.b.Outer$Inner` — because
-    /// that is the only name a type has to itself. Written with dots,
-    /// `a.b.C.D` could as easily be a class `D` in a package `a.b.C`, which is
-    /// why looking one up tries both.
     @Override
-    public void write(long origin, Map<String, TypeInfo> types, List<Document> documents, boolean complete) {
-        database.transaction(() -> {
-            try (var sink = new Sink()) {
-                types.forEach((name, type) -> sink.put(origin, name, type));
+    public synchronized List<Catalog.Root> roots() {
+        var found = new ArrayList<Catalog.Root>();
+        try (var rows = database.query("select position, name, label from root order by position")) {
+            while (rows.next()) {
+                found.add(new Catalog.Root(rows.text(1), rows.text(2),
+                        strings("select name from root_item where root = ? order by position", rows.integer(0))));
             }
-            if (complete || !documents.isEmpty()) {
-                database.execute("delete from document where origin = ?", origin);
-                try (var sink = Statement.of(database,
-                        "insert into document (origin, package, kind, slug, title, body, source)"
-                                + " values (?, ?, ?, ?, ?, ?, ?)")) {
-                    for (var document : documents) {
-                        sink.run(origin, document.packageName(), document.kind(), document.slug(), document.title(),
-                                document.body(), document.source());
+        }
+        return List.copyOf(found);
+    }
+
+    @Override
+    public synchronized void publishRoots(List<Catalog.Root> roots) {
+        database.transaction(() -> {
+            database.execute("delete from root");
+            try (var root = Statement.of(database, "insert into root (position, name, label) values (?, ?, ?)");
+                    var item = Statement.of(database,
+                            "insert into root_item (root, position, name) values (?, ?, ?)")) {
+                for (var at = 0; at < roots.size(); at++) {
+                    var written = roots.get(at);
+                    root.run(at, written.name(), written.label());
+                    for (var in = 0; in < written.contents().size(); in++) {
+                        item.run(at, in, written.contents().get(in));
                     }
                 }
             }
-            if (complete) database.execute("update origin set complete = 1 where id = ?", origin);
+        });
+    }
+
+    /// Builds happen before this method. The transaction begins only when every
+    /// replacement row is ready, so readers keep the previous complete origin
+    /// until the commit makes this one visible.
+    @Override
+    public synchronized void publish(String kind, String location, String stamp,
+            Map<String, TypeInfo> types, List<Document> documents) {
+        database.transaction(() -> {
+            var origin = id(kind, location).orElseGet(() -> {
+                database.execute("insert into origin (kind, location, stamp) values (?, ?, ?)", kind, location, stamp);
+                return database.lastId();
+            });
+            database.execute("delete from type where origin = ?", origin);
+            database.execute("delete from document where origin = ?", origin);
+            database.execute("update origin set stamp = ?, complete = 0 where id = ?", stamp, origin);
+            try (var sink = new Sink()) {
+                types.forEach((name, type) -> sink.put(origin, name, type));
+            }
+            documents(origin, documents);
+            database.execute("update origin set complete = 1 where id = ?", origin);
         });
     }
 
     @Override
-    public void close() {
+    public synchronized void publishIncremental(
+            String kind, String location, String stamp, Map<String, TypeInfo> types) {
+        database.transaction(() -> {
+            var existing = id(kind, location);
+            var origin = existing.orElseGet(() -> {
+                database.execute("insert into origin (kind, location, stamp) values (?, ?, ?)", kind, location, stamp);
+                return database.lastId();
+            });
+            if (existing.isPresent() && !storedStamp(origin).equals(stamp)) {
+                database.execute("delete from type where origin = ?", origin);
+                database.execute("delete from document where origin = ?", origin);
+                database.execute("update origin set stamp = ?, complete = 0 where id = ?", stamp, origin);
+            }
+            try (var sink = new Sink()) {
+                types.forEach((name, type) -> sink.put(origin, name, type));
+            }
+        });
+    }
+
+    private String storedStamp(long origin) {
+        try (var rows = database.query("select stamp from origin where id = ?", origin)) {
+            return rows.next() ? rows.text(0) : "";
+        }
+    }
+
+    private Optional<Long> id(String kind, String location) {
+        try (var rows = database.query(
+                "select id from origin where kind = ? and location = ?", kind, location)) {
+            return rows.next() ? Optional.of(rows.integer(0)) : Optional.empty();
+        }
+    }
+
+    private void documents(long origin, List<Document> documents) {
+        if (documents.isEmpty()) return;
+        try (var sink = Statement.of(database,
+                "insert into document (origin, package, kind, slug, title, body, source)"
+                        + " values (?, ?, ?, ?, ?, ?, ?)")) {
+            for (var document : documents) {
+                sink.run(origin, document.packageName(), document.kind(), document.slug(), document.title(),
+                        document.body(), document.source());
+            }
+        }
+    }
+
+    @Override
+    public synchronized void close() {
         database.close();
     }
 
