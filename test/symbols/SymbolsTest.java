@@ -439,6 +439,9 @@ public final class SymbolsTest {
                     result.source().contains("greeting-1.0-sources.jar"));
             Check.that("exact dependency lookup works after search",
                     index.lookup("greeting.Greeter").orElseThrow().doc().startsWith("Greets people by name."));
+            Check.equal("exact lookup enriches the compact search generation",
+                    "java.lang.String greet(java.lang.String name)",
+                    method(index.lookup("greeting.Greeter").orElseThrow(), "greet").signature());
         }
 
         var changed = """

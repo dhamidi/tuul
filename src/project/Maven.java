@@ -3,6 +3,8 @@ package project;
 import java.io.IOException;
 import java.io.StringReader;
 import java.net.URI;
+import java.nio.file.Files;
+import java.nio.file.Path;
 import java.util.ArrayDeque;
 import java.util.ArrayList;
 import java.util.HashMap;
@@ -11,6 +13,7 @@ import java.util.LinkedHashSet;
 import java.util.List;
 import java.util.Map;
 import java.util.Set;
+import java.util.function.Predicate;
 import javax.xml.XMLConstants;
 import javax.xml.parsers.DocumentBuilderFactory;
 import javax.xml.parsers.ParserConfigurationException;
@@ -23,14 +26,17 @@ import org.xml.sax.SAXException;
 ///
 /// The resolver supports parent inheritance, properties, dependency management,
 /// imported BOMs, compile, runtime, provided, and test scopes, optional
-/// dependencies, path exclusions, jar and test-jar artifacts, classifiers, and
-/// relocation. It does not activate Maven profiles. Dependencies in inactive
-/// profiles do not enter the graph. It rejects unresolved properties, system
-/// dependencies, and unknown artifact types.
+/// dependencies, path exclusions, jar, bundle, and test-jar artifacts,
+/// classifiers, relocation, and active-by-default or file-activated profiles.
+/// Other profiles do not enter the graph. An unsupported activation,
+/// unresolved property, system dependency,
+/// unknown scope, or unknown artifact type stops resolution with a diagnostic.
 ///
 /// The resolver uses a breadth-first walk. The nearest coordinate wins a
 /// conflict. A root wins over a transitive dependency. Declaration order wins
-/// at the same depth. [Resolution#omitted()] records every mediated coordinate.
+/// at the same depth. Test and provided dependencies enter only the test graph
+/// of a requested root; they are not transitive. [Resolution#omitted()] records
+/// every mediated coordinate.
 final class Maven {
 
     private Maven() {}
@@ -73,10 +79,16 @@ final class Maven {
 
     static final class Resolver {
         private final PomSource source;
+        private final Predicate<Path> exists;
         private final Map<Add.Coordinate, Pom> poms = new HashMap<>();
 
         Resolver(PomSource source) {
+            this(source, Files::exists);
+        }
+
+        Resolver(PomSource source, Predicate<Path> exists) {
             this.source = source;
+            this.exists = exists;
         }
 
         Resolution resolve(List<Add.Coordinate> roots) throws IOException {
@@ -95,14 +107,14 @@ final class Maven {
                 Set<String> exclusions)
                 throws IOException {
             var queue = new ArrayDeque<Candidate>();
-            for (var root : roots) queue.add(new Candidate(root, "compile", List.of(root.text()), exclusions, ""));
+            for (var root : roots) queue.add(new Candidate(root, "compile", List.of(root.text()), exclusions, "", 0));
             var selected = new LinkedHashMap<String, Node>();
             while (!queue.isEmpty()) {
                 var candidate = relocate(queue.removeFirst());
                 if (candidate.excluded().contains(candidate.coordinate().dependencyKey())) continue;
                 var pom = pom(candidate.coordinate());
                 var coordinate = candidate.coordinate().type().equals("jar")
-                        ? candidate.coordinate().withType(pom.packaging()) : candidate.coordinate();
+                        ? candidate.coordinate().withType(artifactType(pom.packaging())) : candidate.coordinate();
                 if (coordinate.type().equals("pom")) {
                     enqueue(queue, candidate.withCoordinate(coordinate), pom, graph);
                     continue;
@@ -120,6 +132,13 @@ final class Maven {
             return List.copyOf(selected.values());
         }
 
+        /// Maps supported Maven packaging labels to repository artifact types.
+        /// The Maven Bundle Plugin publishes an ordinary JAR with `bundle`
+        /// packaging.
+        private static String artifactType(String packaging) {
+            return packaging.equals("bundle") ? "jar" : packaging;
+        }
+
         private Candidate relocate(Candidate candidate) throws IOException {
             var current = candidate;
             var seen = new LinkedHashSet<String>();
@@ -132,7 +151,7 @@ final class Maven {
                 var path = new ArrayList<>(current.path());
                 path.add(relocation.text());
                 current = new Candidate(relocation, current.scope(), path, current.excluded(),
-                        candidate.coordinate().text());
+                        candidate.coordinate().text(), current.depth());
             }
         }
 
@@ -141,21 +160,22 @@ final class Maven {
             for (var declaration : pom.dependencies()) {
                 var dependency = declaration.managed(pom.managed());
                 dependency.validate(parent.coordinate());
-                if (!included(dependency, graph) || dependency.optional()) continue;
+                if (dependency.optional() || !included(dependency, graph, parent.depth() == 0)) continue;
                 var coordinate = dependency.coordinate();
                 supported(coordinate);
                 var excluded = new LinkedHashSet<>(parent.excluded());
                 excluded.addAll(dependency.exclusions());
                 var path = new ArrayList<>(parent.path());
                 path.add(coordinate.text());
-                queue.addLast(new Candidate(coordinate, dependency.scope(), path, Set.copyOf(excluded), ""));
+                queue.addLast(new Candidate(coordinate, dependency.scope(), path, Set.copyOf(excluded), "",
+                        parent.depth() + 1));
             }
         }
 
-        private static boolean included(Dependency dependency, Graph graph) throws IOException {
+        private static boolean included(Dependency dependency, Graph graph, boolean direct) throws IOException {
             return switch (dependency.scope()) {
                 case "compile", "runtime" -> true;
-                case "test", "provided" -> graph == Graph.TEST;
+                case "test", "provided" -> graph == Graph.TEST && direct;
                 case "import" -> false;
                 case "system" -> throw new IOException("unsupported Maven system dependency "
                         + dependency.group() + ":" + dependency.artifact());
@@ -182,7 +202,7 @@ final class Maven {
                     if (node instanceof Element element) properties.put(element.getTagName(), value(element));
                 }
             }
-            interpolateAll(properties, coordinate);
+            interpolateAll(properties);
             var group = resolved(text(project, "groupId"), properties, coordinate.group(), "project group", coordinate);
             var artifact = resolved(text(project, "artifactId"), properties, coordinate.artifact(),
                     "project artifact", coordinate);
@@ -190,7 +210,7 @@ final class Maven {
                     "project version", coordinate);
             var effective = Add.Coordinate.of(group, artifact, version, "jar", "");
             builtins(properties, effective, parentCoordinate);
-            interpolateAll(properties, coordinate);
+            interpolateAll(properties);
 
             var managed = new LinkedHashMap<>(inherited.managed());
             var management = child(project, "dependencyManagement");
@@ -215,18 +235,32 @@ final class Maven {
             return parsed;
         }
 
-        private static List<Dependency> activeProfileDependencies(Element project, Map<String, String> properties,
+        private List<Dependency> activeProfileDependencies(Element project, Map<String, String> properties,
                 Add.Coordinate coordinate) throws IOException {
             var profiles = child(project, "profiles");
             if (profiles == null) return List.of();
             var result = new ArrayList<Dependency>();
             for (var node = profiles.getFirstChild(); node != null; node = node.getNextSibling()) {
                 if (!(node instanceof Element profile) || !profile.getTagName().equals("profile")) continue;
+                var declared = child(profile, "dependencies");
+                if (declared == null) continue;
                 var activation = child(profile, "activation");
                 if (activation == null) continue;
                 var activeByDefault = text(activation, "activeByDefault");
                 if (activeByDefault.equalsIgnoreCase("true")) {
-                    result.addAll(dependencies(child(profile, "dependencies"), properties, coordinate));
+                    result.addAll(dependencies(declared, properties, coordinate));
+                    continue;
+                }
+                var file = child(activation, "file");
+                if (file != null && onlyFileActivation(activation)) {
+                    var path = resolved(text(file, "exists"), properties, "", "profile file", coordinate);
+                    if (!path.isEmpty() && exists.test(Path.of(path).normalize())) {
+                        result.addAll(dependencies(declared, properties, coordinate));
+                    }
+                    var missing = resolved(text(file, "missing"), properties, "", "profile file", coordinate);
+                    if (!missing.isEmpty() && !exists.test(Path.of(missing).normalize())) {
+                        result.addAll(dependencies(declared, properties, coordinate));
+                    }
                     continue;
                 }
                 if (!activeByDefault.isEmpty() || hasElementChildren(activation)) {
@@ -235,6 +269,15 @@ final class Maven {
                 }
             }
             return result;
+        }
+
+        private static boolean onlyFileActivation(Element activation) {
+            for (var node = activation.getFirstChild(); node != null; node = node.getNextSibling()) {
+                if (node instanceof Element child && !Set.of("activeByDefault", "file").contains(child.getTagName())) {
+                    return false;
+                }
+            }
+            return true;
         }
 
         private static Add.Coordinate relocation(Element project, Map<String, String> properties,
@@ -320,13 +363,14 @@ final class Maven {
             properties.put("pom.groupId", coordinate.group());
             properties.put("pom.artifactId", coordinate.artifact());
             properties.put("pom.version", coordinate.version());
+            properties.put("java.home", System.getProperty("java.home"));
             if (parent == null) return;
             properties.put("project.parent.groupId", parent.group());
             properties.put("project.parent.artifactId", parent.artifact());
             properties.put("project.parent.version", parent.version());
         }
 
-        private static void interpolateAll(Map<String, String> properties, Add.Coordinate owner) throws IOException {
+        private static void interpolateAll(Map<String, String> properties) {
             for (var pass = 0; pass < 20; pass++) {
                 var changed = false;
                 for (var entry : properties.entrySet()) {
@@ -337,10 +381,6 @@ final class Maven {
                     }
                 }
                 if (!changed) break;
-            }
-            for (var entry : properties.entrySet()) {
-                if (containsProperty(entry.getValue())) throw new IOException("unresolved Maven property "
-                        + entry.getValue() + " in " + owner.text());
             }
         }
 
@@ -402,14 +442,14 @@ final class Maven {
     }
 
     private record Candidate(Add.Coordinate coordinate, String scope, List<String> path,
-            Set<String> excluded, String relocatedFrom) {
+            Set<String> excluded, String relocatedFrom, int depth) {
         Candidate {
             path = List.copyOf(path);
             excluded = Set.copyOf(excluded);
         }
 
         Candidate withCoordinate(Add.Coordinate value) {
-            return new Candidate(value, scope, path, excluded, relocatedFrom);
+            return new Candidate(value, scope, path, excluded, relocatedFrom, depth);
         }
     }
 

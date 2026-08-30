@@ -34,15 +34,20 @@ import java.util.jar.JarFile;
 import java.util.Properties;
 import json.Json;
 
-/// Resolves and downloads Maven artifacts into a project's `vendor/`.
+/// Resolves all requested Maven roots as one graph and installs the selected
+/// artifacts in `vendor/<group>/<artifact>/<version>/`.
 ///
-/// One add is one ephemeral coordinator actor. Its first command creates one
-/// resolution effect per root; after all roots resolve, the actor creates one
-/// download effect per binary, source, and javadoc artifact. The actor runtime
-/// carries out those effects concurrently. Each download publishes byte
-/// progress immediately and emits one ordinary actor message when its file is
-/// safely in place. The split is important: progress is live, while completion
-/// is ordered state.
+/// Downloads go to a staging tree. Required JARs must pass checksum, archive,
+/// coordinate, and duplicate-class validation before publication. A failure
+/// keeps the active vendor graph and `vendor/.tuul/resolution.json` unchanged.
+/// Source and javadoc JARs are optional. They are recorded but are not runtime
+/// classpath entries.
+///
+/// One coordinator actor runs the selected downloads. Progress is live.
+/// Completion is ordered state. At most eight requests run at once and at most
+/// four use one origin. A GET has at most four attempts. Transport failures,
+/// response-body failures, HTTP 408, 425, 429, 500, 502, 503, and 504 retry.
+/// HTTP 404 does not retry. Cancellation preserves the interrupted state.
 public final class Add {
 
     /// Maven Central, used when the command does not name a repository.
@@ -56,7 +61,10 @@ public final class Add {
         EVENTS
     }
 
-    /// Selects explicit graph exclusions and accepted duplicate classes.
+    /// Selects graph exclusions, accepted duplicate classes, and write mode.
+    /// Exclusions and duplicate exceptions are stored in the generated
+    /// resolution. A dry run reports the plan without changing files. Migration
+    /// must be true before an identified flat layout can be published.
     public record Options(java.util.Set<String> exclusions, java.util.Set<String> duplicateExceptions,
             boolean dryRun, boolean migrate) {
         public Options {
@@ -71,9 +79,10 @@ public final class Add {
 
     /// The result of one add operation.
     ///
-    /// `downloaded` and `cached` contain installed artifact labels in
-    /// resolution order. `failed` contains one reason for each required
-    /// artifact that did not reach `vendor/`; missing supplements are optional.
+    /// `downloaded` and `cached` contain staged artifact labels in resolution
+    /// order. `failed` contains one reason for each required artifact that did
+    /// not pass staging. Missing supplements are optional. A successful return
+    /// means the staged graph was published before this result was returned.
     public record Result(List<String> downloaded, List<String> cached, List<Failure> failed) {
         public Result {
             downloaded = List.copyOf(downloaded);
@@ -263,24 +272,19 @@ public final class Add {
         }
     }
 
-    /// Adds coordinates to `layout.vendor()` and renders the live event feed.
+    /// Adds one or more coordinates to `layout.vendor()` and renders the event
+    /// feed.
     ///
-    /// Coordinates use `group:artifact:version` or
-    /// `group:artifact:version:classifier`. The resolver reads each POM with
-    /// the JDK DOM parser and follows compile and runtime dependencies.
-    /// Downloads use one shared fetch client and one session, so requests share
-    /// connections and run in parallel. Existing target files are cache hits.
+    /// A coordinate uses `group:artifact:version` or
+    /// `group:artifact:version:classifier`. All roots enter one deterministic
+    /// resolution. Existing selected files are verified cache hits. Each
+    /// selected artifact also requests optional source and javadoc JARs.
     ///
-    /// The returned result stops changing before this method returns. The
-    /// event feed has completed when this method returns. The method creates
-    /// `vendor/` when it does not exist. It resolves each root POM and adds
-    /// its transitive compile and runtime dependencies. Each resolved jar
-    /// also requests its sources and javadoc jars. Missing supplement jars do
-    /// not fail the binary add.
-    ///
-    /// `Mode.TTY` writes ANSI bars. `Mode.EVENTS` writes one flushed line for
-    /// each event. A failed download does not stop the other downloads. Setup
-    /// failures throw `IOException`. Download failures appear in the result.
+    /// `Mode.TTY` writes ANSI bars. `Mode.EVENTS` writes one flushed event per
+    /// line. Resolution and setup errors throw `IOException`. Download failures
+    /// appear in the result. A required failure does not publish staged files.
+    /// Duplicate classes and invalid migration state throw `IOException` before
+    /// publication. `Options.dryRun()` reports the plan without writing it.
     public static Result into(Layout layout, List<String> coordinates,
             List<URI> repositories, Writer out, Mode mode) throws IOException {
         return into(layout, coordinates, repositories, out, mode, Options.defaults());

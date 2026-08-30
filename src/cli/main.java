@@ -49,7 +49,7 @@ static Command tuul() {
             .flag("all", "include non-public members")
             .flag("members", "describe everything the symbol holds, not only the symbol")
             .flag("recursive", "as --members, and into subpackages too")
-            .value("search", "search names and documentation instead of naming a symbol")
+            .value("search", "search the project and selected dependencies; first use builds the index")
             .repeated("source-path", "where to look for sources (default: src)")
             .repeated("vendor", "where to look for jars (default: vendor)")
             .optional("symbol", "the type to describe");

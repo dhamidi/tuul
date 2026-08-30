@@ -26,8 +26,8 @@ It borrows:
 > 296 functions and 474 constants — generated from the amalgamation vendored
 > in `native/sqlite3` by `tuul bind`, with a small typed layer over it).
 >
-> `tuul docs` answers for your code, for the jars in `vendor/`, and for the
-> JDK itself, with doc comments and their `@param`/`@return`/`@throws` tags
+> `tuul docs` answers for your code, for the selected jars in `vendor/`, and
+> for the JDK itself, with doc comments and their `@param`/`@return`/`@throws` tags
 > read from the matching source — a `-sources.jar` for a dependency,
 > `lib/src.zip` for the JDK. `tuul run [entry] -- <args>` runs an entrypoint;
 > running a file from `tasks/` is not implemented yet. `tuul new` scaffolds
@@ -78,8 +78,9 @@ request and response bodies.
 - No external config language, and no dependency manifest to keep in sync.
   Deploy targets are declared in a plain Java file `tuul` runs directly — not
   TOML, not YAML, not a Groovy/Kotlin DSL. Tasks are files under `tasks/`.
-  Dependencies are just what's checked into `vendor/` — the directory itself
-  is the declaration, nothing else records it.
+  The requested roots and selected files are checked into `vendor/`.
+  `vendor/.tuul/resolution.json` records the generated graph. It is not a
+  second dependency declaration.
 - The file tree *is* the documentation. A library holds the application;
   entrypoints are thin call-throughs. Open the tree and you can see what the
   app does before reading a line of code.
@@ -132,7 +133,7 @@ restarts it when a source file changes.
 | Command | Does what |
 |---|---|
 | `tuul new <name>` | Scaffold a new Tuul-managed project |
-| `tuul add <group:artifact:version>...` | Fetch Maven artifacts into `vendor/` without a manifest edit |
+| `tuul add <group:artifact:version>...` | Resolve and install one Maven dependency graph into `vendor/` |
 | `tuul remove <name>` | Delete a dependency from `vendor/` |
 | `tuul dev` | Run the application and restart it after a change |
 | `tuul build` | Produce one runnable jar with all runtime and native dependencies |
@@ -144,6 +145,7 @@ restarts it when a source file changes.
 | `tuul console` | Open a REPL with the application's module path |
 | `tuul generate <what>` | Generate a library, entrypoint, task, native module, or test |
 | `tuul docs <symbol>` | Query symbols in the application, dependencies, and JDK |
+| `tuul docs --search <text>` | Search the application, selected dependencies, and exported JDK types |
 | `tuul deploy` | Release and ship the application |
 | `tuul doctor` | Check the JDK, module graph, and `vendor/` |
 
@@ -156,20 +158,29 @@ or task.
 ```sh
 $ tuul add com.fasterxml.jackson.core:jackson-databind:2.18.1
 add.resolve com.fasterxml.jackson.core:jackson-databind:2.18.1
-add.resolved com.fasterxml.jackson.core:jackson-databind:2.18.1 3 artifacts
-add.done com.fasterxml.jackson.core:jackson-databind:2.18.1:sources vendor/jackson-databind-2.18.1-sources.jar
+add.selected com.fasterxml.jackson.core:jackson-databind:2.18.1 runtime via com.fasterxml.jackson.core:jackson-databind:2.18.1
+add.limits all 8 global, 4 per origin
+add.done com.fasterxml.jackson.core:jackson-databind:2.18.1:sources vendor/com.fasterxml.jackson.core/jackson-databind/2.18.1/jackson-databind-2.18.1-sources.jar
 add.complete 9 downloaded, 0 cached, 0 failed
 ```
 
-Tuul reads Maven POM files with the JDK XML DOM parser, follows transitive
-compile and runtime dependencies, and streams every binary into `vendor/`.
-Downloads run through a queue with at most 20 active transfers, so a large
-dependency graph does not exhaust the remote repository or the local client.
-Each binary also gets a `-sources.jar` and a `-javadoc.jar` request. Missing
-source or javadoc jars are reported as optional events and do not fail the
-binary add. Use `--repository URL` more than once to try repositories in
-order. There is no manifest entry or lockfile. The files in `vendor/` are the
-dependency list.
+Tuul resolves all command-line roots as one graph. It uses breadth-first
+conflict mediation. The nearest version wins. Declaration order breaks a tie.
+The generated resolution record stores roots, runtime and test selections,
+omitted conflicts, dependency paths, scopes, repositories, checksums, missing
+supplements, exclusions, duplicate exceptions, and owned files.
+
+Tuul downloads to `vendor/.tuul/staging-*`. It verifies SHA-256, or SHA-1 when
+SHA-256 metadata is not present. It records a warning when a repository has no
+checksum metadata. It validates each JAR before publication. A required-file
+failure keeps the previous selected graph active. Source and javadoc JARs are
+optional and never enter the runtime classpath.
+
+Maven GET requests use at most four attempts. Tuul retries transport failures,
+HTTP 408, 425, 429, 500, 502, 503, and 504. It honors `Retry-After`. It does not
+retry HTTP 404. At most eight downloads run at once, with at most four for one
+repository origin. Use `--repository URL` more than once to try repositories
+in order.
 
 When stdout is a terminal, `tuul add` replaces these lines with one ANSI
 progress bar per artifact. When stdout is not a terminal, it keeps the
@@ -180,12 +191,36 @@ $ tuul add --repository https://repo.example.test/maven2/ com.example:library:1.
 add.complete 3 downloaded, 0 cached, 0 failed
 ```
 
-Use a separate project or directory for test-only dependencies. Everything
-under `vendor/` gets committed, so a fresh clone builds and runs without
-touching the network.
+Commit the managed coordinate directories and `vendor/.tuul/resolution.json`.
+A fresh clone then builds and runs without a network request. Runtime builds
+use only the runtime graph. `tuul test` also uses the selected test graph.
+Test and provided dependencies of a requested root enter the test graph. They
+do not propagate from transitive dependencies.
 
 Vendoring sources, not just compiled classes, is also what makes `tuul docs`
 work on dependencies — see [Example: querying the code index](#example-querying-the-code-index).
+
+### Dependency reference
+
+A selected artifact uses `vendor/<group>/<artifact>/<version>/`. Its binary,
+source, and javadoc JARs share that directory. Artifact type and classifier are
+part of the selected identity. POM parents, properties, dependency management,
+imported BOMs, optional dependencies, scopes, exclusions, classifiers,
+`test-jar`, and relocation are supported. Active-by-default and file-activated
+profiles are supported. Other profile activation, system scope, unresolved
+dependency properties, and unknown artifact types stop resolution with an
+explicit error.
+
+`tuul add` scans runtime binaries for duplicate class names. It reports every
+owning coordinate and stops before publication. Use `--exclude group:artifact`
+to remove a dependency path. Use `--allow-duplicate package.Type` only when the
+duplicate is intentional. Both choices are stored in the resolution record.
+
+Use `tuul add --dry-run <coordinates>` to see additions, removals, conflicts,
+and migration work without changing files. For an old flat `vendor/`, review
+that output and then run `tuul add --migrate <coordinates>`. Tuul moves JARs
+that contain Maven identity metadata. It preserves unknown files as unmanaged
+files and excludes them from the selected classpath.
 
 ## Example: an agent driving the whole lifecycle
 
@@ -218,15 +253,20 @@ module descriptor. Packages remain directories inside those source roots.
 ```
 invoicing/
 ├── project.java                 # deploy target — plain Java, run by tuul
-├── vendor/                      # every dependency: binary + sources — this *is* the manifest
-│   ├── jackson-databind/
-│   ├── sqlite-jdbc/
-│   └── test/
-│       └── junit-jupiter/       # test-only dependencies live here instead
+├── vendor/                      # selected Maven graph and generated record
+│   ├── .tuul/
+│   │   └── resolution.json
+│   └── com.fasterxml.jackson.core/
+│       └── jackson-databind/
+│           └── 2.18.1/
+│               ├── jackson-databind-2.18.1.jar
+│               └── jackson-databind-2.18.1-sources.jar
 ├── native/
 │   └── hello.c                  # native module: hello world, callback via function pointer
 ├── src/
 │   ├── module-info.java         # module invoicing
+│   ├── resources/
+│   │   └── application.properties # copied to the classpath root
 │   ├── invoicing/                # library: core domain logic
 │   │   ├── Invoice.java
 │   │   ├── Invoices.java
@@ -294,11 +334,11 @@ Tuul compiles and tests each source root as an explicit module. It uses the
 module path for the application, entrypoints, tasks, tests, and dependencies.
 The regular runnable jar is the deliberate exception described below.
 
-**Dependencies.** There is no manifest for these. Commands such as
+**Dependencies.** There is no hand-written manifest for these. Commands such as
 `tuul add com.fasterxml.jackson.core:jackson-databind:2.18.1` and
-`tuul add org.xerial:sqlite-jdbc:3.46.0.0` populate runtime jars directly.
-Each jar is committed under `vendor/`. Nothing declares a dependency
-separately from fetching it, so nothing can drift out of sync with the tree.
+`tuul add org.xerial:sqlite-jdbc:3.46.0.0` select one graph and populate
+coordinate directories. The generated resolution record identifies every
+owned file and the graph that selected it.
 
 **Tasks.** Each Java file under `tasks/` is one task. Tuul discovers the task
 from its class name. No registry or `project.java` entry is necessary.
@@ -367,6 +407,12 @@ The jar contains:
 - all runtime dependency classes,
 - all runtime resources,
 - the native libraries for each supported platform.
+
+Put a classpath-root resource in `src/resources/`. For example,
+`src/resources/application.properties` becomes
+`build/classes/application.properties`. A non-Java file in another `src/`
+package stays beside that package. An entrypoint resource stays relative to
+its entrypoint output. Resource changes invalidate the related build output.
 
 The manifest selects the CLI entrypoint when the project has one. Otherwise,
 it selects the only entrypoint. A machine with JDK 27 runs the application
@@ -492,6 +538,22 @@ Versioned
 Serializable
 TreeCodec
 ```
+
+Use search when you do not know the full symbol name:
+
+```sh
+$ tuul docs --search SpringBootApplication
+org.springframework.boot.autoconfigure.SpringBootApplication  [org.springframework.boot:spring-boot-autoconfigure:3.5.5]
+
+$ tuul docs --search SpringBootApplication --json
+{"matches":[{"symbol":"org.springframework.boot.autoconfigure.SpringBootApplication","kind":"ANNOTATION","doc":"...","origin":"org.springframework.boot:spring-boot-autoconfigure:3.5.5","source":"vendor/org.springframework.boot/spring-boot-autoconfigure/3.5.5/spring-boot-autoconfigure-3.5.5-sources.jar!/org/springframework/boot/autoconfigure/SpringBootApplication.java"}]}
+```
+
+Search covers project symbols, the selected runtime and test dependency set,
+and exported JDK names. The first search builds complete cached project and
+dependency generations plus a lightweight JDK name generation. Dependency
+source JARs supply type and public or protected member documentation. Exact
+symbol lookup remains lazy and supplies full JDK source documentation.
 
 ## Contributing
 

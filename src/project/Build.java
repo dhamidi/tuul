@@ -24,7 +24,7 @@ import symbols.Vendor;
 /// `src/module-info.java` exists, javac reads those jars from the module path.
 /// Otherwise, javac reads them from the classpath. Entrypoints and tests stay
 /// unnamed. Tuul does not enable preview features. Files in `src/resources/`
-/// land at the root of `build/classes/`.
+/// land at the root of `build/classes/` and take part in its fingerprint.
 public final class Build {
 
     /// What a compile did, or what stopped it. Problems are javac's own words.
@@ -220,18 +220,12 @@ public final class Build {
         return result.ok() ? new Result(result.classes(), List.of()) : new Result(0, report(result.problems()));
     }
 
-    /// Copies non-Java files to the output directory.
+    /// Copies non-Java files to their classpath locations.
     ///
-    /// `javac -d` writes class files and nothing else, so a file sitting next
-    /// to a class — an icon, a template, a spec — is not on the classpath when
-    /// the program runs, and [Class#getResourceAsStream] answers null. That is
-    /// a confusing failure: the file is plainly there in the source tree, and
-    /// the only thing wrong is that nobody copied it.
-    ///
-    /// `from` is the directory that defines the resource path. Library resources
-    /// use `src/`, so they remain package-local. Root resources use
-    /// `src/resources/`, so they land directly in `build/classes/`. Entrypoint
-    /// resources use their entrypoint directory and retain their current paths.
+    /// `from` defines the resource path. A normal library resource is relative
+    /// to `src/` and stays package-local. A root resource is relative to
+    /// `src/resources/` and lands directly in `build/classes/`. An entrypoint
+    /// resource is relative to its entrypoint directory.
     private static void resources(List<Path> roots, Path from, Path out) throws IOException {
         for (var root : roots) {
             if (!Files.isDirectory(root)) continue;

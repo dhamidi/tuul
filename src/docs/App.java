@@ -20,9 +20,10 @@ import symbols.Index;
 /// `tuul docs` as an application: which messages it understands, and how the
 /// effects those messages ask for are carried out.
 ///
-/// Compiling a source tree is slow and can fail, so it is an effect — which
-/// means a broken project produces an `error` message, not a stack trace. The
-/// writers are bound here, at the edge, and nowhere else.
+/// Compiling or indexing can fail, so each symbol operation is an effect. A
+/// broken project produces an `error` message instead of a stack trace. Search
+/// makes the project, selected dependency, and lightweight JDK generations
+/// current. The writers are bound here, at the edge, and nowhere else.
 public final class App {
 
     /// How many matches a search answers with. Enough to choose from, few
@@ -125,8 +126,9 @@ public final class App {
         return Effect.of("docs.report").with("line", line);
     }
 
-    /// Searching needs the project indexed, so this is where a first search
-    /// pays for one — and every search after it does not.
+    /// Runs a complete selected-set search. The first call can build project,
+    /// dependency, and JDK-name generations. Later calls reuse their stamps.
+    /// Each JSON result includes its origin and source location.
     private static void search(Effect effect, Effect.Emitter emit, CatalogFactory catalogs) throws IOException {
         var wanted = effect.string("search", "");
         try (var index = catalog(effect, catalogs)) {

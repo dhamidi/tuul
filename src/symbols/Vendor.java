@@ -16,9 +16,11 @@ import json.Json;
 
 /// The selected dependencies of a tuul-managed project.
 ///
-/// `vendor/.tuul/resolution.json` selects runtime and test binaries. Source and
-/// javadoc archives are separate documentation views. A compatibility scan
-/// reads projects that do not have a resolution record yet.
+/// `vendor/.tuul/resolution.json` selects the runtime and test binaries by
+/// coordinate. Source and javadoc archives are separate documentation views.
+/// They never enter a compile or runtime classpath. A compatibility scan reads
+/// projects that do not have a resolution record yet and marks their binaries
+/// as unmanaged.
 public final class Vendor {
 
     private static final String SOURCES = "-sources.jar";
@@ -139,13 +141,14 @@ public final class Vendor {
         return List.copyOf(new LinkedHashSet<>(paths));
     }
 
-    /// What javac needs on its classpath to compile the project against these
-    /// dependencies.
+    /// Returns the selected runtime binaries in resolution order. Build,
+    /// compile, and run use this same list.
     public List<Path> runtime() {
         return runtime;
     }
 
-    /// Returns the selected test graph. This list includes runtime dependencies.
+    /// Returns the selected test binaries in resolution order. This list also
+    /// contains the runtime graph.
     public List<Path> test() {
         return test;
     }

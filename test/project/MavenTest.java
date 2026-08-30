@@ -17,6 +17,7 @@ public final class MavenTest {
         declarationOrderWins();
         scopesOptionalAndExclusions();
         managementClassifiersAndRelocation();
+        bundlePackagingUsesJar();
         unsupportedFeaturesFail();
     }
 
@@ -60,8 +61,13 @@ public final class MavenTest {
         add(poms, "g:testing:1", "");
         add(poms, "g:provided:1", "");
         add(poms, "g:left:1", dependencies(dependency("g", "leaf", "1", "")));
-        add(poms, "g:right:1", dependencies(dependency("g", "leaf", "1", "")));
+        add(poms, "g:right:1", dependencies(dependency("g", "leaf", "1", "")
+                + dependency("g", "transitive-test", "1", "<scope>test</scope>")
+                + dependency("g", "transitive-provided", "1", "<scope>provided</scope>")
+                + dependency("jdk", "srczip", "999", "<scope>system</scope><optional>true</optional>")));
         add(poms, "g:leaf:1", "");
+        add(poms, "g:transitive-test:1", "");
+        add(poms, "g:transitive-provided:1", "");
         var resolution = resolve(poms, "g:root:1");
         Check.that("optional transitives stay out of both graphs",
                 !coordinates(resolution.runtime()).contains("g:optional:1")
@@ -71,6 +77,9 @@ public final class MavenTest {
                         && !coordinates(resolution.runtime()).contains("g:provided:1"));
         Check.that("test and provided scopes enter the test graph",
                 coordinates(resolution.test()).containsAll(List.of("g:testing:1", "g:provided:1")));
+        Check.that("transitive test, provided, and optional system dependencies stay out",
+                coordinates(resolution.test()).stream().noneMatch(name -> name.contains("transitive-"))
+                        && coordinates(resolution.test()).stream().noneMatch(name -> name.contains("srczip")));
         var leaf = resolution.runtime().stream().filter(node -> node.coordinate().artifact().equals("leaf")).findFirst().orElseThrow();
         Check.equal("an exclusion applies only to its declaring path",
                 List.of("g:root:1", "g:right:1", "g:leaf:1"), leaf.path());
@@ -109,13 +118,54 @@ public final class MavenTest {
                 relocated.relocatedFrom() + " -> " + relocated.coordinate().text());
     }
 
+    private static void bundlePackagingUsesJar() throws Exception {
+        var poms = new LinkedHashMap<String, String>();
+        add(poms, "g:root:1", dependencies(dependency("g", "yaml", "2", "")));
+        add(poms, "g:yaml:2", "<packaging>bundle</packaging>");
+        var yaml = resolve(poms, "g:root:1").runtime().stream()
+                .filter(node -> node.coordinate().artifact().equals("yaml")).findFirst().orElseThrow();
+        Check.equal("bundle packaging selects an ordinary jar artifact", "jar", yaml.coordinate().type());
+    }
+
     private static void unsupportedFeaturesFail() throws Exception {
         var unresolved = Map.of("g:root:1", pom("g", "root", "1",
                 dependencies(dependency("g", "broken", "${missing}", ""))));
         Check.that("an unresolved property fails explicitly", failure(unresolved).contains("unresolved Maven property"));
+        var unused = new LinkedHashMap<String, String>();
+        add(unused, "g:root:1", "<properties><plugin.output>${project.build.directory}/generated</plugin.output>"
+                + "</properties>");
+        Check.equal("an unresolved property outside the dependency model does not change the graph",
+                List.of("g:root:1"), coordinates(resolve(unused, "g:root:1").runtime()));
         var unknown = Map.of("g:root:1", pom("g", "root", "1",
                 dependencies(dependency("g", "native", "1", "<type>nar</type>"))));
         Check.that("an unknown type fails explicitly", failure(unknown).contains("unsupported Maven artifact type 'nar'"));
+
+        var irrelevantProfile = new LinkedHashMap<String, String>();
+        add(irrelevantProfile, "g:root:1", "<profiles><profile><id>repositories</id><activation>"
+                + "<property><name>snapshots</name></property></activation>"
+                + "<repositories><repository><id>snapshots</id></repository></repositories>"
+                + "</profile></profiles>");
+        Check.equal("an activated profile without dependencies cannot change the graph",
+                List.of("g:root:1"), coordinates(resolve(irrelevantProfile, "g:root:1").runtime()));
+
+        var dependencyProfile = Map.of("g:root:1", pom("g", "root", "1",
+                "<profiles><profile><id>conditional-dependency</id><activation>"
+                        + "<property><name>feature</name></property></activation>"
+                        + dependencies(dependency("g", "conditional", "1", ""))
+                        + "</profile></profiles>"));
+        Check.that("unsupported activation fails when it can change dependencies",
+                failure(dependencyProfile).contains("unsupported Maven profile activation 'conditional-dependency'"));
+
+        var fileProfile = Map.of("g:root:1", pom("g", "root", "1",
+                "<profiles><profile><id>legacy-jdk</id><activation><file>"
+                        + "<exists>${java.home}/../src.zip</exists></file></activation>"
+                        + dependencies(dependency("g", "legacy-tools", "1", ""))
+                        + "</profile></profiles>"));
+        var inactive = new Maven.Resolver(coordinate -> new Maven.PomDocument(
+                fileProfile.get(coordinate.group() + ":" + coordinate.artifact() + ":" + coordinate.version()),
+                REPOSITORY), ignored -> false).resolve(List.of(Add.Coordinate.parse("g:root:1")));
+        Check.equal("an inactive file profile does not contribute dependencies",
+                List.of("g:root:1"), coordinates(inactive.runtime()));
     }
 
     private static Maven.Resolution resolve(Map<String, String> poms, String... roots) throws Exception {

@@ -28,7 +28,8 @@ import compiler.Compilation;
 import sqlite3.SqliteException;
 
 /// Every symbol tuul can answer questions about, in the order it looks: the
-/// project's own sources, the jars under `vendor/`, and the running JDK.
+/// project's own sources, the selected jars under `vendor/`, and the running
+/// JDK.
 ///
 /// A symbol is answered from two places at once. The class file says what the
 /// type *is* — javac's output for the project, a vendored jar for a dependency,
@@ -38,8 +39,10 @@ import sqlite3.SqliteException;
 ///
 /// [#ensureCurrent()] compares independent source and document fingerprints.
 /// It compiles changed Java sources and publishes complete replacement rows.
-/// It publishes changed Markdown without compiling Java. A successful build
-/// remains in `index.db` for later processes.
+/// Search also publishes a complete selected-dependency generation and a
+/// lightweight exported-JDK name generation. A source-JAR change refreshes
+/// dependency documentation without compiling the project. A successful
+/// generation remains in `index.db` for later processes.
 ///
 /// Call [#catalog(Path)] when a caller must only read committed rows. That
 /// catalog has no source paths and cannot start compilation.
@@ -498,8 +501,8 @@ public final class Index implements Catalog {
         }
     }
 
-    /// Every type name known from source. Vendored and JDK types are found on
-    /// demand rather than enumerated.
+    /// Returns every project type name. Dependency and JDK names are separate
+    /// origins and are made complete by [#search(String, int)].
     public List<String> names() {
         var origin = snapshot("project", "sources", sourceStamp);
         if (origin.isPresent() && origin.get().fresh() && origin.get().complete()) {
@@ -551,8 +554,8 @@ public final class Index implements Catalog {
         var origin = snapshot("vendor", "vendor", stamp);
         if (origin.isPresent() && origin.get().fresh()) {
             var kept = kept(origin.get().id(), name);
-            if (kept.isPresent()) return kept;
-            if (origin.get().complete()) return Optional.empty();
+            if (kept.isPresent() && kept.get().line() >= 0) return kept;
+            if (kept.isEmpty() && origin.get().complete()) return Optional.empty();
         }
         var built = built(name, this::vendoredOrigin);
         built.ifPresent(found -> remember("vendor", "vendor", stamp, Map.of(found.name(), found.type())));
@@ -567,10 +570,27 @@ public final class Index implements Catalog {
         if (current.isPresent() && current.get().fresh() && current.get().complete()) return;
         var types = new LinkedHashMap<String, TypeInfo>();
         for (var name : vendor.typeNames()) {
-            built(name, this::vendoredOrigin).ifPresent(found -> types.put(found.name(), found.type()));
+            built(name, this::vendoredOrigin)
+                    .ifPresent(found -> types.put(found.name(), searchableDependency(found.type())));
         }
         for (var name : vendor.packages()) vendoredPackage(name).ifPresent(type -> types.put(name, type));
         store.orElseThrow().publish("vendor", "vendor", stamp, types, List.of());
+    }
+
+    /// Keeps the public search surface and marks it for exact-lookup enrichment.
+    /// Search does not need signatures, relationships, or block tags. Omitting
+    /// those rows makes a full dependency generation small enough for first use.
+    private static TypeInfo searchableDependency(TypeInfo type) {
+        var methods = type.methods().stream().filter(TypeInfo.Method::api)
+                .map(method -> new TypeInfo.Method(method.name(), method.returns(), List.of(), method.modifiers(),
+                        method.doc(), List.of(), method.line()))
+                .toList();
+        var fields = type.fields().stream().filter(TypeInfo.Field::api)
+                .map(field -> new TypeInfo.Field(field.name(), field.type(), field.modifiers(), field.doc(),
+                        List.of(), field.line()))
+                .toList();
+        return new TypeInfo(type.name(), type.kind(), type.modifiers(), List.of(), "", List.of(), List.of(), List.of(),
+                methods, fields, type.doc(), List.of(), type.source(), -type.line() - 1);
     }
 
     /// The JDK is stamped with its own version. A lightweight search row is
@@ -625,20 +645,6 @@ public final class Index implements Catalog {
     private static TypeInfo searchable(TypeInfo type, String source) {
         return new TypeInfo(type.name(), type.kind(), type.modifiers(), List.of(), "", List.of(), List.of(), List.of(),
                 List.of(), List.of(), "", List.of(), source, 0);
-    }
-
-    /// The dependencies and the JDK are indexed a type at a time: there is no
-    /// point enumerating a jar nobody asked about. So a miss here means *not
-    /// indexed yet* rather than *not there*, and falls through to the work.
-    private Optional<TypeInfo> remembered(String kind, String location, String stamp, String name, SymbolOrigin origins) {
-        var origin = snapshot(kind, location, stamp);
-        if (origin.isPresent() && origin.get().fresh()) {
-            var kept = kept(origin.get().id(), name);
-            if (kept.isPresent()) return kept;
-        }
-        var built = built(name, origins);
-        built.ifPresent(found -> remember(kind, location, stamp, Map.of(found.name(), found.type())));
-        return built.map(Found::type);
     }
 
     /// A type and the binary name it was found under, which is what it gets
