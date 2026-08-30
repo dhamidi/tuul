@@ -1,0 +1,45 @@
+# switch
+
+## Syntax
+
+`switch ?option …? string pattern body ?pattern body …?`
+
+`switch ?option …? string {pattern body …}`
+
+## Result
+
+Return the result of the first matching body. Return the empty string when no pattern matches.
+
+## Errors
+
+Raise an error for an unknown option, an odd pattern/body list, or invalid list syntax.
+
+## Example
+
+```tcl
+switch -exact $state active {set result yes} default {set result no}
+```
+
+## Behavior
+
+Compare `string` to each `pattern` in order. Eval the first matching `body`.
+Return that result. If no pattern matches, return `""`.
+
+Options:
+
+| Option | Match |
+|---|---|
+| `-exact` | string equality. This is the default. |
+| `-glob` | glob. See [Glob](reference-runtime.md#glob). |
+| `-regexp` | `java.util.regex.Pattern`. Not Tcl ARE. |
+| `-nocase` | fold case for `-exact` and `-glob`. `CASE_INSENSITIVE` for `-regexp`. |
+| `--` | end of options |
+
+If there is one argument after `string`, parse it as a Tcl list of pattern
+and body pairs.
+
+A pattern named `default` matches when no earlier pattern matched.
+
+A body that is `-` uses the next body that is not `-`.
+
+An odd number of pattern and body words is an error.

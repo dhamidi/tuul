@@ -28,6 +28,19 @@ follow howto.md
 expect at /symbols/tcl/howto
 expect attribute document kind howto
 
+# The reference index leads to one page for each implemented command.
+visit /symbols/tcl/reference
+expect status 200
+expect attribute document title Reference
+expect link "set"
+expect link "namespace"
+expect link "info"
+follow "set"
+expect status 200
+expect at /symbols/tcl/reference/set
+expect attribute document kind reference
+expect attribute document title set
+
 # A document path that does not exist is not a symbol page.
 visit /symbols/tcl/tutorial/not-there
 expect status 404

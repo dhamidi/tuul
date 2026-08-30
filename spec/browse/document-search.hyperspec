@@ -7,16 +7,16 @@ expect status 200
 
 within results {
     expect item symbol
-    expect link tcl/reference
+    expect link tcl/reference/runtime
 }
 
-follow tcl/reference
+follow tcl/reference/runtime
 expect status 200
-expect at /symbols/tcl/reference
+expect at /symbols/tcl/reference/runtime
 expect item document
 expect attribute document package tcl
 expect attribute document kind reference
-expect attribute document title Reference
+expect attribute document title "Runtime reference"
 
 # The result uses the document kind, not a generic document kind.
 visit /
