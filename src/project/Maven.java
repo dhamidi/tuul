@@ -48,12 +48,13 @@ final class Maven {
     record Omitted(Node node, Add.Coordinate selected, String reason) {}
 
     record Resolution(List<Add.Coordinate> roots, List<Node> runtime, List<Node> test,
-            List<Omitted> omitted) {
+            List<Omitted> omitted, Set<String> exclusions) {
         Resolution {
             roots = List.copyOf(roots);
             runtime = List.copyOf(runtime);
             test = List.copyOf(test);
             omitted = List.copyOf(omitted);
+            exclusions = Set.copyOf(exclusions);
         }
 
         List<Node> selected() {
@@ -79,17 +80,22 @@ final class Maven {
         }
 
         Resolution resolve(List<Add.Coordinate> roots) throws IOException {
-            if (roots.isEmpty()) throw new IOException("Maven resolution needs at least one root");
-            var omitted = new ArrayList<Omitted>();
-            var runtime = walk(roots, Graph.RUNTIME, omitted);
-            var test = walk(roots, Graph.TEST, omitted);
-            return new Resolution(roots, runtime, test, omitted);
+            return resolve(roots, Set.of());
         }
 
-        private List<Node> walk(List<Add.Coordinate> roots, Graph graph, List<Omitted> omitted)
+        Resolution resolve(List<Add.Coordinate> roots, Set<String> exclusions) throws IOException {
+            if (roots.isEmpty()) throw new IOException("Maven resolution needs at least one root");
+            var omitted = new ArrayList<Omitted>();
+            var runtime = walk(roots, Graph.RUNTIME, omitted, exclusions);
+            var test = walk(roots, Graph.TEST, omitted, exclusions);
+            return new Resolution(roots, runtime, test, omitted, exclusions);
+        }
+
+        private List<Node> walk(List<Add.Coordinate> roots, Graph graph, List<Omitted> omitted,
+                Set<String> exclusions)
                 throws IOException {
             var queue = new ArrayDeque<Candidate>();
-            for (var root : roots) queue.add(new Candidate(root, "compile", List.of(root.text()), Set.of(), ""));
+            for (var root : roots) queue.add(new Candidate(root, "compile", List.of(root.text()), exclusions, ""));
             var selected = new LinkedHashMap<String, Node>();
             while (!queue.isEmpty()) {
                 var candidate = relocate(queue.removeFirst());

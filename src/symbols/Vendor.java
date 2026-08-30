@@ -10,52 +10,145 @@ import java.util.List;
 import java.util.Map;
 import java.util.Optional;
 import java.util.TreeSet;
+import java.util.LinkedHashSet;
+import java.util.Set;
+import json.Json;
 
-/// The dependencies of a tuul-managed project: every jar under `vendor/`.
+/// The selected dependencies of a tuul-managed project.
 ///
-/// The directory is the manifest — one directory per artifact, holding the
-/// binary jar and, next to it, the sources jar. That sources jar is why
-/// `tuul docs` can answer for a dependency the same way it answers for your own
-/// code: the class file gives the symbols, the sources jar gives the comments.
-///
-/// Nothing here reads a manifest, a lockfile or a coordinate. What is on disk
-/// is what the project depends on.
+/// `vendor/.tuul/resolution.json` selects runtime and test binaries. Source and
+/// javadoc archives are separate documentation views. A compatibility scan
+/// reads projects that do not have a resolution record yet.
 public final class Vendor {
 
     private static final String SOURCES = "-sources.jar";
+    private static final String JAVADOC = "-javadoc.jar";
 
+    private final List<Path> runtime;
+    private final List<Path> test;
     private final List<Path> binaries;
     private final Map<Path, Path> sources;
+    private final List<Path> javadocs;
 
-    private Vendor(List<Path> binaries, Map<Path, Path> sources) {
+    private Vendor(List<Path> runtime, List<Path> test, List<Path> binaries,
+            Map<Path, Path> sources, List<Path> javadocs) {
+        this.runtime = List.copyOf(runtime);
+        this.test = List.copyOf(test);
         this.binaries = binaries;
         this.sources = sources;
+        this.javadocs = List.copyOf(javadocs);
     }
 
     public static Vendor none() {
-        return new Vendor(List.of(), Map.of());
+        return new Vendor(List.of(), List.of(), List.of(), Map.of(), List.of());
     }
 
-    /// Scans the given directories — `vendor/`, `vendor/test/`, anywhere — for
-    /// jars, pairing each binary with its sources.
+    /// Reads each selected vendor view. A root without metadata uses the flat
+    /// layout compatibility reader.
     public static Vendor of(List<Path> roots) throws IOException {
-        var jars = new ArrayList<Path>();
+        var runtime = new ArrayList<Path>();
+        var test = new ArrayList<Path>();
+        var binaries = new ArrayList<Path>();
+        var sources = new LinkedHashMap<Path, Path>();
+        var javadocs = new ArrayList<Path>();
         for (var root : roots) {
-            if (!Files.isDirectory(root)) continue;
-            try (var tree = Files.walk(root)) {
-                tree.filter(path -> path.toString().endsWith(".jar")).sorted().forEach(jars::add);
+            var resolution = root.resolve(".tuul/resolution.json");
+            if (Files.isRegularFile(resolution)) managed(root, resolution, runtime, test, binaries, sources, javadocs);
+            else compatible(root, runtime, test, binaries, sources, javadocs);
+        }
+        return new Vendor(distinct(runtime), distinct(test), distinct(binaries), sources, distinct(javadocs));
+    }
+
+    private static void compatible(Path root, List<Path> runtime, List<Path> test, List<Path> binaries,
+            Map<Path, Path> sources, List<Path> javadocs) throws IOException {
+        var jars = new ArrayList<Path>();
+        if (!Files.isDirectory(root)) return;
+        try (var tree = Files.walk(root)) {
+            tree.filter(path -> path.toString().endsWith(".jar")).sorted().forEach(jars::add);
+        }
+        var selected = jars.stream().filter(jar -> !jar.toString().endsWith(SOURCES)
+                && !jar.toString().endsWith(JAVADOC)).toList();
+        runtime.addAll(selected);
+        test.addAll(selected);
+        binaries.addAll(selected);
+        for (var binary : selected) attach(binary, jars).ifPresent(source -> sources.put(binary, source));
+        javadocs.addAll(jars.stream().filter(jar -> jar.toString().endsWith(JAVADOC)).toList());
+    }
+
+    private static void managed(Path root, Path resolution, List<Path> runtime, List<Path> test,
+            List<Path> binaries, Map<Path, Path> sources, List<Path> javadocs) throws IOException {
+        Json value;
+        try (var reader = Files.newBufferedReader(resolution)) {
+            value = Json.parse(reader);
+        } catch (RuntimeException invalid) {
+            throw new IOException("invalid vendor resolution " + resolution + ": " + invalid.getMessage(), invalid);
+        }
+        if (!(value instanceof Json.Object document)) throw new IOException("vendor resolution is not an object: " + resolution);
+        var runtimeCoordinates = coordinates(document.list("runtime"));
+        var testCoordinates = coordinates(document.list("test"));
+        var sourceByCoordinate = new LinkedHashMap<String, Path>();
+        var binaryByCoordinate = new LinkedHashMap<String, Path>();
+        for (var valueFile : document.list("files")) {
+            if (!(valueFile instanceof Json.Object file)) continue;
+            var relative = Path.of(file.string("path", "")).normalize();
+            var path = root.resolve(relative).normalize();
+            if (relative.isAbsolute() || !path.startsWith(root.normalize()) || !Files.isRegularFile(path)) continue;
+            var coordinate = file.string("coordinate", "");
+            var kind = file.string("kind", "");
+            switch (kind) {
+                case "binary" -> binaryByCoordinate.put(coordinate, path);
+                case "sources" -> sourceByCoordinate.put(coordinate.replaceFirst(":sources$", ""), path);
+                case "javadoc" -> javadocs.add(path);
+                default -> {}
             }
         }
-        var binaries = jars.stream().filter(jar -> !jar.toString().endsWith(SOURCES)).toList();
-        var sources = new LinkedHashMap<Path, Path>();
-        for (var binary : binaries) attach(binary, jars).ifPresent(source -> sources.put(binary, source));
-        return new Vendor(binaries, sources);
+        for (var coordinate : runtimeCoordinates) {
+            var binary = binaryByCoordinate.get(coordinate);
+            if (binary != null) runtime.add(binary);
+        }
+        for (var coordinate : testCoordinates) {
+            var binary = binaryByCoordinate.get(coordinate);
+            if (binary != null) test.add(binary);
+        }
+        var all = new LinkedHashSet<Path>();
+        all.addAll(runtime);
+        all.addAll(test);
+        binaries.addAll(all);
+        for (var entry : binaryByCoordinate.entrySet()) {
+            var source = sourceByCoordinate.get(entry.getKey());
+            if (source != null && all.contains(entry.getValue())) sources.put(entry.getValue(), source);
+        }
+    }
+
+    private static Set<String> coordinates(List<Json> nodes) {
+        var coordinates = new LinkedHashSet<String>();
+        for (var value : nodes) if (value instanceof Json.Object node) coordinates.add(node.string("coordinate", ""));
+        return coordinates;
+    }
+
+    private static List<Path> distinct(List<Path> paths) {
+        return List.copyOf(new LinkedHashSet<>(paths));
     }
 
     /// What javac needs on its classpath to compile the project against these
     /// dependencies.
-    public List<Path> classpath() {
-        return binaries;
+    public List<Path> runtime() {
+        return runtime;
+    }
+
+    /// Returns the selected test graph. This list includes runtime dependencies.
+    public List<Path> test() {
+        return test;
+    }
+
+    /// Returns the source archives for selected runtime and test binaries.
+    public List<Path> sources() {
+        return List.copyOf(new LinkedHashSet<>(sources.values()));
+    }
+
+    /// Returns the javadoc archives for selected runtime and test binaries.
+    public List<Path> javadocs() {
+        return javadocs;
     }
 
     /// What the vendored jars looked like when they were last read: every jar's
@@ -63,7 +156,7 @@ public final class Vendor {
     /// says so here.
     public String stamp() {
         var stamp = new StringBuilder();
-        for (var jar : binaries) {
+        for (var jar : runtime) {
             stamp.append(jar).append(':');
             try {
                 stamp.append(Files.size(jar)).append(':').append(Files.getLastModifiedTime(jar).toInstant());
@@ -80,6 +173,24 @@ public final class Vendor {
     public String sourceStamp() {
         var stamp = new StringBuilder();
         for (var jar : new java.util.TreeSet<>(sources.values())) {
+            stamp.append(jar).append(':');
+            try {
+                stamp.append(Files.size(jar)).append(':').append(Files.getLastModifiedTime(jar).toInstant());
+            } catch (IOException gone) {
+                stamp.append("gone");
+            }
+            stamp.append('\n');
+        }
+        return stamp.toString();
+    }
+
+    public String testStamp() {
+        return stamp(test);
+    }
+
+    private static String stamp(List<Path> jars) {
+        var stamp = new StringBuilder();
+        for (var jar : jars) {
             stamp.append(jar).append(':');
             try {
                 stamp.append(Files.size(jar)).append(':').append(Files.getLastModifiedTime(jar).toInstant());

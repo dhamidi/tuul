@@ -56,6 +56,19 @@ public final class Add {
         EVENTS
     }
 
+    /// Selects explicit graph exclusions and accepted duplicate classes.
+    public record Options(java.util.Set<String> exclusions, java.util.Set<String> duplicateExceptions,
+            boolean dryRun, boolean migrate) {
+        public Options {
+            exclusions = java.util.Set.copyOf(exclusions);
+            duplicateExceptions = java.util.Set.copyOf(duplicateExceptions);
+        }
+
+        public static Options defaults() {
+            return new Options(java.util.Set.of(), java.util.Set.of(), false, false);
+        }
+    }
+
     /// The result of one add operation.
     ///
     /// `downloaded` and `cached` contain installed artifact labels in
@@ -209,6 +222,11 @@ public final class Add {
 
         public Result into(Layout layout, List<String> coordinates,
                 List<URI> repositories, Writer out, Mode mode) throws IOException {
+            return into(layout, coordinates, repositories, out, mode, Options.defaults());
+        }
+
+        public Result into(Layout layout, List<String> coordinates,
+                List<URI> repositories, Writer out, Mode mode, Options options) throws IOException {
             if (closed) throw new IllegalStateException("add client is closed");
             var sources = repositories == null || repositories.isEmpty() ? List.of(CENTRAL)
                     : repositories.stream().map(Add::repository).distinct().toList();
@@ -216,9 +234,12 @@ public final class Add {
             var staging = layout.vendor().resolve(".tuul").resolve("staging-" + UUID.randomUUID());
             Files.createDirectories(staging);
             try (var session = fetch.session().redirects(Redirects.BROWSER)) {
-                var services = new MavenServices(layout.vendor(), staging, sources, session);
+                var services = new MavenServices(layout.vendor(), staging, sources, session, options);
                 var result = run(coordinates, out, mode, services);
-                if (result.ok()) services.publish();
+                if (result.ok()) {
+                    services.validateDuplicates();
+                    services.publish();
+                }
                 return result;
             } finally {
                 delete(staging);
@@ -253,8 +274,13 @@ public final class Add {
     /// failures throw `IOException`. Download failures appear in the result.
     public static Result into(Layout layout, List<String> coordinates,
             List<URI> repositories, Writer out, Mode mode) throws IOException {
+        return into(layout, coordinates, repositories, out, mode, Options.defaults());
+    }
+
+    public static Result into(Layout layout, List<String> coordinates,
+            List<URI> repositories, Writer out, Mode mode, Options options) throws IOException {
         try (var client = client()) {
-            return client.into(layout, coordinates, repositories, out, mode);
+            return client.into(layout, coordinates, repositories, out, mode, options);
         }
     }
 
@@ -321,22 +347,25 @@ public final class Add {
         private final Path tree;
         private final List<URI> repositories;
         private final MavenTransport transport;
+        private final Options options;
         private final Map<String, FileRecord> installed = new ConcurrentHashMap<>();
         private final Map<String, String> optionalMissing = new ConcurrentHashMap<>();
         private Maven.Resolution resolution;
 
-        private MavenServices(Path vendor, Path staging, List<URI> repositories, fetch.Session session) {
+        private MavenServices(Path vendor, Path staging, List<URI> repositories, fetch.Session session,
+                Options options) {
             this.vendor = vendor;
             this.staging = staging;
             this.tree = staging.resolve("tree");
             this.repositories = repositories;
             this.transport = new MavenTransport(session);
+            this.options = options;
         }
 
         @Override
         public Resolved resolve(List<String> coordinates) throws Exception {
             resolution = new Maven.Resolver(this::pom)
-                    .resolve(coordinates.stream().map(Coordinate::parse).toList());
+                    .resolve(coordinates.stream().map(Coordinate::parse).toList(), options.exclusions());
             var plan = new ArrayList<Event>();
             plan.add(new Event("limits", "all", MavenTransport.GLOBAL_LIMIT, MavenTransport.ORIGIN_LIMIT,
                     "", MavenTransport.GLOBAL_LIMIT + " global, " + MavenTransport.ORIGIN_LIMIT + " per origin"));
@@ -412,12 +441,42 @@ public final class Add {
             var metadata = staging.resolve("resolution.json");
             try (var writer = Files.newBufferedWriter(metadata)) {
                 resolutionJson(resolution, installed.values().stream()
-                        .sorted(java.util.Comparator.comparing(FileRecord::path)).toList(), optionalMissing).write(writer);
+                        .sorted(java.util.Comparator.comparing(FileRecord::path)).toList(), optionalMissing,
+                        options).write(writer);
             }
             publishTree(vendor, tree, staging.resolve("backup"));
             var state = vendor.resolve(".tuul");
             Files.createDirectories(state);
             move(metadata, state.resolve("resolution.json"));
+        }
+
+        private void validateDuplicates() throws IOException {
+            var owners = new LinkedHashMap<String, List<FileRecord>>();
+            var runtimeCoordinates = resolution.runtime().stream().map(node -> node.coordinate().text()).collect(
+                    java.util.stream.Collectors.toSet());
+            for (var file : installed.values()) {
+                if (!file.kind().equals("binary") || !runtimeCoordinates.contains(file.coordinate())) continue;
+                var classes = new LinkedHashSet<String>();
+                try (var jar = new JarFile(tree.resolve(file.path()).toFile(), false)) {
+                    for (var entries = jar.entries(); entries.hasMoreElements();) {
+                        var entry = entries.nextElement();
+                        var name = binaryClass(entry.getName());
+                        if (!name.isEmpty()) classes.add(name);
+                    }
+                }
+                for (var name : classes) owners.computeIfAbsent(name, ignored -> new ArrayList<>()).add(file);
+            }
+            var duplicates = owners.entrySet().stream().filter(entry -> entry.getValue().size() > 1)
+                    .filter(entry -> !options.duplicateExceptions().contains(entry.getKey()))
+                    .sorted(Map.Entry.comparingByKey()).toList();
+            if (duplicates.isEmpty()) return;
+            var report = new StringBuilder("duplicate binary classes prevent publication");
+            for (var duplicate : duplicates) {
+                report.append("\n  ").append(duplicate.getKey());
+                for (var owner : duplicate.getValue()) report.append("\n    ").append(owner.coordinate())
+                        .append(" ").append(vendor.resolve(owner.path()));
+            }
+            throw new IOException(report.toString());
         }
 
         private Maven.PomDocument pom(Coordinate coordinate) throws IOException {
@@ -550,6 +609,18 @@ public final class Add {
         }
     }
 
+    private static String binaryClass(String entry) {
+        var name = entry;
+        if (name.startsWith("META-INF/versions/")) {
+            var slash = name.indexOf('/', "META-INF/versions/".length());
+            if (slash < 0) return "";
+            name = name.substring(slash + 1);
+        }
+        if (!name.endsWith(".class") || name.equals("module-info.class")
+                || name.endsWith("/module-info.class")) return "";
+        return name.substring(0, name.length() - ".class".length()).replace('/', '.');
+    }
+
     private static URI publicRepository(URI repository) {
         try {
             return new URI(repository.getScheme(), null, repository.getHost(), repository.getPort(),
@@ -612,7 +683,7 @@ public final class Add {
     }
 
     private static Json resolutionJson(Maven.Resolution resolution, List<FileRecord> files,
-            Map<String, String> optionalMissing) {
+            Map<String, String> optionalMissing, Options options) {
         var runtime = resolution.runtime().stream().map(Add::nodeJson).map(value -> (Json) value).toList();
         var test = resolution.test().stream().map(Add::nodeJson).map(value -> (Json) value).toList();
         var omitted = resolution.omitted().stream().map(entry -> (Json) nodeJson(entry.node())
@@ -631,7 +702,9 @@ public final class Add {
                         .map(entry -> (Json) Json.Object.of().with("coordinate", entry.getKey())
                                 .with("reason", entry.getValue())).toList()))
                 .with("downloadLimits", Json.Object.of().with("global", MavenTransport.GLOBAL_LIMIT)
-                        .with("perOrigin", MavenTransport.ORIGIN_LIMIT));
+                        .with("perOrigin", MavenTransport.ORIGIN_LIMIT))
+                .with("exclusions", Json.Array.strings(resolution.exclusions().stream().sorted().toList()))
+                .with("duplicateExceptions", Json.Array.strings(options.duplicateExceptions().stream().sorted().toList()));
     }
 
     private static Json.Object nodeJson(Maven.Node node) {

@@ -159,6 +159,8 @@ public final class App {
                 .with("directory", where(state))
                 .with("dependencies", Json.Array.strings(dependencies))
                 .with("repositories", Json.Array.of(message.list("repository")))
+                .with("exclusions", Json.Array.of(message.list("exclude")))
+                .with("duplicateExceptions", Json.Array.of(message.list("allow-duplicate")))
                 .with("tty", message.flag("tty")));
     }
 
@@ -319,7 +321,7 @@ public final class App {
     /// its class wins over a vendored one of the same name.
     private static List<Path> running(Layout layout, Path own) throws IOException {
         var classpath = new ArrayList<Path>(List.of(layout.classes(), own));
-        classpath.addAll(Vendor.of(List.of(layout.vendor())).classpath());
+        classpath.addAll(Vendor.of(List.of(layout.vendor())).runtime());
         return classpath;
     }
 
@@ -347,7 +349,9 @@ public final class App {
         }
         var result = Add.into(new Layout(Path.of(effect.string("directory", "."))),
                 strings(effect.list("dependencies")), repositories, out,
-                tty ? Add.Mode.TTY : Add.Mode.EVENTS);
+                tty ? Add.Mode.TTY : Add.Mode.EVENTS,
+                new Add.Options(java.util.Set.copyOf(strings(effect.list("exclusions"))),
+                        java.util.Set.copyOf(strings(effect.list("duplicateExceptions"))), false, false));
         emit.emit(Message.of("project.added")
                 .with("downloaded", Json.Array.strings(result.downloaded()))
                 .with("cached", Json.Array.strings(result.cached()))

@@ -45,7 +45,7 @@ public final class Build {
     public static Result compile(Layout layout, Compiler compiler) throws IOException {
         if (!layout.exists()) return new Result(0, List.of("no src/ in " + layout.root().toAbsolutePath()));
         var vendor = Vendor.of(List.of(layout.vendor()));
-        var dependencies = vendor.classpath();
+        var dependencies = vendor.runtime();
         var descriptor = layout.src().resolve("module-info.java");
         var libraryRoots = layout.libraries();
         var librarySources = sources(libraryRoots);
@@ -99,13 +99,13 @@ public final class Build {
     public static Result compileTests(Layout layout, Compiler compiler) throws IOException {
         if (!Files.isDirectory(layout.test())) return new Result(0, List.of("no test/ in " + layout.root().toAbsolutePath()));
         var vendor = Vendor.of(List.of(layout.vendor()));
-        var fingerprint = fingerprint(List.of(layout.test()), null, vendor.stamp() +
+        var fingerprint = fingerprint(List.of(layout.test()), null, vendor.testStamp() +
                 fingerprint(List.of(layout.src()), null, vendor.stamp()));
         if (current(layout, "tests", fingerprint, layout.tests())) {
             return new Result(written(layout.tests()), List.of());
         }
         clear(layout.tests());
-        var classpath = with(vendor.classpath(), layout.classes());
+        var classpath = with(vendor.test(), layout.classes());
         var built = javac(sources(List.of(layout.test())), layout.tests(), classpath, false, compiler);
         if (built.ok()) {
             resources(List.of(layout.test()), layout.test(), layout.tests());

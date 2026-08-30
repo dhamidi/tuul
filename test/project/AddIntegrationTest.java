@@ -12,9 +12,11 @@ import java.nio.file.Files;
 import java.nio.file.Path;
 import java.security.MessageDigest;
 import java.util.List;
+import java.util.Map;
 import java.util.concurrent.atomic.AtomicInteger;
 import java.util.jar.JarEntry;
 import java.util.jar.JarOutputStream;
+import symbols.Vendor;
 
 public final class AddIntegrationTest {
     private AddIntegrationTest() {}
@@ -81,6 +83,12 @@ public final class AddIntegrationTest {
         server.createContext("/com/acme/bad/1.0/bad-1.0.jar", exchange -> serve(exchange, jar("bad")));
         server.createContext("/com/acme/bad/1.0/bad-1.0.jar.sha256",
                 exchange -> serve(exchange, "0000000000000000000000000000000000000000000000000000000000000000"));
+        for (var artifact : List.of("duplicate-one", "duplicate-two")) {
+            server.createContext("/com/acme/" + artifact + "/1.0/" + artifact + "-1.0.pom",
+                    exchange -> serve(exchange, pom("com.acme", artifact, "1.0")));
+            server.createContext("/com/acme/" + artifact + "/1.0/" + artifact + "-1.0.jar",
+                    exchange -> serve(exchange, jar(Map.of("same/Type.class", new byte[] {0, 1, 2}))));
+        }
         server.start();
         var root = Files.createTempDirectory("tuul-add");
         try (var client = Add.client()) {
@@ -98,6 +106,12 @@ public final class AddIntegrationTest {
                     .allMatch(Boolean.TRUE::equals));
             Check.that("a successful add publishes the selected graph",
                     Files.readString(root.resolve("vendor/.tuul/resolution.json")).contains("\"coordinate\":\"com.acme:two:2.0\""));
+            var vendor = Vendor.of(List.of(root.resolve("vendor")));
+            Check.that("runtime binaries exclude source and javadoc archives",
+                    vendor.runtime().size() == 2 && vendor.runtime().stream().noneMatch(path ->
+                            path.toString().endsWith("-sources.jar") || path.toString().endsWith("-javadoc.jar")));
+            Check.that("documentation archives have separate selected views",
+                    vendor.sources().size() == 2 && vendor.javadocs().size() == 2);
             Check.that("plain output is an event stream", output.toString().contains("add.resolve com.acme:one:1.0")
                     && output.toString().contains("add.resolved com.acme:one:1.0 2 artifacts")
                     && output.toString().contains("add.done com.acme:two:2.0:sources")
@@ -110,6 +124,14 @@ public final class AddIntegrationTest {
             Check.equal("a cache hit does not make an artifact request", 6, artifactRequests.get());
             Check.that("cache output is still an event", cachedOutput.toString().contains(
                     "add.cached com.acme:one:1.0:sources"));
+
+            var excluded = client.into(new Layout(root), List.of("com.acme:one:1.0"), List.of(repository),
+                    new StringWriter(), Add.Mode.EVENTS,
+                    new Add.Options(java.util.Set.of("com.acme:two"), java.util.Set.of(), false, false));
+            var excludedResolution = Files.readString(root.resolve("vendor/.tuul/resolution.json"));
+            Check.that("an explicit graph exclusion is persistent",
+                    excluded.ok() && excludedResolution.contains("\"exclusions\":[\"com.acme:two\"]")
+                            && Vendor.of(List.of(root.resolve("vendor"))).runtime().size() == 1);
 
             var retried = client.into(new Layout(root), List.of("com.acme:retry:1.0"),
                     List.of(repository), new StringWriter(), Add.Mode.EVENTS);
@@ -128,6 +150,26 @@ public final class AddIntegrationTest {
             Check.that("a checksum mismatch fails the required binary", !failed.ok());
             Check.equal("a failed staged add keeps the active resolution", beforeFailure,
                     Files.readString(root.resolve("vendor/.tuul/resolution.json")));
+
+            String duplicateFailure;
+            try {
+                client.into(new Layout(root), List.of("com.acme:duplicate-one:1.0", "com.acme:duplicate-two:1.0"),
+                        List.of(repository), new StringWriter(), Add.Mode.EVENTS);
+                duplicateFailure = "";
+            } catch (IOException expected) {
+                duplicateFailure = expected.getMessage();
+            }
+            Check.that("duplicate classes report every owner and do not publish",
+                    duplicateFailure.contains("same.Type") && duplicateFailure.contains("duplicate-one")
+                            && duplicateFailure.contains("duplicate-two")
+                            && Files.readString(root.resolve("vendor/.tuul/resolution.json")).equals(beforeFailure));
+            var accepted = client.into(new Layout(root),
+                    List.of("com.acme:duplicate-one:1.0", "com.acme:duplicate-two:1.0"), List.of(repository),
+                    new StringWriter(), Add.Mode.EVENTS,
+                    new Add.Options(java.util.Set.of(), java.util.Set.of("same.Type"), false, false));
+            Check.that("an explicit duplicate exception is persistent",
+                    accepted.ok() && Files.readString(root.resolve("vendor/.tuul/resolution.json"))
+                            .contains("\"duplicateExceptions\":[\"same.Type\"]"));
         } finally {
             server.stop(0);
             delete(root);
@@ -191,11 +233,17 @@ public final class AddIntegrationTest {
     }
 
     private static byte[] jar(String body) throws IOException {
+        return jar(Map.of("fixture.txt", body.getBytes(StandardCharsets.UTF_8)));
+    }
+
+    private static byte[] jar(Map<String, byte[]> entries) throws IOException {
         var bytes = new ByteArrayOutputStream();
         try (var jar = new JarOutputStream(bytes)) {
-            jar.putNextEntry(new JarEntry("fixture.txt"));
-            jar.write(body.getBytes(StandardCharsets.UTF_8));
-            jar.closeEntry();
+            for (var entry : entries.entrySet()) {
+                jar.putNextEntry(new JarEntry(entry.getKey()));
+                jar.write(entry.getValue());
+                jar.closeEntry();
+            }
         }
         return bytes.toByteArray();
     }

@@ -71,6 +71,8 @@ static Command tuul() {
                     .flag("source", "vendor the C to compile instead of prebuilt libraries"))
             .command(Command.named("add", "download Maven dependencies into vendor/")
                     .repeated("repository", "Maven repository base URI (default: Maven Central)")
+                    .repeated("exclude", "exclude a group:artifact from every dependency path")
+                    .repeated("allow-duplicate", "accept one duplicate binary class name")
                     .rest("dependencies", "group:artifact:version[:classifier] coordinates"))
             .command(docs)
             .command(Command.named("bind", "generate a Java binding for a native module")

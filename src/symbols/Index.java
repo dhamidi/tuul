@@ -757,7 +757,7 @@ public final class Index implements Catalog {
             var sources = Sources.files(roots);
             var module = sources.stream().anyMatch(path -> path.getFileName().toString().equals("module-info.java"));
             var fingerprint = Compilation.fingerprint(
-                    sources, vendor.classpath(), module, Runtime.version().feature(), true);
+                    sources, vendor.runtime(), module, Runtime.version().feature(), true);
             var build = index.getParent() == null ? Path.of("build") : index.getParent();
             var built = build.resolve("classes");
             var builtStamp = build.resolve(".tuul/libraries.compile.stamp");
@@ -774,7 +774,7 @@ public final class Index implements Catalog {
                 return classes;
             }
 
-            classes = Sources.compile(roots, vendor.classpath(), compiler);
+            classes = Sources.compile(roots, vendor.runtime(), compiler);
             for (var written : classes.entrySet()) {
                 var file = cached.resolve("classes").resolve(written.getKey().replace('.', '/') + ".class");
                 Files.createDirectories(file.getParent());
