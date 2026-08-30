@@ -14,7 +14,7 @@ It borrows:
   (`tuul run <task>`), not its config format.
 
 > **Status:** parts of this README are still the target, not a changelog.
-> What runs today is `tuul new`, `tuul install`, `tuul build`, `tuul run`,
+> What runs today is `tuul new`, `tuul add`, `tuul install`, `tuul build`, `tuul run`,
 > `tuul test`, `tuul docs`, `tuul bind` and `tuul self-test`, over seven
 > libraries: `json` (streaming
 > parser and serializer), `application` (the Elm Architecture runtime from
@@ -32,9 +32,8 @@ It borrows:
 > `lib/src.zip` for the JDK. `tuul run [entry] -- <args>` runs an entrypoint;
 > running a file from `tasks/` is not implemented yet. `tuul new` scaffolds
 > the library, the entrypoint, the native module and the FFI wrapper
-> described below, but no vendored dependencies and no `tasks/`, and
-> `tuul add`, `dev`, `console`, `generate`, `release`, `deploy` and `doctor` do not
-> exist.
+> described below, but no vendored dependencies and no `tasks/`. `dev`,
+> `console`, `generate`, `release`, `deploy` and `doctor` do not exist.
 >
 > Today, `tuul build` compiles classes and native code into `build/`. It does
 > not assemble the runnable jar described below. `tuul release` does not exist
@@ -133,7 +132,7 @@ restarts it when a source file changes.
 | Command | Does what |
 |---|---|
 | `tuul new <name>` | Scaffold a new Tuul-managed project |
-| `tuul add <name>` | Fetch a dependency into `vendor/` without a manifest edit |
+| `tuul add <group:artifact:version>...` | Fetch Maven artifacts into `vendor/` without a manifest edit |
 | `tuul remove <name>` | Delete a dependency from `vendor/` |
 | `tuul dev` | Run the application and restart it after a change |
 | `tuul build` | Produce one runnable jar with all runtime and native dependencies |
@@ -155,29 +154,33 @@ or task.
 ## Example: adding a dependency
 
 ```sh
-$ tuul add jackson-databind
-resolved jackson-databind@2.18.1 (+3 dependencies)
-vendored into vendor/jackson-databind, vendor/jackson-core, vendor/jackson-annotations
+$ tuul add com.fasterxml.jackson.core:jackson-databind:2.18.1
+add.resolve com.fasterxml.jackson.core:jackson-databind:2.18.1
+add.resolved com.fasterxml.jackson.core:jackson-databind:2.18.1 3 artifacts
+add.done com.fasterxml.jackson.core:jackson-databind:2.18.1:sources vendor/jackson-databind-2.18.1-sources.jar
+add.complete 9 downloaded, 0 cached, 0 failed
 ```
 
-You name the library, not its coordinates — Tuul resolves `jackson-databind`
-against Maven Central and drops the binary and its sources for it *and*
-every transitive dependency straight into `vendor/`, one directory per
-artifact. There's no manifest entry to write and no lockfile to generate:
-`vendor/` is the dependency list. `ls vendor/` tells you exactly what the
-project depends on, and at exactly which version, because that's literally
-what's on disk — nothing to keep in sync, because there's nothing else that
-records it.
+Tuul reads Maven POM files with the JDK XML DOM parser, follows transitive
+compile and runtime dependencies, and streams every binary into `vendor/`.
+Each binary also gets a `-sources.jar` and a `-javadoc.jar` request. Missing
+source or javadoc jars are reported as optional events and do not fail the
+binary add. Use `--repository URL` more than once to try repositories in
+order. There is no manifest entry or lockfile. The files in `vendor/` are the
+dependency list.
+
+When stdout is a terminal, `tuul add` replaces these lines with one ANSI
+progress bar per coordinate. When stdout is not a terminal, it keeps the
+plain event lines so an agent can read them without terminal control codes.
 
 ```sh
-$ tuul add --test junit-jupiter
-vendored into vendor/test/junit-jupiter
+$ tuul add --repository https://repo.example.test/maven2/ com.example:library:1.2.3
+add.complete 1 downloaded, 0 cached, 0 failed
 ```
 
-Test-only dependencies live under `vendor/test/` instead of `vendor/` —
-scope is a directory, not a flag recorded somewhere else. Everything under
-`vendor/` gets committed, so a fresh clone builds and runs without touching
-the network.
+Use a separate project or directory for test-only dependencies. Everything
+under `vendor/` gets committed, so a fresh clone builds and runs without
+touching the network.
 
 Vendoring sources, not just compiled classes, is also what makes `tuul docs`
 work on dependencies — see [Example: querying the code index](#example-querying-the-code-index).
@@ -191,7 +194,7 @@ deployed change using only `tuul`:
 ```sh
 $ tuul new invoicing
 $ cd invoicing
-$ tuul add stripe-java
+$ tuul add com.stripe:stripe-java:27.0.0
 $ tuul generate library billing
 # agent writes src/billing/*.java (the library),
 # then a small call from entrypoints/invoicing/cli/Main.java
@@ -289,12 +292,11 @@ Tuul compiles and tests each source root as an explicit module. It uses the
 module path for the application, entrypoints, tasks, tests, and dependencies.
 The regular runnable jar is the deliberate exception described below.
 
-**Dependencies.** There's no manifest for these — `tuul add jackson-databind`
-and `tuul add sqlite-jdbc` populate the two runtime entries directly;
-`tuul add --test junit-jupiter` populates the test-only one under
-`vendor/test/`. Each directory holds sources and binary, committed. Nothing
-declares a dependency separately from fetching it, so nothing can drift out
-of sync with what's actually there.
+**Dependencies.** There is no manifest for these. Commands such as
+`tuul add com.fasterxml.jackson.core:jackson-databind:2.18.1` and
+`tuul add org.xerial:sqlite-jdbc:3.46.0.0` populate runtime jars directly.
+Each jar is committed under `vendor/`. Nothing declares a dependency
+separately from fetching it, so nothing can drift out of sync with the tree.
 
 **Tasks.** Each Java file under `tasks/` is one task. Tuul discovers the task
 from its class name. No registry or `project.java` entry is necessary.

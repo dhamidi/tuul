@@ -6,6 +6,7 @@ import application.Message;
 import application.Step;
 import java.io.IOException;
 import java.io.Writer;
+import java.net.URI;
 import java.nio.file.Files;
 import java.nio.file.Path;
 import java.util.ArrayList;
@@ -14,8 +15,8 @@ import json.Json;
 import symbols.Vendor;
 import selftest.SelfTest;
 
-/// The project commands as one application: `new`, `build`, `run`, `test` and
-/// `self-test`.
+/// The project commands as one application: `new`, `add`, `build`, `run`,
+/// `test` and `self-test`.
 ///
 /// They share a pipeline rather than repeating one. `run` and `test` both start
 /// by compiling, and what happens when the compile succeeds is decided by what
@@ -31,9 +32,21 @@ public final class App {
         return of(initial, out, err, ProcessRunner.system());
     }
 
+    public static Application<State> of(State initial, Writer out, Writer err, boolean tty) {
+        return of(initial, out, err, ProcessRunner.system(), tty);
+    }
+
     /// Creates the project application with the runner that starts compilers
     /// and Java entrypoints. Other project effects keep their system bindings.
     public static Application<State> of(State initial, Writer out, Writer err, ProcessRunner processes) {
+        return of(initial, out, err, processes, false);
+    }
+
+    /// Creates the project application and selects whether `add` renders ANSI
+    /// progress bars. The CLI supplies the terminal decision; tests and
+    /// callers that provide a writer default to plain event output.
+    public static Application<State> of(State initial, Writer out, Writer err,
+            ProcessRunner processes, boolean tty) {
         return Application.of(initial)
                 .on("project.new", App::create)
                 .on("project.build", App::build)
@@ -41,7 +54,9 @@ public final class App {
                 .on("project.test", App::test)
                 .on("project.selftest", App::selftest)
                 .on("project.install", App::install)
+                .on("project.add", App::add)
                 .on("project.installed", App::installed)
+                .on("project.added", App::added)
                 .on("project.natives", App::natives)
                 .on("project.distributed", App::distributed)
                 .on("project.bind", App::bind)
@@ -63,6 +78,7 @@ public final class App {
                 .effect("project.bind", (effect, emit) -> generate(effect, emit, processes))
                 .effect("project.hyperspec", (effect, emit) -> specs(effect, emit, out))
                 .effect("project.install", (effect, emit) -> vendor(effect, emit, out))
+                .effect("project.add", (effect, emit) -> add(effect, emit, out, tty))
                 .effect("project.natives", (effect, emit) -> distribute(effect, emit, out, processes))
                 .effect("project.report", (effect, _) -> write(effect, out))
                 .effect("project.problem", (effect, _) -> write(effect, err));
@@ -134,6 +150,22 @@ public final class App {
         return Step.of(state, Effect.of("project.install")
                 .with("directory", where(state))
                 .with("source", message.flag("source")));
+    }
+
+    private static Step<State> add(State state, Message message) {
+        var dependencies = strings(message.list("dependencies"));
+        if (dependencies.isEmpty()) return Step.of(state.failed(), problem("tuul add needs a dependency"));
+        return Step.of(state, Effect.of("project.add")
+                .with("directory", where(state))
+                .with("dependencies", Json.Array.strings(dependencies))
+                .with("repositories", Json.Array.of(message.list("repository")))
+                .with("tty", message.flag("tty")));
+    }
+
+    private static Step<State> added(State state, Message message) {
+        var failed = strings(message.list("failed"));
+        if (failed.isEmpty()) return Step.of(state);
+        return Step.of(state.failed(), problem("could not add " + String.join(", ", failed)));
     }
 
     /// Cross-building the libraries tuul ships. It is a step of a release
@@ -306,6 +338,20 @@ public final class App {
                 .with("classes", Json.of(result.classes()))
                 .with("sources", Json.of(result.sources()))
                 .with("platforms", Json.Array.strings(result.platforms())));
+    }
+
+    private static void add(Effect effect, Effect.Emitter emit, Writer out, boolean tty) throws Exception {
+        var repositories = new ArrayList<URI>();
+        for (var value : effect.list("repositories")) {
+            if (value instanceof Json.Str(var uri)) repositories.add(URI.create(uri));
+        }
+        var result = Add.into(new Layout(Path.of(effect.string("directory", "."))),
+                strings(effect.list("dependencies")), repositories, out,
+                tty ? Add.Mode.TTY : Add.Mode.EVENTS);
+        emit.emit(Message.of("project.added")
+                .with("downloaded", Json.Array.strings(result.downloaded()))
+                .with("cached", Json.Array.strings(result.cached()))
+                .with("failed", Json.Array.strings(result.failed().stream().map(Add.Failure::coordinate).toList())));
     }
 
     private static void distribute(Effect effect, Effect.Emitter emit, Writer out, ProcessRunner processes)

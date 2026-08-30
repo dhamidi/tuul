@@ -3,6 +3,7 @@
 /// module and runs from the classpath.
 module tuul {
     requires java.compiler;
+    requires java.xml;
     requires jdk.compiler;
     requires jdk.httpserver;
     requires static jdk.jfr;

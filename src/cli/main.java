@@ -69,6 +69,9 @@ static Command tuul() {
                     .flag("integration", "run the complete suite, including integration tests"))
             .command(Command.named("install", "vendor tuul into this project, libraries and all")
                     .flag("source", "vendor the C to compile instead of prebuilt libraries"))
+            .command(Command.named("add", "download Maven dependencies into vendor/")
+                    .repeated("repository", "Maven repository base URI (default: Maven Central)")
+                    .rest("dependencies", "group:artifact:version[:classifier] coordinates"))
             .command(docs)
             .command(Command.named("bind", "generate a Java binding for a native module")
                     .value("package", "the package to write it into (default: the module)")
@@ -102,6 +105,7 @@ static int dispatch(Parsed.Values parsed, Writer out, Writer err) throws IOExcep
         case "self-test" -> manage(Message.of("project.selftest", values), out, err);
         case "hyperspec" -> manage(Message.of("project.hyperspec", values), out, err);
         case "install" -> manage(Message.of("project.install", values), out, err);
+        case "add" -> manage(Message.of("project.add", values), out, err);
         case "browse" -> browse(values, out, err);
         case "docs" -> ask(docs(values), out, err);
         case "message" -> deliver(stdin(), out, err);
@@ -205,7 +209,10 @@ static int ask(Message message, Writer out, Writer err) {
 }
 
 static int manage(Message message, Writer out, Writer err) {
-    return project.App.of(project.State.of(Path.of(".")), out, err).dispatch(message).exit();
+    var console = System.console();
+    return project.App.of(project.State.of(Path.of(".")), out, err,
+            console != null && console.isTerminal())
+            .dispatch(message).exit();
 }
 
 /// A tuul project keeps its code in `src/` and its dependencies in `vendor/`,
