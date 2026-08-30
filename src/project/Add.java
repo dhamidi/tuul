@@ -24,8 +24,7 @@ import java.util.ArrayList;
 import java.util.LinkedHashMap;
 import java.util.List;
 import java.util.Map;
-import java.util.concurrent.CopyOnWriteArrayList;
-import java.util.concurrent.Flow;
+import java.util.function.Consumer;
 import json.Json;
 
 /// Resolves and downloads Maven artifacts into a project's `vendor/`.
@@ -69,6 +68,34 @@ public final class Add {
 
     /// One coordinate that could not be installed.
     public record Failure(String coordinate, String reason) {}
+
+    interface Services {
+        List<String> resolve(String coordinate) throws Exception;
+
+        Download download(String coordinate, String kind, Consumer<Event> events) throws Exception;
+    }
+
+    record Download(Status status, String target, String reason) {
+        enum Status {
+            DOWNLOADED, CACHED, OPTIONAL_MISSING, FAILED
+        }
+
+        static Download downloaded(String target) {
+            return new Download(Status.DOWNLOADED, target, "");
+        }
+
+        static Download cached(String target) {
+            return new Download(Status.CACHED, target, "");
+        }
+
+        static Download optionalMissing(String reason) {
+            return new Download(Status.OPTIONAL_MISSING, "", reason);
+        }
+
+        static Download failed(String reason) {
+            return new Download(Status.FAILED, "", reason);
+        }
+    }
 
     /// A live change in one download. Subscribers must treat it as immutable.
     ///
@@ -146,10 +173,43 @@ public final class Add {
     private static final String RESULT = "add.result";
     private static final Duration ASK_DEADLINE = Duration.ofDays(1);
     private static final Duration ACTOR_EFFECT_DEADLINE = Duration.ofDays(1);
+    private static final int MAX_DOWNLOADS = 20;
     private static final long PROGRESS_BYTES = 64 * 1024;
     private static final long PROGRESS_NANOS = Duration.ofMillis(100).toNanos();
 
     private Add() {}
+
+    /// Creates a client that reuses one HTTP connection pool across add calls.
+    public static Client client() {
+        return new Client();
+    }
+
+    /// A reusable Maven add client. One command normally needs one client; a
+    /// caller that performs several adds can keep the pool warm between them.
+    public static final class Client implements AutoCloseable {
+        private final Fetch fetch = Fetch.virtualThreads();
+        private boolean closed;
+
+        private Client() {}
+
+        public Result into(Layout layout, List<String> coordinates,
+                List<URI> repositories, Writer out, Mode mode) throws IOException {
+            if (closed) throw new IllegalStateException("add client is closed");
+            var sources = repositories == null || repositories.isEmpty() ? List.of(CENTRAL)
+                    : repositories.stream().map(Add::repository).distinct().toList();
+            Files.createDirectories(layout.vendor());
+            try (var session = fetch.session().redirects(Redirects.BROWSER)) {
+                return run(coordinates, out, mode, new MavenServices(layout.vendor(), sources, session));
+            }
+        }
+
+        @Override
+        public void close() {
+            if (closed) return;
+            closed = true;
+            fetch.close();
+        }
+    }
 
     /// Adds coordinates to `layout.vendor()` and renders the live event feed.
     ///
@@ -171,31 +231,38 @@ public final class Add {
     /// failures throw `IOException`. Download failures appear in the result.
     public static Result into(Layout layout, List<String> coordinates,
             List<URI> repositories, Writer out, Mode mode) throws IOException {
+        try (var client = client()) {
+            return client.into(layout, coordinates, repositories, out, mode);
+        }
+    }
+
+    static Result into(List<String> coordinates, Writer out, Mode mode, Services services) throws IOException {
+        return run(coordinates, out, mode, services);
+    }
+
+    private static Result run(List<String> coordinates, Writer out, Mode mode, Services services) throws IOException {
         var roots = coordinates.stream().map(Coordinate::parse).distinct().toList();
         if (roots.isEmpty()) throw new IOException("tuul add needs at least one dependency");
-        var sources = repositories == null || repositories.isEmpty() ? List.of(CENTRAL)
-                : repositories.stream().map(Add::repository).distinct().toList();
-        Files.createDirectories(layout.vendor());
 
-        var events = new Events();
-        var renderer = new Renderer(out, mode);
-        events.subscribe(renderer);
-        try (var fetch = Fetch.virtualThreads();
-                var session = fetch.session().redirects(Redirects.BROWSER);
-                var system = ActorSystem.named("tuul-add")
-                        .define(new Coordinator(roots), Spawn.ephemeral().effects(ACTOR_EFFECT_DEADLINE))) {
+        var progress = new Progress(out, mode);
+        try (var system = ActorSystem.named("tuul-add")
+                .define(new Coordinator(roots), Spawn.ephemeral().effects(ACTOR_EFFECT_DEADLINE))
+                .define(progress, Spawn.ephemeral().mailbox(32).effects(ACTOR_EFFECT_DEADLINE))) {
             var root = Address.of(COORDINATOR, "run");
-            system.effect(DOWNLOAD, (effect, emit) -> download(effect, emit, layout.vendor(), sources,
-                    session, events));
-            system.effect(RESOLVE, (effect, emit) -> resolve(effect, emit, sources, session, events));
+            var progressAddress = progress.at("run");
+            progress.attach(system, progressAddress);
+            system.effect(Progress.RENDER, progress::render);
+            system.effect(Progress.CLOSE, progress::closeOutput);
+            system.effect(DOWNLOAD, (effect, emit) -> download(effect, emit, services, progress));
+            system.effect(RESOLVE, (effect, emit) -> resolve(effect, emit, services, progress));
             system.tell(root, Message.of("add.start"));
             var answer = system.ask(root, Message.of(RESULT), ASK_DEADLINE).join();
             var result = result(answer);
-            events.publish(Event.complete(result.downloaded().size(), result.cached().size(), result.failed().size()));
-            events.close();
+            progress.publish(Event.complete(result.downloaded().size(), result.cached().size(), result.failed().size()));
+            progress.close();
             return result;
         } catch (RuntimeException failure) {
-            events.close();
+            progress.close();
             var cause = failure.getCause() == null ? failure : failure.getCause();
             if (cause instanceof IOException io) throw io;
             throw failure;
@@ -210,75 +277,102 @@ public final class Add {
         return URI.create(uri.toString().endsWith("/") ? uri.toString() : uri + "/");
     }
 
-    private static void resolve(Effect effect, Effect.Emitter emit, List<URI> repositories,
-            fetch.Session session, Events events) {
+    private static final class MavenServices implements Services {
+        private final Path vendor;
+        private final List<URI> repositories;
+        private final fetch.Session session;
+
+        private MavenServices(Path vendor, List<URI> repositories, fetch.Session session) {
+            this.vendor = vendor;
+            this.repositories = repositories;
+            this.session = session;
+        }
+
+        @Override
+        public List<String> resolve(String coordinate) throws Exception {
+            return new Maven.Resolver(session, repositories).resolve(Coordinate.parse(coordinate)).stream()
+                    .map(Coordinate::text).toList();
+        }
+
+        @Override
+        public Download download(String coordinate, String kind, Consumer<Event> events) throws Exception {
+            var artifact = Artifact.of(Coordinate.parse(coordinate), kind);
+            var target = vendor.resolve(artifact.file());
+            if (Files.isRegularFile(target)) {
+                events.accept(Event.cached(artifact.label(), target.toString()));
+                return Download.cached(target.toString());
+            }
+
+            Files.createDirectories(target.getParent());
+            events.accept(Event.start(artifact.label(), -1));
+            Exception last = null;
+            for (var repository : repositories) {
+                var uri = artifact.coordinate().uri(repository);
+                try (var response = session.get(uri).timeout(Duration.ofMinutes(2)).send()) {
+                    if (response.status() == 404) continue;
+                    response.requireSuccess();
+                    write(response, artifact, target, events);
+                    return Download.downloaded(target.toString());
+                } catch (HttpException missingOrBroken) {
+                    last = missingOrBroken;
+                    if (missingOrBroken.status() != 404) break;
+                } catch (Exception failure) {
+                    last = failure;
+                    break;
+                }
+            }
+            var reason = last == null ? "artifact was not found in the configured repositories"
+                    : last.getMessage() == null ? last.toString() : last.getMessage();
+            if (artifact.optional()) {
+                events.accept(Event.optionalMissing(artifact.label(), reason));
+                return Download.optionalMissing(reason);
+            }
+            events.accept(Event.failed(artifact.label(), reason));
+            return Download.failed(reason);
+        }
+    }
+
+    private static void resolve(Effect effect, Effect.Emitter emit, Services services, Progress progress) {
         var coordinate = Coordinate.parse(effect.string("coordinate", ""));
-        events.publish(Event.resolve(coordinate.text()));
+        progress.publish(Event.resolve(coordinate.text()));
         try {
-            var resolved = new Maven.Resolver(session, repositories).resolve(coordinate);
-            events.publish(Event.resolved(coordinate.text(), resolved.size()));
+            var resolved = services.resolve(coordinate.text());
+            progress.publish(Event.resolved(coordinate.text(), resolved.size()));
             emit.emit(Message.of(RESOLVED).with("coordinate", coordinate.text())
-                    .with("artifacts", Json.Array.strings(resolved.stream().map(Coordinate::text).toList())));
+                    .with("artifacts", Json.Array.strings(resolved)));
         } catch (Exception failure) {
             var reason = failure.getMessage() == null ? failure.toString() : failure.getMessage();
-            events.publish(Event.resolveFailed(coordinate.text(), reason));
+            progress.publish(Event.resolveFailed(coordinate.text(), reason));
             emit.emit(Message.of(RESOLUTION_FAILED).with("coordinate", coordinate.text()).with("reason", reason));
         }
     }
 
-    private static void download(Effect effect, Effect.Emitter emit, Path vendor,
-            List<URI> repositories, fetch.Session session, Events events) throws Exception {
+    private static void download(Effect effect, Effect.Emitter emit, Services services, Progress progress) {
         var artifact = Artifact.of(Coordinate.parse(effect.string("coordinate", "")),
                 effect.string("kind", "binary"));
-        var coordinate = artifact.coordinate();
-        var target = vendor.resolve(artifact.file());
-        var optional = artifact.optional();
-        if (Files.isRegularFile(target)) {
-            events.publish(Event.cached(artifact.label(), target.toString()));
-            emit.emit(Message.of(CACHED).with("coordinate", artifact.label())
-                    .with("target", target.toString()));
-            return;
-        }
-
-        Files.createDirectories(target.getParent());
-        events.publish(Event.start(artifact.label(), -1));
-        var found = false;
-        Exception last = null;
-        for (var repository : repositories) {
-            var uri = coordinate.uri(repository);
-            try (var response = session.get(uri).timeout(Duration.ofMinutes(2)).send()) {
-                if (response.status() == 404) continue;
-                response.requireSuccess();
-                found = true;
-                write(response, artifact, target, events);
-                emit.emit(Message.of(DOWNLOADED).with("coordinate", artifact.label())
-                        .with("target", target.toString()));
-                return;
-            } catch (HttpException missingOrBroken) {
-                last = missingOrBroken;
-                if (missingOrBroken.status() != 404) break;
-            } catch (Exception failure) {
-                last = failure;
-                break;
+        try {
+            var result = services.download(artifact.coordinate().text(), artifact.kind(), progress::publish);
+            switch (result.status()) {
+                case DOWNLOADED -> emit.emit(Message.of(DOWNLOADED).with("coordinate", artifact.label())
+                        .with("target", result.target()));
+                case CACHED -> emit.emit(Message.of(CACHED).with("coordinate", artifact.label())
+                        .with("target", result.target()));
+                case OPTIONAL_MISSING -> emit.emit(Message.of(OPTIONAL_MISSING).with("coordinate", artifact.label())
+                        .with("reason", result.reason()));
+                case FAILED -> emit.emit(Message.of(FAILED).with("coordinate", artifact.label())
+                        .with("reason", result.reason()));
             }
-        }
-        if (!found) {
-            var reason = last == null ? "artifact was not found in the configured repositories"
-                    : last.getMessage() == null ? last.toString() : last.getMessage();
-            if (optional) {
-                events.publish(Event.optionalMissing(artifact.label(), reason));
-                emit.emit(Message.of(OPTIONAL_MISSING).with("coordinate", artifact.label()).with("reason", reason));
-            } else {
-                events.publish(Event.failed(artifact.label(), reason));
-                emit.emit(Message.of(FAILED).with("coordinate", artifact.label()).with("reason", reason));
-            }
+        } catch (Exception failure) {
+            var reason = failure.getMessage() == null ? failure.toString() : failure.getMessage();
+            progress.publish(Event.failed(artifact.label(), reason));
+            emit.emit(Message.of(FAILED).with("coordinate", artifact.label()).with("reason", reason));
         }
     }
 
     private static void write(Response response, Artifact artifact, Path target,
-            Events events) throws IOException {
+            Consumer<Event> events) throws IOException {
         var total = length(response);
-        events.publish(Event.progress(artifact.label(), 0, total));
+        events.accept(Event.progress(artifact.label(), 0, total));
         var temporary = Files.createTempFile(target.getParent(), "." + artifact.file(), ".part");
         var bytes = 0L;
         var announced = 0L;
@@ -292,14 +386,14 @@ public final class Add {
                     bytes += count;
                     var now = System.nanoTime();
                     if (bytes - announced >= PROGRESS_BYTES || now - announcedAt >= PROGRESS_NANOS) {
-                        events.publish(Event.progress(artifact.label(), bytes, total));
+                        events.accept(Event.progress(artifact.label(), bytes, total));
                         announced = bytes;
                         announcedAt = now;
                     }
                 }
             }
             move(temporary, target);
-            events.publish(Event.done(artifact.label(), bytes, target.toString()));
+            events.accept(Event.done(artifact.label(), bytes, target.toString()));
         } finally {
             Files.deleteIfExists(temporary);
         }
@@ -408,7 +502,8 @@ public final class Add {
 
     private record Job(List<Coordinate> roots, List<Coordinate> artifacts,
             Map<String, Outcome> outcomes, Map<String, List<Coordinate>> resolutions,
-            Map<String, Failure> resolutionFailures, boolean started, boolean downloadsStarted) {
+            Map<String, Failure> resolutionFailures, boolean started, boolean downloadsStarted,
+            int launched) {
         Job {
             roots = List.copyOf(roots);
             artifacts = List.copyOf(artifacts);
@@ -418,17 +513,19 @@ public final class Add {
         }
 
         static Job waiting(List<Coordinate> roots) {
-            return new Job(roots, List.of(), Map.of(), Map.of(), Map.of(), false, false);
+            return new Job(roots, List.of(), Map.of(), Map.of(), Map.of(), false, false, 0);
         }
 
         Job begin() {
-            return new Job(roots, artifacts, outcomes, resolutions, resolutionFailures, true, downloadsStarted);
+            return new Job(roots, artifacts, outcomes, resolutions, resolutionFailures, true, downloadsStarted,
+                    launched);
         }
 
         Job outcome(Outcome outcome) {
             var next = new LinkedHashMap<>(outcomes);
             next.putIfAbsent(outcome.coordinate(), outcome);
-            return new Job(roots, artifacts, next, resolutions, resolutionFailures, started, downloadsStarted);
+            return new Job(roots, artifacts, next, resolutions, resolutionFailures, started, downloadsStarted,
+                    launched);
         }
 
         Job resolved(Coordinate root, List<Coordinate> found) {
@@ -439,17 +536,22 @@ public final class Add {
                 all.putIfAbsent(coordinate.text(), coordinate);
             }
             return new Job(roots, List.copyOf(all.values()), outcomes, next, resolutionFailures,
-                    started, downloadsStarted);
+                    started, downloadsStarted, launched);
         }
 
         Job resolutionFailure(Coordinate root, String reason) {
             var next = new LinkedHashMap<>(resolutionFailures);
             next.putIfAbsent(root.text(), new Failure(root.text(), reason));
-            return new Job(roots, artifacts, outcomes, resolutions, next, started, downloadsStarted);
+            return new Job(roots, artifacts, outcomes, resolutions, next, started, downloadsStarted, launched);
         }
 
-        Job beginDownloads() {
-            return new Job(roots, artifacts, outcomes, resolutions, resolutionFailures, started, true);
+        Job beginDownloads(int launched) {
+            return new Job(roots, artifacts, outcomes, resolutions, resolutionFailures, started, true, launched);
+        }
+
+        Job launch(int count) {
+            return new Job(roots, artifacts, outcomes, resolutions, resolutionFailures, started,
+                    downloadsStarted, launched + count);
         }
 
         boolean complete() {
@@ -465,6 +567,17 @@ public final class Add {
             found.putIfAbsent(artifact.label(), artifact);
         }
         return List.copyOf(found.values());
+    }
+
+    static List<Integer> batches(int total) {
+        if (total < 0) throw new IllegalArgumentException("a download queue cannot be negative: " + total);
+        var batches = new ArrayList<Integer>();
+        for (var remaining = total; remaining > 0;) {
+            var count = Math.min(MAX_DOWNLOADS, remaining);
+            batches.add(count);
+            remaining -= count;
+        }
+        return List.copyOf(batches);
     }
 
     private static final class Coordinator implements Definition<Job> {
@@ -514,31 +627,47 @@ public final class Add {
         private static Step<Job> downloads(Job state) {
             if (state.resolutions().size() + state.resolutionFailures().size() != state.roots().size()
                     || state.downloadsStarted()) return Step.of(state);
-            var effects = scheduled(state.artifacts()).stream()
-                    .map(artifact -> Effect.of(DOWNLOAD).with("coordinate", artifact.coordinate().text())
-                            .with("kind", artifact.kind()))
-                    .toList();
-            return new Step<>(state.beginDownloads(), effects);
+            var artifacts = scheduled(state.artifacts());
+            var count = batches(artifacts.size()).getFirst();
+            var effects = artifacts.subList(0, count).stream().map(Coordinator::download).toList();
+            return new Step<>(state.beginDownloads(count), effects);
         }
 
         private static Step<Job> downloaded(Job state, Message message) {
-            return Step.of(state.outcome(new Outcome(message.string("coordinate", ""),
+            return refill(state.outcome(new Outcome(message.string("coordinate", ""),
                     message.string("target", ""), "", true, false, false)));
         }
 
         private static Step<Job> cached(Job state, Message message) {
-            return Step.of(state.outcome(new Outcome(message.string("coordinate", ""),
+            return refill(state.outcome(new Outcome(message.string("coordinate", ""),
                     message.string("target", ""), "", false, true, false)));
         }
 
         private static Step<Job> optionalMissing(Job state, Message message) {
-            return Step.of(state.outcome(new Outcome(message.string("coordinate", ""), "",
+            return refill(state.outcome(new Outcome(message.string("coordinate", ""), "",
                     message.string("reason", "supplement was not found"), false, false, true)));
         }
 
         private static Step<Job> failed(Job state, Message message) {
-            return Step.of(state.outcome(new Outcome(message.string("coordinate", ""), "",
+            return refill(state.outcome(new Outcome(message.string("coordinate", ""), "",
                     message.string("reason", "unknown failure"), false, false, false)));
+        }
+
+        private static Step<Job> refill(Job state) {
+            var artifacts = scheduled(state.artifacts());
+            if (!state.downloadsStarted() || state.launched() >= artifacts.size()
+                    || state.outcomes().size() == 0 || state.outcomes().size() % MAX_DOWNLOADS != 0) {
+                return Step.of(state);
+            }
+            var count = batches(artifacts.size() - state.launched()).getFirst();
+            var effects = artifacts.subList(state.launched(), state.launched() + count)
+                    .stream().map(Coordinator::download).toList();
+            return new Step<>(state.launch(count), effects);
+        }
+
+        private static Effect download(Artifact artifact) {
+            return Effect.of(DOWNLOAD).with("coordinate", artifact.coordinate().text())
+                    .with("kind", artifact.kind());
         }
 
         private static Step<Job> answer(Job state, Message message) {
@@ -571,188 +700,4 @@ public final class Add {
         }
     }
 
-    private static final class Events implements Flow.Publisher<Event>, AutoCloseable {
-        private final CopyOnWriteArrayList<Subscription> subscribers = new CopyOnWriteArrayList<>();
-        private volatile boolean closed;
-
-        @Override
-        public void subscribe(Flow.Subscriber<? super Event> subscriber) {
-            if (subscriber == null) throw new NullPointerException("subscriber");
-            var subscription = new Subscription(subscriber);
-            if (closed) {
-                subscriber.onSubscribe(subscription);
-                subscriber.onComplete();
-                return;
-            }
-            subscribers.add(subscription);
-            subscriber.onSubscribe(subscription);
-        }
-
-        void publish(Event event) {
-            if (closed) return;
-            for (var subscriber : subscribers) subscriber.publish(event);
-        }
-
-        @Override
-        public void close() {
-            if (closed) return;
-            closed = true;
-            for (var subscriber : subscribers) subscriber.complete();
-            subscribers.clear();
-        }
-
-        private static final class Subscription implements Flow.Subscription {
-            private final Flow.Subscriber<? super Event> subscriber;
-            private volatile boolean cancelled;
-            private volatile long demand;
-
-            Subscription(Flow.Subscriber<? super Event> subscriber) {
-                this.subscriber = subscriber;
-            }
-
-            @Override
-            public void request(long count) {
-                if (count <= 0) {
-                    cancel();
-                    subscriber.onError(new IllegalArgumentException("non-positive demand"));
-                    return;
-                }
-                demand = demand == Long.MAX_VALUE || count == Long.MAX_VALUE
-                        || Long.MAX_VALUE - demand < count ? Long.MAX_VALUE : demand + count;
-            }
-
-            @Override
-            public void cancel() {
-                cancelled = true;
-            }
-
-            void publish(Event event) {
-                if (cancelled || demand == 0) return;
-                if (demand != Long.MAX_VALUE) demand--;
-                try {
-                    subscriber.onNext(event);
-                } catch (RuntimeException failure) {
-                    cancel();
-                    subscriber.onError(failure);
-                }
-            }
-
-            void complete() {
-                if (!cancelled) subscriber.onComplete();
-            }
-        }
-    }
-
-    private static final class Renderer implements Flow.Subscriber<Event> {
-        private final Writer out;
-        private final Mode mode;
-        private final List<String> order = new ArrayList<>();
-        private final Map<String, Event> latest = new LinkedHashMap<>();
-        private Flow.Subscription subscription;
-        private int drawn;
-        private boolean terminal;
-
-        Renderer(Writer out, Mode mode) {
-            this.out = out;
-            this.mode = mode;
-        }
-
-        @Override
-        public synchronized void onSubscribe(Flow.Subscription subscription) {
-            this.subscription = subscription;
-            subscription.request(Long.MAX_VALUE);
-        }
-
-        @Override
-        public synchronized void onNext(Event event) {
-            if (terminal) return;
-            latest.put(event.coordinate(), event);
-            try {
-                if (mode == Mode.TTY) {
-                    if (!event.type().startsWith("resolve") && !event.type().equals("complete")
-                            && !order.contains(event.coordinate())) {
-                        order.add(event.coordinate());
-                    }
-                    if (!order.isEmpty()) render();
-                }
-                else line(event);
-            } catch (IOException failure) {
-                subscription.cancel();
-            }
-        }
-
-        @Override
-        public synchronized void onError(Throwable failure) {
-            // The renderer is the last consumer. An unwritable stdout has no
-            // useful recovery path, and the command still reports its result.
-        }
-
-        @Override
-        public synchronized void onComplete() {
-            if (terminal) return;
-            terminal = true;
-            try {
-                if (mode == Mode.TTY && drawn > 0) {
-                    out.write("\n");
-                    out.flush();
-                }
-            } catch (IOException ignored) {}
-        }
-
-        private void line(Event event) throws IOException {
-            if (event.type().equals("complete")) {
-                out.write("add.complete " + clean(event.reason()) + "\n");
-                out.flush();
-                return;
-            }
-            out.write("add." + event.type() + " " + event.coordinate());
-            switch (event.type()) {
-                case "start", "progress" -> out.write(" " + event.bytes() + "/" + event.total());
-                case "done", "cached" -> out.write(" " + event.target());
-                case "resolved" -> out.write(" " + event.bytes() + " artifacts");
-                case "resolve-failed", "failed", "optional-missing" -> out.write(" " + clean(event.reason()));
-                default -> {}
-            }
-            out.write("\n");
-            out.flush();
-        }
-
-        private void render() throws IOException {
-            if (drawn > 0) out.write("\033[" + drawn + "A");
-            for (var artifact : order) {
-                var event = latest.get(artifact);
-                out.write("\r\033[2K");
-                out.write(bar(artifact, event));
-                out.write("\n");
-            }
-            drawn = order.size();
-            out.flush();
-        }
-
-        private static String bar(String coordinate, Event event) {
-            if (event == null) return "[                    ] " + coordinate + " waiting";
-            if (event.type().equals("failed")) return "[--------------------] " + coordinate + " failed: " + clean(event.reason());
-            if (event.type().equals("optional-missing")) {
-                return "[....................] " + coordinate + " missing (optional)";
-            }
-            if (event.type().equals("cached")) return "[####################] " + coordinate + " cached";
-            if (event.type().equals("done")) return "[####################] " + coordinate + " done";
-            var total = event.total();
-            if (total <= 0) return "[????????????????????] " + coordinate + " " + bytes(event.bytes());
-            var complete = Math.min(20, (int) (event.bytes() * 20 / total));
-            return "[" + "#".repeat(complete) + "-".repeat(20 - complete) + "] "
-                    + coordinate + " " + bytes(event.bytes()) + "/" + bytes(total);
-        }
-
-        private static String bytes(long bytes) {
-            if (bytes < 1024) return bytes + " B";
-            if (bytes < 1024 * 1024) return "%.1f KiB".formatted(bytes / 1024d);
-            if (bytes < 1024 * 1024 * 1024) return "%.1f MiB".formatted(bytes / (1024d * 1024));
-            return "%.1f GiB".formatted(bytes / (1024d * 1024 * 1024));
-        }
-
-        private static String clean(String text) {
-            return text == null ? "" : text.replace('\n', ' ').replace('\r', ' ');
-        }
-    }
 }

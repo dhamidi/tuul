@@ -163,6 +163,8 @@ add.complete 9 downloaded, 0 cached, 0 failed
 
 Tuul reads Maven POM files with the JDK XML DOM parser, follows transitive
 compile and runtime dependencies, and streams every binary into `vendor/`.
+Downloads run through a queue with at most 20 active transfers, so a large
+dependency graph does not exhaust the remote repository or the local client.
 Each binary also gets a `-sources.jar` and a `-javadoc.jar` request. Missing
 source or javadoc jars are reported as optional events and do not fail the
 binary add. Use `--repository URL` more than once to try repositories in
