@@ -1,7 +1,6 @@
 # fetch
 
-`fetch` is the proposed outbound HTTP client for tuul. It uses only the JDK.
-The package is a design contract. The implementation does not exist yet.
+`fetch` is the outbound HTTP client for tuul. It uses only the JDK.
 
 The package has one front door, `Fetch`. A `Fetch` owns an HTTP connection pool
 and one execution strategy. A `Session` holds cookies and request defaults. A

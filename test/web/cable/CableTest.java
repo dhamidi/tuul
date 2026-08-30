@@ -151,6 +151,7 @@ public final class CableTest {
                 cable.broadcast("symbols", Event.of("four"));
                 Check.equal("and then carries on live", "four", back.event().data());
             }
+            await(() -> cable.subscribers() == 0);
             try (var fresh = listen(handler, "/updates")) {
                 await(() -> cable.subscribers() == 1);
                 cable.broadcast("symbols", Event.of("five"));

@@ -23,7 +23,9 @@ import tuul.Version;
 /// definition read back — so a command that grows an option grows a line of
 /// help, and there is no second copy of the command surface to keep in step.
 
-void main(String[] args) throws IOException {
+public final class main {
+
+public static void main(String[] args) throws IOException {
     var out = new BufferedWriter(new OutputStreamWriter(System.out, StandardCharsets.UTF_8));
     var err = new BufferedWriter(new OutputStreamWriter(System.err, StandardCharsets.UTF_8));
     var status = run(List.of(args), out, err);
@@ -32,7 +34,7 @@ void main(String[] args) throws IOException {
     System.exit(status);
 }
 
-int run(List<String> args, Writer out, Writer err) throws IOException {
+static int run(List<String> args, Writer out, Writer err) throws IOException {
     return switch (tuul().parse(args)) {
         case Parsed.Help help -> help(help.path(), help.command(), out);
         case Parsed.Failure failure -> ask(Message.error(failure.reason()), out, err);
@@ -41,7 +43,7 @@ int run(List<String> args, Writer out, Writer err) throws IOException {
 }
 
 /// Everything tuul does, and the only place it is written down.
-Command tuul() {
+static Command tuul() {
     var docs = Command.named("docs", "describe a type from the project, vendor/ or the JDK")
             .flag("json", "print the description as JSON")
             .flag("all", "include non-public members")
@@ -87,7 +89,7 @@ Command tuul() {
 /// A parsed command line is already a message: the values carry the names the
 /// applications read. Only `docs` needs translating, because several flags
 /// there add up to one field.
-int dispatch(Parsed.Values parsed, Writer out, Writer err) throws IOException {
+static int dispatch(Parsed.Values parsed, Writer out, Writer err) throws IOException {
     var values = parsed.values();
     return switch (parsed.command().name()) {
         case "new" -> manage(Message.of("project.new", values), out, err);
@@ -110,14 +112,14 @@ int dispatch(Parsed.Values parsed, Writer out, Writer err) throws IOException {
 /// A message read from stdin goes to whichever application handles its type,
 /// so `tuul message` reaches all of tuul rather than the half of it `docs`
 /// happens to be.
-int deliver(Message message, Writer out, Writer err) {
+static int deliver(Message message, Writer out, Writer err) {
     return message.type().startsWith("project.") ? manage(message, out, err) : ask(message, out, err);
 }
 
 /// `tuul browse` is the one command that does not dispatch a message: it starts
 /// a server and stays there, so there is no state for an application to end up
 /// in and nothing to report when it does.
-int browse(Json.Object values, Writer out, Writer err) {
+static int browse(Json.Object values, Writer out, Writer err) {
     try {
         browser.Browser.serve(paths(values, "source-path", "src"), paths(values, "vendor", "vendor"),
                 Integer.parseInt(values.string("port", "8080")), out);
@@ -131,7 +133,7 @@ int browse(Json.Object values, Writer out, Writer err) {
 
 /// The paths a command was given, or the conventional one when it was given
 /// none and that directory is there.
-List<Path> paths(Json.Object values, String option, String fallback) {
+static List<Path> paths(Json.Object values, String option, String fallback) {
     var given = new ArrayList<Path>();
     for (var value : values.list(option)) {
         if (value instanceof Json.Str(var directory)) given.add(Path.of(directory));
@@ -139,7 +141,7 @@ List<Path> paths(Json.Object values, String option, String fallback) {
     return given.isEmpty() ? directory(fallback) : List.copyOf(given);
 }
 
-int complain(String reason, Writer err) {
+static int complain(String reason, Writer err) {
     try {
         err.write("error: " + reason + "\n");
         err.flush();
@@ -152,7 +154,7 @@ int complain(String reason, Writer err) {
 /// `tuul docs invoicing.Invoice --methods --json`. The sections are one field
 /// made of several flags, and both the flags and this come from
 /// [Docs#SECTIONS], so a new section needs saying in one place.
-Message docs(Json.Object values) {
+static Message docs(Json.Object values) {
     var sections = new ArrayList<Json>();
     for (var section : Docs.SECTIONS) {
         if (values.flag(section)) sections.add(Json.of(section));
@@ -182,7 +184,7 @@ Message docs(Json.Object values) {
 /// report: treated as envelope it is ignored, and treated as payload it brings
 /// back the ambiguity `body` exists to end. Saying so costs one error and
 /// teaches the shape.
-Message stdin() {
+static Message stdin() {
     var value = Json.parse(new InputStreamReader(System.in, StandardCharsets.UTF_8));
     if (!(value instanceof Json.Object document)) return Message.error("a message must be a JSON object");
     var stray = document.fields().keySet().stream().filter(name -> !ENVELOPE.contains(name)).sorted().toList();
@@ -196,27 +198,29 @@ Message stdin() {
 /// The only fields a message has outside its payload.
 static final java.util.Set<String> ENVELOPE = java.util.Set.of(Message.TYPE, Message.AT, Message.BODY);
 
-int ask(Message message, Writer out, Writer err) {
+static int ask(Message message, Writer out, Writer err) {
     return docs.App.of(docs.State.of(directory("src"), directory("vendor")), out, err).dispatch(message).exit();
 }
 
-int manage(Message message, Writer out, Writer err) {
+static int manage(Message message, Writer out, Writer err) {
     return project.App.of(project.State.of(Path.of(".")), out, err).dispatch(message).exit();
 }
 
 /// A tuul project keeps its code in `src/` and its dependencies in `vendor/`,
 /// so neither has to be named on the command line.
-List<Path> directory(String name) {
+static List<Path> directory(String name) {
     var path = Path.of(name);
     return Files.isDirectory(path) ? List.of(path) : List.of();
 }
 
-int announce(Writer out) throws IOException {
+static int announce(Writer out) throws IOException {
     out.write(Version.describe() + "\n");
     return 0;
 }
 
-int help(String path, Command command, Writer out) throws IOException {
+static int help(String path, Command command, Writer out) throws IOException {
     Usage.help(path, command, out);
     return 0;
+}
+
 }

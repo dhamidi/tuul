@@ -4,12 +4,13 @@
 # on any JDK of this release or newer rather than on one exact build of one.
 
 [tools]
-java = "latest"
+java = "27.0.0"
+zig = "latest"
 
 [tasks.build]
 description = "Compile module tuul into build/classes and the CLI into build/cli"
 run = '''
-set -euo pipefail
+set -eu
 release=$(javac --version | cut -d' ' -f2 | cut -d. -f1)
 rm -rf build/classes build/cli
 mkdir -p build/classes build/cli
@@ -25,7 +26,7 @@ java --enable-native-access=ALL-UNNAMED -cp build/classes:build/cli main build -
 description = "Compile and run everything under test/"
 depends = ["build"]
 run = '''
-set -euo pipefail
+set -eu
 release=$(javac --version | cut -d' ' -f2 | cut -d. -f1)
 mkdir -p build/test
 javac --release "$release" -nowarn -cp build/classes -d build/test $(find test -name '*.java')
@@ -46,7 +47,7 @@ run = 'java --enable-native-access=ALL-UNNAMED -cp build/classes:build/cli:build
 description = "Cross-build the native modules for every platform tuul ships"
 depends = ["build"]
 run = '''
-set -euo pipefail
+set -eu
 echo '{"type":"project.natives"}' | java --enable-native-access=ALL-UNNAMED -cp build/classes:build/cli main message
 '''
 
@@ -64,7 +65,7 @@ run = 'java --enable-native-access=ALL-UNNAMED -cp build/classes:build/cli main'
 description = "Assemble the distribution: build/dist/tuul.jar and its sources"
 depends = ["natives"]
 run = '''
-set -euo pipefail
+set -eu
 version=$(java --enable-native-access=ALL-UNNAMED -cp build/classes:build/cli main --version | cut -d' ' -f2)
 mkdir -p build/dist
 # The jar carries the prebuilt libraries, because an installed tuul has no
@@ -85,7 +86,7 @@ ls -la build/dist/tuul.jar "build/dist/tuul-$version-sources.jar"
 description = "Install this tuul into ~/.local/bin, the way a release would"
 depends = ["dist"]
 run = '''
-set -euo pipefail
+set -eu
 version=$(java --enable-native-access=ALL-UNNAMED -cp build/classes:build/cli main --version | cut -d' ' -f2)
 home="${TUUL_HOME:-$HOME/.local/share/tuul}"
 bin="${TUUL_BIN:-$HOME/.local/bin}"

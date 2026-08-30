@@ -4,7 +4,7 @@ The `tuul` application itself follows the directory structure outlined in the RE
 
 Since we are not allowed any non-JDK dependencies, 
 the following capabilities are developed in-house
-up to our modern JDK 24 standard:
+up to our modern JDK 27 standard:
 
 - `json`: a streaming JSON parser/serializer, operating on JSON values only,
 - `jsonrpc2`: using the `json` module and structured concurrency to implement JSON-RPC 2.0 over arbitrary transports,

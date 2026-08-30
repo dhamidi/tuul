@@ -15,10 +15,11 @@ It borrows:
 
 > **Status:** parts of this README are still the target, not a changelog.
 > What runs today is `tuul new`, `tuul install`, `tuul build`, `tuul run`,
-> `tuul test`, `tuul docs`, `tuul bind` and `tuul self-test`, over six
+> `tuul test`, `tuul docs`, `tuul bind` and `tuul self-test`, over seven
 > libraries: `json` (streaming
 > parser and serializer), `application` (the Elm Architecture runtime from
-> [ARCHITECTURE.md](./ARCHITECTURE.md)), `symbols` (javac compiles a source
+> [ARCHITECTURE.md](./ARCHITECTURE.md)), `fetch` (streaming HTTP with sessions
+> and caller-selected concurrency), `symbols` (javac compiles a source
 > tree in memory; the JDK's class file parser reads the symbols back out),
 > `project` (scaffold, build, launch), `ffi` (shared libraries, downcall
 > handles, and a C header reader) and `sqlite3` (the whole SQLite C API —
@@ -57,13 +58,13 @@ It borrows:
 > `mise run build`, `mise run test`, `mise run self-test`,
 > `mise run natives`, `mise run tuul -- docs <symbol>`.
 
-The proposed outbound HTTP library is [`fetch`](src/fetch/README.md). Its
-contract covers sessions, persistent connections, caller-selected concurrency,
-and streaming response bodies. It is not in the implemented command list yet.
+The outbound HTTP library is [`fetch`](src/fetch/README.md). It provides
+sessions, persistent connections, caller-selected concurrency, and streaming
+request and response bodies.
 
 ## Why
 
-- Only modern Java (JDK 24) is supported — no legacy toolchain juggling.
+- Only modern Java (JDK 27) is supported — no legacy toolchain juggling.
 - The primary user of `tuul` is a developer *through an agent*. Every command
   is built to be predictable and scriptable first, pleasant for humans
   second.
@@ -94,8 +95,8 @@ See [AGENTS.md](./AGENTS.md) for the full set of commandments.
 response bytes to an incremental parser. `Response.text()` uses the response
 `Content-Type` charset.
 
-Read the [fetch documentation](src/fetch/README.md) for the proposed Java API
-and its Diátaxis documents.
+Read the [fetch documentation](src/fetch/README.md) for the Java API and its
+Diátaxis documents.
 
 ## Install
 
@@ -105,7 +106,7 @@ Tuul is managed like any other tool, through mise:
 mise use -g tuul
 ```
 
-This also pulls in JDK 24, since Tuul only targets the current JDK.
+This also pulls in JDK 27, since Tuul only targets the current JDK.
 
 ## Quick start
 
@@ -358,7 +359,7 @@ The jar contains:
 - the native libraries for each supported platform.
 
 The manifest selects the CLI entrypoint when the project has one. Otherwise,
-it selects the only entrypoint. A machine with JDK 24 runs the application
+it selects the only entrypoint. A machine with JDK 27 runs the application
 without Tuul:
 
 ```sh

@@ -3,7 +3,7 @@
 This tutorial creates a client, opens a session, sends a GET request, checks
 the HTTP result, and streams the response to a file.
 
-You need JDK 24. You do not need another HTTP library.
+You need JDK 27. You do not need another HTTP library.
 
 ## Create the client
 
@@ -100,6 +100,6 @@ incremental parser. For a file, use `writeTo(Path)`.
 
 - [howto.md](howto.md) shows concurrent Maven downloads, form submission,
   custom execution, and Flow body consumption.
-- [reference.md](reference.md) lists every proposed public type and rule.
+- [reference.md](reference.md) lists every public type and rule.
 - [explanation.md](explanation.md) explains why sessions do not own sockets
   and why bodies are one-shot.

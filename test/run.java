@@ -17,6 +17,7 @@ void main() throws Exception {
     Check.suite("ffi.PlatformTest", ffi.PlatformTest::run);
     Check.suite("uritemplates.TemplatesTest", uritemplates.TemplatesTest::run);
     Check.suite("eventstream.EventStreamTest", eventstream.EventStreamTest::run);
+    Check.suite("fetch.FetchTest", fetch.FetchTest::run);
     Check.suite("tcl.ReplTest", tcl.ReplTest::run);
     Check.suite("tcl.TclTest", tcl.TclTest::run);
     Check.suite("web.WebTest", web.WebTest::run);

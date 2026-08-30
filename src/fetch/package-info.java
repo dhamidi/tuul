@@ -10,6 +10,9 @@
 /// selects its character set from the response `Content-Type`.
 ///
 /// ```
+/// import java.net.URI;
+/// import java.nio.file.Path;
+///
 /// try (var fetch = Fetch.virtualThreads(); var session = fetch.session()) {
 ///     try (var response = session.get(URI.create("https://example.com/")).send()) {
 ///         response.requireSuccess();

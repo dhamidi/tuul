@@ -1,6 +1,6 @@
 # Explanation
 
-This document says why the proposed design has these boundaries. It is not a
+This document says why the package has these boundaries. It is not a
 tutorial. It is not a command list. For tasks, read [howto.md](howto.md). For
 rules, read [reference.md](reference.md).
 

@@ -3,7 +3,7 @@
 Tuul is to Java what Bun is to JavaScript:
 
 - a unified toolchain,
-- a break with the past: only modern JDK 24 is supported,
+- a break with the past: only modern JDK 27 is supported,
 - a development tool to give easy access to agents to working with Java code.
 
 ## Commandments
@@ -31,6 +31,5 @@ Tuul gives access to:
 - adding and updating dependencies,
 - analyzing source code and documentation, both of the application and dependencies used by the application,
 - tuul makes it possible to develop, build, and deploy and application by only invoking `tuul` and having an agent write code.
-
 
 

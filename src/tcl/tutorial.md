@@ -4,7 +4,7 @@ This tutorial shows one small program. You create an interpreter. You pass a
 Java object into it. A script calls methods on that object and returns a
 number.
 
-You need JDK 24. You do not need Tcl on this machine.
+You need JDK 27. You do not need Tcl on this machine.
 
 ## The Java object
 

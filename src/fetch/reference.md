@@ -1,7 +1,7 @@
 # Reference
 
-This document is the proposed contract for `fetch`. An implementation must
-match these rules. A caller uses this document to choose a type or method.
+This document is the contract for `fetch`. A caller uses this document to
+choose a type or method.
 
 ## Glossary
 

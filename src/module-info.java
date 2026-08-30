@@ -16,6 +16,7 @@ module tuul {
     exports browser;
     exports docs;
     exports eventstream;
+    exports fetch;
     exports ffi;
     exports json;
     exports jsonrpc2;
