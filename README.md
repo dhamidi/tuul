@@ -57,6 +57,10 @@ It borrows:
 > `mise run build`, `mise run test`, `mise run self-test`,
 > `mise run natives`, `mise run tuul -- docs <symbol>`.
 
+The proposed outbound HTTP library is [`fetch`](src/fetch/README.md). Its
+contract covers sessions, persistent connections, caller-selected concurrency,
+and streaming response bodies. It is not in the implemented command list yet.
+
 ## Why
 
 - Only modern Java (JDK 24) is supported — no legacy toolchain juggling.
@@ -80,6 +84,18 @@ It borrows:
   and development tasks. Each source set is an explicit Java module.
 
 See [AGENTS.md](./AGENTS.md) for the full set of commandments.
+
+## Library design: fetch
+
+`fetch` is the foundation for HTTP work in the browser, `web.hyperspec`, and
+`tuul add`. `Fetch` owns the connection pool and the execution strategy.
+`Session` owns cookies and request defaults. `Form` preserves repeated fields.
+`Body` can upload a large file, stream a Maven jar to a file, or publish
+response bytes to an incremental parser. `Response.text()` uses the response
+`Content-Type` charset.
+
+Read the [fetch documentation](src/fetch/README.md) for the proposed Java API
+and its Diátaxis documents.
 
 ## Install
 

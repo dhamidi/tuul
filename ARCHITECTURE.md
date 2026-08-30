@@ -10,7 +10,8 @@ up to our modern JDK 24 standard:
 - `jsonrpc2`: using the `json` module and structured concurrency to implement JSON-RPC 2.0 over arbitrary transports,
 - `peg`: parsing expression grammars over streams of objects, producing a parse tree by default,
 - `argparse`: a CLI argument parser based on `peg`, parsing a stream of strings,
-- `fetch`: a concurrent HTTP client with support for directly streaming files to disk
+- [`fetch`](src/fetch/README.md): a concurrent HTTP client with sessions,
+  persistent connections, and support for directly streaming files to disk
 - `application`: a mini-framework for defining applications according to The Elm Architecture,
 - `uritemplates`: an implementation of https://datatracker.ietf.org/doc/html/rfc6570 using `peg`
 - `eventstream`: a text/event-stream parser and generator, outputting to a writer,
@@ -81,6 +82,56 @@ Applications follow The Elm Architecture, with a slight twist:
 - anything that accepts a message and state, and returns a new state and effects, can work as an update function,
 - so that applications compose.
 
+## Outbound HTTP
+
+`fetch` is the outbound HTTP boundary. It is independent of `web`, so a
+browser, a Maven resolver, and an actor effect can use the same client.
+
+`Fetch` owns one connection pool and one execution strategy. The pool reuses
+HTTP/1.1 keep-alive connections and multiplexes HTTP/2 streams when the peer
+supports them. It is shared by every session created by that client. A
+`Session` owns cookies and request defaults for one user agent. It does not own
+a socket or an executor.
+
+The caller selects concurrency when it constructs `Fetch`:
+
+- `Fetch.sequential()` runs one synchronous exchange on the current thread.
+- `Fetch.flow()` runs concurrent exchanges on one Flow-based event loop and
+  applies back-pressure to response bodies.
+- `Fetch.virtualThreads()` runs blocking exchange work on virtual threads.
+- `Fetch.of(Execution)` borrows an execution resource that the application
+  provides.
+
+The convenience constructors own the resources they create. The injected
+constructor does not close the supplied execution. No session or request
+creates a hidden executor.
+
+`Request` and `Response` are metadata plus a `Body`. A body is a stream. A
+repeatable body can be sent again. A response body can be consumed once. The
+caller can write it to an `OutputStream` or `Path`, read it through a
+`Reader` selected by `Content-Type`, or consume it as a
+`Flow.Publisher<ByteBuffer>`. `Body.file(Path)` streams a large upload from a
+file. `Body.publisher(...)` streams a generated upload with back-pressure. The
+client does not buffer an unbounded body. The caller closes every response
+after it consumes or cancels the body, which lets the pool reuse or close the
+connection safely.
+
+The package keeps HTTP status as data. `send()` returns 404 and 500 responses.
+`requireSuccess()` is the explicit adapter for a caller that wants an
+exception for a non-2xx result. Redirect policy and cookie handling live on a
+session because both are user-agent state. The response retains redirect hop
+metadata without retaining intermediate bodies.
+
+This design supports the next layers without moving transport concerns into
+them:
+
+- a browser keeps one session, parses body chunks, and adds history, cache,
+  and document behavior;
+- `tuul add` uses concurrent GET requests and writes Maven jars directly to
+  temporary files before checksum verification and rename;
+- `web.hyperspec` can use a session to follow links, submit forms, and inspect
+  the same status and headers that a browser sees.
+
 ## Packages and Java modules
 
 This file used "module" for a package (`json`, `peg`). A Java module in the
@@ -135,5 +186,3 @@ Actor state does not live in the child. `Definition.inspect` returns JSON
 so a caller never holds the state class across a reload. To change an
 actor, register a new `Definition` and evict it. That path does not use a
 new loader.
-
-
