@@ -143,6 +143,9 @@ public final class AddIntegrationTest {
             Check.that("checksums and optional misses enter the resolution record",
                     retryResolution.contains("\"checksumStatus\":\"verified\"")
                             && retryResolution.contains("com.acme:retry:1.0:sources"));
+            Check.that("publishing prunes obsolete managed artifact directories",
+                    !Files.exists(root.resolve("vendor/com.acme/one"))
+                            && !Files.exists(root.resolve("vendor/com.acme/two")));
 
             var beforeFailure = retryResolution;
             var failed = client.into(new Layout(root), List.of("com.acme:bad:1.0"),
@@ -170,6 +173,40 @@ public final class AddIntegrationTest {
             Check.that("an explicit duplicate exception is persistent",
                     accepted.ok() && Files.readString(root.resolve("vendor/.tuul/resolution.json"))
                             .contains("\"duplicateExceptions\":[\"same.Type\"]"));
+
+            var migrationRoot = root.resolve("migration-project");
+            var migrationVendor = migrationRoot.resolve("vendor");
+            Files.createDirectories(migrationVendor);
+            var flat = migrationVendor.resolve("one-1.0.jar");
+            Files.write(flat, mavenJar("com.acme", "one", "1.0"));
+            var flatSources = migrationVendor.resolve("one-1.0-sources.jar");
+            Files.write(flatSources, jar("sources"));
+            var unknown = migrationVendor.resolve("unknown.jar");
+            Files.write(unknown, jar("unknown"));
+            var dryOutput = new StringWriter();
+            var dry = client.into(new Layout(migrationRoot), List.of("com.acme:one:1.0"), List.of(repository),
+                    dryOutput, Add.Mode.EVENTS,
+                    new Add.Options(java.util.Set.of(), java.util.Set.of(), true, false));
+            Check.that("dry-run reports migration and leaves the project unchanged",
+                    dry.ok() && dryOutput.toString().contains("add.migrate")
+                            && dryOutput.toString().contains("add.unmanaged") && Files.isRegularFile(flat)
+                            && !Files.exists(migrationVendor.resolve(".tuul/resolution.json")));
+            var confirmation = "";
+            try {
+                client.into(new Layout(migrationRoot), List.of("com.acme:one:1.0"), List.of(repository),
+                        new StringWriter(), Add.Mode.EVENTS);
+            } catch (IOException expected) {
+                confirmation = expected.getMessage();
+            }
+            Check.that("migration needs explicit confirmation", confirmation.contains("--migrate"));
+            var migrated = client.into(new Layout(migrationRoot), List.of("com.acme:one:1.0"), List.of(repository),
+                    new StringWriter(), Add.Mode.EVENTS,
+                    new Add.Options(java.util.Set.of(), java.util.Set.of(), false, true));
+            Check.that("confirmed migration moves identified jars and preserves unknown jars",
+                    migrated.ok() && !Files.exists(flat) && !Files.exists(flatSources) && Files.isRegularFile(unknown)
+                            && Files.isRegularFile(migrationVendor.resolve("com.acme/one/1.0/one-1.0.jar"))
+                            && Vendor.of(List.of(migrationVendor)).runtime().stream()
+                                    .noneMatch(path -> path.equals(unknown)));
         } finally {
             server.stop(0);
             delete(root);
@@ -246,6 +283,13 @@ public final class AddIntegrationTest {
             }
         }
         return bytes.toByteArray();
+    }
+
+    private static byte[] mavenJar(String group, String artifact, String version) throws IOException {
+        var metadata = "groupId=" + group + "\nartifactId=" + artifact + "\nversion=" + version + "\n";
+        return jar(Map.of("fixture.txt", new byte[] {1},
+                "META-INF/maven/" + group + "/" + artifact + "/pom.properties",
+                metadata.getBytes(StandardCharsets.UTF_8)));
     }
 
     private static void delete(Path root) throws IOException {

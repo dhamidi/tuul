@@ -12,6 +12,7 @@ import java.lang.foreign.ValueLayout;
 import java.lang.invoke.MethodHandle;
 import java.lang.module.ModuleFinder;
 import symbols.Sources;
+import symbols.Vendor;
 import tuul.Version;
 import java.nio.file.Files;
 import java.nio.file.Path;
@@ -296,6 +297,12 @@ public final class ProjectTest {
         var sources = installed.directory().resolve(Version.artifact() + "-sources.jar");
         Check.that("it writes a jar named for the version", Files.isRegularFile(jar));
         Check.that("and a sources jar beside it", Files.isRegularFile(sources));
+        Check.that("install records tuul as a selected dependency",
+                Files.readString(layout.vendor().resolve(".tuul/resolution.json"))
+                        .contains("\"coordinate\":\"dev.tuul:tuul:" + Version.NUMBER + "\""));
+        Check.that("the install metadata keeps sources off the runtime classpath",
+                Vendor.of(List.of(layout.vendor())).runtime().equals(List.of(jar))
+                        && Vendor.of(List.of(layout.vendor())).sources().equals(List.of(sources)));
         Check.equal("it vendors a library for every platform tuul ships, because vendor/ is committed",
                 Platform.SHIPPED.stream().map(Platform::directory).toList(),
                 installed.platforms());

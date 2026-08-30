@@ -89,8 +89,9 @@ public record Layout(Path root) {
     /// arrived in `vendor/`.
     private List<Path> vendored() throws IOException {
         if (!Files.isDirectory(vendor())) return List.of();
-        try (var tree = Files.list(vendor())) {
-            return tree.map(dependency -> dependency.resolve("native")).filter(Files::isDirectory).sorted().toList();
+        try (var tree = Files.walk(vendor())) {
+            return tree.filter(Files::isDirectory)
+                    .filter(directory -> directory.getFileName().toString().equals("native")).sorted().toList();
         }
     }
 

@@ -233,9 +233,18 @@ public final class Add {
             Files.createDirectories(layout.vendor());
             var staging = layout.vendor().resolve(".tuul").resolve("staging-" + UUID.randomUUID());
             Files.createDirectories(staging);
+            var migration = Migration.detect(layout.vendor());
+            if (migration.required() && !options.migrate() && !options.dryRun()) {
+                delete(staging);
+                throw new IOException("the existing vendor layout needs migration; run tuul add --dry-run, then add --migrate");
+            }
+            if (options.migrate() && !options.dryRun()) migration.stage(staging.resolve("tree"));
+            var requested = new ArrayList<>(coordinates);
+            migration.roots().stream().map(Coordinate::text).filter(root -> !requested.contains(root)).forEach(requested::add);
             try (var session = fetch.session().redirects(Redirects.BROWSER)) {
-                var services = new MavenServices(layout.vendor(), staging, sources, session, options);
-                var result = run(coordinates, out, mode, services);
+                var services = new MavenServices(layout.vendor(), staging, sources, session, options, migration);
+                if (options.dryRun()) return services.preview(requested, out);
+                var result = run(requested, out, mode, services);
                 if (result.ok()) {
                     services.validateDuplicates();
                     services.publish();
@@ -348,18 +357,22 @@ public final class Add {
         private final List<URI> repositories;
         private final MavenTransport transport;
         private final Options options;
+        private final Migration migration;
+        private final java.util.Set<String> previousOwned;
         private final Map<String, FileRecord> installed = new ConcurrentHashMap<>();
         private final Map<String, String> optionalMissing = new ConcurrentHashMap<>();
         private Maven.Resolution resolution;
 
         private MavenServices(Path vendor, Path staging, List<URI> repositories, fetch.Session session,
-                Options options) {
+                Options options, Migration migration) throws IOException {
             this.vendor = vendor;
             this.staging = staging;
             this.tree = staging.resolve("tree");
             this.repositories = repositories;
             this.transport = new MavenTransport(session);
             this.options = options;
+            this.migration = migration;
+            this.previousOwned = owned(vendor.resolve(".tuul/resolution.json"));
         }
 
         @Override
@@ -379,7 +392,36 @@ public final class Add {
             for (var omitted : resolution.omitted()) plan.add(new Event("omitted",
                     omitted.node().coordinate().text(), 0, 0, "", "selected " + omitted.selected().text()
                             + " via " + String.join(" -> ", omitted.node().path())));
+            for (var entry : migration.moves().entrySet()) plan.add(new Event("migrate",
+                    entry.getKey().toString(), 0, 0, entry.getValue().toString(), "identified Maven artifact"));
+            for (var path : migration.unknown()) plan.add(new Event("unmanaged", path.toString(), 0, 0, "",
+                    "coordinate is unknown; preserved outside the selected classpath"));
             return new Resolved(resolution.selected().stream().map(node -> node.coordinate().wire()).toList(), plan);
+        }
+
+        private Result preview(List<String> coordinates, Writer out) throws IOException {
+            try {
+                var resolved = resolve(coordinates);
+                for (var event : resolved.plan()) writePlan(out, event);
+                var planned = new LinkedHashSet<String>();
+                for (var value : resolved.artifacts()) {
+                    var coordinate = Coordinate.parse(value);
+                    for (var kind : List.of("binary", "sources", "javadoc")) {
+                        var artifact = Artifact.of(coordinate, kind);
+                        planned.add(coordinate.directory().resolve(artifact.file()).toString());
+                    }
+                }
+                for (var path : planned) if (!previousOwned.contains(path)) writePlan(out,
+                        new Event("add", path, 0, 0, "", "planned"));
+                for (var path : previousOwned) if (!planned.contains(path)) writePlan(out,
+                        new Event("remove", path, 0, 0, "", "previously managed"));
+                out.flush();
+                return new Result(List.of(), List.of(), List.of());
+            } catch (IOException failure) {
+                throw failure;
+            } catch (Exception failure) {
+                throw new IOException(failure.getMessage(), failure);
+            }
         }
 
         @Override
@@ -388,6 +430,14 @@ public final class Add {
             var relative = artifact.coordinate().directory().resolve(artifact.file());
             var active = vendor.resolve(relative);
             var target = tree.resolve(relative);
+            if (Files.isRegularFile(target)) {
+                validateArchive(target, artifact);
+                var checksum = checksum(artifact, target, events);
+                installed.put(relative.toString(), new FileRecord(relative.toString(), artifact.label(), kind,
+                        checksum.algorithm(), checksum.value(), checksum.status(), checksum.repository()));
+                events.accept(Event.cached(artifact.label(), active.toString()));
+                return Download.cached(active.toString());
+            }
             if (Files.isRegularFile(active)) {
                 Files.createDirectories(target.getParent());
                 Files.copy(active, target, StandardCopyOption.REPLACE_EXISTING);
@@ -448,6 +498,8 @@ public final class Add {
             var state = vendor.resolve(".tuul");
             Files.createDirectories(state);
             move(metadata, state.resolve("resolution.json"));
+            prune(vendor, previousOwned, installed.keySet());
+            migration.finish(vendor);
         }
 
         private void validateDuplicates() throws IOException {
@@ -717,6 +769,140 @@ public final class Add {
                 .with("path", Json.Array.strings(node.path()))
                 .with("relocatedFrom", node.relocatedFrom());
     }
+
+    private static java.util.Set<String> owned(Path resolution) throws IOException {
+        if (!Files.isRegularFile(resolution)) return java.util.Set.of();
+        Json value;
+        try (var reader = Files.newBufferedReader(resolution)) {
+            value = Json.parse(reader);
+        } catch (RuntimeException invalid) {
+            throw new IOException("invalid vendor resolution " + resolution + ": " + invalid.getMessage(), invalid);
+        }
+        if (!(value instanceof Json.Object document)) return java.util.Set.of();
+        var paths = new LinkedHashSet<String>();
+        for (var file : document.list("files")) {
+            if (file instanceof Json.Object object) paths.add(object.string("path", ""));
+            else if (file instanceof Json.Str(var path)) paths.add(path);
+        }
+        paths.remove("");
+        return java.util.Set.copyOf(paths);
+    }
+
+    private static void prune(Path vendor, java.util.Set<String> previous, java.util.Set<String> selected)
+            throws IOException {
+        for (var path : previous) {
+            if (selected.contains(path)) continue;
+            var relative = Path.of(path).normalize();
+            if (relative.isAbsolute() || relative.getNameCount() != 4) {
+                throw new IOException("refusing to prune invalid managed path " + path);
+            }
+            var target = vendor.resolve(relative).normalize();
+            if (!target.startsWith(vendor.normalize())) throw new IOException("managed path escapes vendor: " + path);
+            Files.deleteIfExists(target);
+            for (var directory = target.getParent(); directory != null && !directory.equals(vendor); directory = directory.getParent()) {
+                try (var entries = Files.list(directory)) {
+                    if (entries.findAny().isPresent()) break;
+                }
+                Files.deleteIfExists(directory);
+            }
+        }
+    }
+
+    private static void writePlan(Writer out, Event event) throws IOException {
+        out.write("add." + event.type() + " " + event.coordinate());
+        if (!event.target().isEmpty()) out.write(" -> " + event.target());
+        if (!event.reason().isEmpty()) out.write(" " + event.reason());
+        out.write("\n");
+    }
+
+    private record Migration(List<Coordinate> roots, Map<Path, Path> moves, List<Path> unknown) {
+        Migration {
+            roots = List.copyOf(roots);
+            moves = java.util.Collections.unmodifiableMap(new LinkedHashMap<>(moves));
+            unknown = List.copyOf(unknown);
+        }
+
+        static Migration detect(Path vendor) throws IOException {
+            if (Files.isRegularFile(vendor.resolve(".tuul/resolution.json")) || !Files.isDirectory(vendor)) {
+                return new Migration(List.of(), Map.of(), List.of());
+            }
+            var jars = new ArrayList<Path>();
+            try (var paths = Files.walk(vendor)) {
+                paths.filter(Files::isRegularFile).filter(path -> path.toString().endsWith(".jar"))
+                        .filter(path -> !path.startsWith(vendor.resolve(".tuul"))).sorted().forEach(jars::add);
+            }
+            var known = new LinkedHashMap<Path, Coordinate>();
+            for (var jar : jars) coordinate(jar).ifPresent(value -> known.put(jar, value));
+            for (var jar : jars) {
+                if (known.containsKey(jar)) continue;
+                var name = jar.getFileName().toString();
+                for (var coordinate : new LinkedHashSet<>(known.values())) {
+                    var base = coordinate.artifact() + "-" + coordinate.version();
+                    if (name.equals(base + "-sources.jar") || name.equals(base + "-javadoc.jar")) {
+                        known.put(jar, coordinate);
+                        break;
+                    }
+                }
+            }
+            var roots = new LinkedHashMap<String, Coordinate>();
+            var moves = new LinkedHashMap<Path, Path>();
+            for (var entry : known.entrySet()) {
+                var coordinate = entry.getValue();
+                moves.put(entry.getKey(), coordinate.directory().resolve(entry.getKey().getFileName()));
+                var name = entry.getKey().getFileName().toString();
+                if (!name.endsWith(SOURCES_SUFFIX) && !name.endsWith(JAVADOC_SUFFIX)) {
+                    roots.putIfAbsent(coordinate.text(), coordinate);
+                }
+            }
+            var unknown = jars.stream().filter(jar -> !known.containsKey(jar)).toList();
+            return new Migration(List.copyOf(roots.values()), moves, unknown);
+        }
+
+        boolean required() {
+            return !moves.isEmpty() || !unknown.isEmpty();
+        }
+
+        void stage(Path tree) throws IOException {
+            for (var entry : moves.entrySet()) {
+                var target = tree.resolve(entry.getValue()).normalize();
+                if (!target.startsWith(tree.normalize())) throw new IOException("migration path escapes staging: " + target);
+                Files.createDirectories(target.getParent());
+                Files.copy(entry.getKey(), target, StandardCopyOption.REPLACE_EXISTING);
+            }
+        }
+
+        void finish(Path vendor) throws IOException {
+            for (var entry : moves.entrySet()) {
+                var destination = vendor.resolve(entry.getValue()).toAbsolutePath().normalize();
+                if (entry.getKey().toAbsolutePath().normalize().equals(destination)) continue;
+                Files.deleteIfExists(entry.getKey());
+            }
+        }
+
+        private static java.util.Optional<Coordinate> coordinate(Path jar) {
+            try (var archive = new JarFile(jar.toFile(), false)) {
+                var entries = java.util.Collections.list(archive.entries()).stream()
+                        .filter(entry -> entry.getName().startsWith("META-INF/maven/"))
+                        .filter(entry -> entry.getName().endsWith("/pom.properties"))
+                        .sorted(java.util.Comparator.comparing(java.util.zip.ZipEntry::getName)).toList();
+                if (entries.isEmpty()) return java.util.Optional.empty();
+                var properties = new Properties();
+                try (var input = archive.getInputStream(entries.getFirst())) {
+                    properties.load(input);
+                }
+                var group = properties.getProperty("groupId", "");
+                var artifact = properties.getProperty("artifactId", "");
+                var version = properties.getProperty("version", "");
+                if (group.isEmpty() || artifact.isEmpty() || version.isEmpty()) return java.util.Optional.empty();
+                return java.util.Optional.of(Coordinate.of(group, artifact, version, ""));
+            } catch (IOException unreadable) {
+                return java.util.Optional.empty();
+            }
+        }
+    }
+
+    private static final String SOURCES_SUFFIX = "-sources.jar";
+    private static final String JAVADOC_SUFFIX = "-javadoc.jar";
 
     private record FileRecord(String path, String coordinate, String kind, String checksumAlgorithm,
             String checksum, String checksumStatus, String repository) {}
