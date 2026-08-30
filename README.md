@@ -58,6 +58,12 @@ It borrows:
 > `mise run build`, `mise run test`, `mise run self-test`,
 > `mise run natives`, `mise run tuul -- docs <symbol>`.
 
+In this checkout, `mise run bootstrap` is only the bootstrap compiler needed
+to start Tuul from source. `mise run build` and `mise run test` then dispatch
+through Tuul's own CLI entrypoint. Successful library, entrypoint and test
+compiles are fingerprinted under `build/.tuul`, so an unchanged build does not
+start `javac` again.
+
 The outbound HTTP library is [`fetch`](src/fetch/README.md). It provides
 sessions, persistent connections, caller-selected concurrency, and streaming
 request and response bodies.

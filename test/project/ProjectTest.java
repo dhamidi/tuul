@@ -35,6 +35,7 @@ public final class ProjectTest {
         reads(layout);
         compiles(layout, project);
         builds(layout);
+        caches(layout);
         launches(layout);
         refuses(layout, project);
         vendored(layout, project);
@@ -74,6 +75,18 @@ public final class ProjectTest {
 
         var tests = Build.compileTests(layout);
         Check.that("and its tests compile against it: " + tests.problems(), tests.ok());
+    }
+
+    private static void caches(Layout layout) throws IOException {
+        var classes = layout.classes().resolve("helloworld/Greeting.class");
+        var classesBefore = Files.getLastModifiedTime(classes);
+        Check.that("a current project does not invoke javac again", Build.compile(layout).ok());
+        Check.equal("the cached library output is left alone", classesBefore, Files.getLastModifiedTime(classes));
+
+        var tests = layout.tests().resolve("run.class");
+        var testsBefore = Files.getLastModifiedTime(tests);
+        Check.that("current tests do not invoke javac again", Build.compileTests(layout).ok());
+        Check.equal("the cached test output is left alone", testsBefore, Files.getLastModifiedTime(tests));
     }
 
     private static void launches(Layout layout) throws IOException, InterruptedException {

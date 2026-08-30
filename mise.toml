@@ -1,4 +1,5 @@
-# tuul builds tuul with mise, and nothing else.
+# A small mise bootstrap compiles Tuul once; build and test then run through
+# Tuul's own CLI entrypoint.
 #
 # Plain javac and plain java: tuul uses no preview APIs, so its class files run
 # on any JDK of this release or newer rather than on one exact build of one.
@@ -7,48 +8,47 @@
 java = "27.0.0"
 zig = "latest"
 
-[tasks.build]
-description = "Compile module tuul into build/classes and the CLI into build/cli"
+[tasks.bootstrap]
+description = "Compile the bootstrap CLI when Tuul's sources changed"
 run = '''
 set -eu
 release=$(javac --version | cut -d' ' -f2 | cut -d. -f1)
-rm -rf build/classes build/cli
-mkdir -p build/classes build/cli
-javac --release "$release" -nowarn -d build/classes $(find src -name '*.java' ! -path 'src/cli/main.java')
-javac --release "$release" -nowarn -cp build/classes -d build/cli src/cli/main.java
+stamp=build/bootstrap/.stamp
+if test -f "$stamp" && test "$(cat "$stamp")" = "$release" \
+        && ! find src -type f -newer "$stamp" -print -quit | grep -q .; then
+    exit 0
+fi
+rm -rf build/bootstrap
+mkdir -p build/bootstrap/classes build/bootstrap/cli
+javac --release "$release" -nowarn -d build/bootstrap/classes $(find src -name '*.java' ! -path 'src/cli/main.java')
+javac --release "$release" -nowarn -cp build/bootstrap/classes -d build/bootstrap/cli src/cli/main.java
 # javac -d writes class files and nothing else, so anything beside the code
 # that is not code has to be put on the classpath by hand.
-(cd src && find . -type f ! -name '*.java' -exec sh -c 'mkdir -p "../build/classes/$(dirname "$1")" && cp "$1" "../build/classes/$1"' _ {} \;)
-java --enable-native-access=ALL-UNNAMED -cp build/classes:build/cli main build --native
+(cd src && find . -type f ! -name '*.java' -exec cp --parents {} ../build/bootstrap/classes/ \;)
+printf '%s\n' "$release" > "$stamp"
 '''
 
+[tasks.build]
+description = "Compile module tuul and its entrypoints through Tuul"
+depends = ["bootstrap"]
+run = 'java --enable-native-access=ALL-UNNAMED -cp build/bootstrap/classes:build/bootstrap/cli main build'
+
 [tasks.test]
-description = "Compile and run everything under test/"
+description = "Compile and run everything under test through Tuul"
 depends = ["build"]
-run = '''
-set -eu
-release=$(javac --version | cut -d' ' -f2 | cut -d. -f1)
-mkdir -p build/test
-javac --release "$release" -nowarn -cp build/classes -d build/test $(find test -name '*.java')
-(cd test && find . -type f ! -name '*.java' -exec sh -c 'mkdir -p "../build/test/$(dirname "$1")" && cp "$1" "../build/test/$1"' _ {} \;)
-# The application's own specs, on the classpath under the name they are loaded
-# by, so editing one and re-running is all it takes.
-mkdir -p build/test/spec
-(cd spec && find . -type f -exec sh -c 'mkdir -p "../build/test/spec/$(dirname "$1")" && cp "$1" "../build/test/spec/$1"' _ {} \;)
-java --enable-native-access=ALL-UNNAMED -cp build/classes:build/cli:build/test run
-'''
+run = 'java --enable-native-access=ALL-UNNAMED -cp build/bootstrap/classes:build/bootstrap/cli main test'
 
 [tasks.spec]
 description = "Run the hyperspecs in spec/ against a live application"
 depends = ["test"]
-run = 'java --enable-native-access=ALL-UNNAMED -cp build/classes:build/cli:build/test spec'
+run = 'java --enable-native-access=ALL-UNNAMED -cp build/classes:build/entry/cli:build/test spec'
 
 [tasks.natives]
 description = "Cross-build the native modules for every platform tuul ships"
 depends = ["build"]
 run = '''
 set -eu
-echo '{"type":"project.natives"}' | java --enable-native-access=ALL-UNNAMED -cp build/classes:build/cli main message
+echo '{"type":"project.natives"}' | java --enable-native-access=ALL-UNNAMED -cp build/classes:build/entry/cli main message
 '''
 
 [tasks.self-test]
@@ -59,14 +59,14 @@ run = 'java -jar build/dist/tuul.jar self-test'
 [tasks.tuul]
 description = "Run the cli, e.g. mise run tuul -- docs json.Json"
 depends = ["build"]
-run = 'java --enable-native-access=ALL-UNNAMED -cp build/classes:build/cli main'
+run = 'java --enable-native-access=ALL-UNNAMED -cp build/classes:build/entry/cli main'
 
 [tasks.dist]
 description = "Assemble the distribution: build/dist/tuul.jar and its sources"
 depends = ["natives"]
 run = '''
 set -eu
-version=$(java --enable-native-access=ALL-UNNAMED -cp build/classes:build/cli main --version | cut -d' ' -f2)
+version=$(java --enable-native-access=ALL-UNNAMED -cp build/classes:build/entry/cli main --version | cut -d' ' -f2)
 mkdir -p build/dist
 # The jar carries the prebuilt libraries, because an installed tuul has no
 # source tree to take them from and `tuul install` has to hand them to a
@@ -75,7 +75,7 @@ mkdir -p build/dist
 # the manifest is what lets `java -jar` run without a flag.
 printf 'Main-Class: main\nEnable-Native-Access: ALL-UNNAMED\nImplementation-Title: tuul\nImplementation-Version: %s\n' "$version" > build/dist/manifest.txt
 jar --create --file build/dist/tuul.jar --manifest build/dist/manifest.txt \
-    -C build/classes . -C build/cli . -C build/dist native
+    -C build/classes . -C build/entry/cli . -C build/dist native
 # Beside it, because `tuul install` vendors sources so `tuul docs` can answer
 # about tuul's own libraries with their comments.
 jar --create --file "build/dist/tuul-$version-sources.jar" -C src .
@@ -87,7 +87,7 @@ description = "Install this tuul into ~/.local/bin, the way a release would"
 depends = ["dist"]
 run = '''
 set -eu
-version=$(java --enable-native-access=ALL-UNNAMED -cp build/classes:build/cli main --version | cut -d' ' -f2)
+version=$(java --enable-native-access=ALL-UNNAMED -cp build/classes:build/entry/cli main --version | cut -d' ' -f2)
 home="${TUUL_HOME:-$HOME/.local/share/tuul}"
 bin="${TUUL_BIN:-$HOME/.local/bin}"
 
