@@ -73,6 +73,12 @@ public final class AddTest {
             Check.equal("a cache hit does not make an artifact request", 6, artifactRequests.get());
             Check.that("cache output is still an event", cachedOutput.toString().contains(
                     "add.cached com.acme:one:1.0:sources"));
+
+            var ttyOutput = new StringWriter();
+            Add.into(new Layout(root), List.of("com.acme:one:1.0"),
+                    List.of(repository), ttyOutput, Add.Mode.TTY);
+            Check.that("TTY output renders live bars", ttyOutput.toString().contains("\033[")
+                    && ttyOutput.toString().contains("cached"));
         } finally {
             server.stop(0);
             delete(root);

@@ -170,12 +170,12 @@ order. There is no manifest entry or lockfile. The files in `vendor/` are the
 dependency list.
 
 When stdout is a terminal, `tuul add` replaces these lines with one ANSI
-progress bar per coordinate. When stdout is not a terminal, it keeps the
+progress bar per artifact. When stdout is not a terminal, it keeps the
 plain event lines so an agent can read them without terminal control codes.
 
 ```sh
 $ tuul add --repository https://repo.example.test/maven2/ com.example:library:1.2.3
-add.complete 1 downloaded, 0 cached, 0 failed
+add.complete 3 downloaded, 0 cached, 0 failed
 ```
 
 Use a separate project or directory for test-only dependencies. Everything

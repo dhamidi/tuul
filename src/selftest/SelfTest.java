@@ -37,6 +37,7 @@ public final class SelfTest {
         var project = root.resolve("demo");
 
         scaffolds(root, project, checks);
+        addsAndUsesDependency(project, checks);
         builds(project, checks);
         runs(project, checks);
         tests(project, checks);
@@ -56,6 +57,24 @@ public final class SelfTest {
         check(checks, "it writes an entrypoint", exists(project, "src/cli/main.java"), listing(project));
         check(checks, "it writes a test", exists(project, "test/run.java"), listing(project));
         check(checks, "it writes the vendor directory", Files.isDirectory(project.resolve("vendor")), listing(project));
+    }
+
+    private static void addsAndUsesDependency(Path project, List<Report.Check> checks)
+            throws IOException, InterruptedException {
+        Files.writeString(project.resolve("test/demo/DependencyTest.java"), DEPENDENCY_TEST);
+        Files.writeString(project.resolve("test/run.java"), DEPENDENCY_RUNNER);
+        var added = tuul(project, "add", MSGPACK_COORDINATE);
+        if (added.status() != 0 && repositoryUnavailable(added.output())) {
+            check(checks, "Maven dependency unavailable; dependency checks skipped", true, added.output());
+            return;
+        }
+        check(checks, "tuul add exits cleanly", added.status() == 0, added.output());
+        check(checks, "it vendors the dependency jar",
+                exists(project, "vendor/msgpack-core-0.9.12.jar"), listing(project.resolve("vendor")));
+        check(checks, "it vendors the dependency sources",
+                exists(project, "vendor/msgpack-core-0.9.12-sources.jar"), listing(project.resolve("vendor")));
+        check(checks, "it reports the dependency resolution",
+                added.output().contains("add.resolved " + MSGPACK_COORDINATE), added.output());
     }
 
     private static void builds(Path project, List<Report.Check> checks) throws IOException, InterruptedException {
@@ -86,6 +105,8 @@ public final class SelfTest {
     private static void tests(Path project, List<Report.Check> checks) throws IOException, InterruptedException {
         var tested = tuul(project, "test");
         check(checks, "tuul test runs the project's tests", tested.status() == 0, tested.output());
+        check(checks, "the generated project uses the added dependency",
+                tested.output().contains("dependency works"), tested.output());
         check(checks, "and shows what they said", tested.output().contains("all tests passed"), tested.output());
     }
 
@@ -298,6 +319,47 @@ import java.util.Map;
                 System.out.println("all tests passed");
             }
             """;
+
+    private static final String MSGPACK_COORDINATE = "org.msgpack:msgpack-core:0.9.12";
+
+    private static final String DEPENDENCY_TEST = """
+            package demo;
+
+            import org.msgpack.core.MessagePack;
+
+            public final class DependencyTest {
+
+                private DependencyTest() {}
+
+                public static void run() throws Exception {
+                    try (var packer = MessagePack.newDefaultBufferPacker()) {
+                        packer.packString("dependency");
+                        try (var unpacker = MessagePack.newDefaultUnpacker(packer.toByteArray())) {
+                            if (!"dependency".equals(unpacker.unpackString())) {
+                                throw new AssertionError("MessagePack returned the wrong value");
+                            }
+                        }
+                    }
+                    System.out.println("dependency works");
+                }
+            }
+            """;
+
+    private static final String DEPENDENCY_RUNNER = """
+            /// Every test, in one process. `tuul test` compiles this
+            /// directory and runs this file.
+
+            void main() throws Exception {
+                demo.GreetingTest.run();
+                greet.GreeterTest.run();
+                demo.DependencyTest.run();
+                System.out.println("all tests passed");
+            }
+            """;
+
+    private static boolean repositoryUnavailable(String output) {
+        return output.contains("HTTP 404 ") || output.contains("HTTP 500 ");
+    }
 
     private static void check(List<Report.Check> checks, String what, boolean ok, String detail) {
         checks.add(new Report.Check(what, ok, ok ? "" : detail.strip()));

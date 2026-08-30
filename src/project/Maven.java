@@ -1,7 +1,6 @@
 package project;
 
 import fetch.HttpException;
-import fetch.Response;
 import fetch.Session;
 import java.io.IOException;
 import java.io.StringReader;
@@ -20,7 +19,6 @@ import javax.xml.parsers.DocumentBuilderFactory;
 import javax.xml.parsers.ParserConfigurationException;
 import org.w3c.dom.Document;
 import org.w3c.dom.Element;
-import org.w3c.dom.Node;
 import org.xml.sax.InputSource;
 import org.xml.sax.SAXException;
 
@@ -129,7 +127,10 @@ final class Maven {
             for (var repository : repositories) {
                 var uri = coordinate.pomUri(repository);
                 try (var response = session.get(uri).timeout(Duration.ofMinutes(2)).send()) {
-                    if (response.status() == 404) continue;
+                    if (response.status() == 404) {
+                        last = new HttpException(404, uri, response.headers());
+                        continue;
+                    }
                     response.requireSuccess();
                     return parse(response.text(), uri);
                 } catch (HttpException failure) {

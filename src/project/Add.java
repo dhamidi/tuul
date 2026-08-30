@@ -31,10 +31,12 @@ import json.Json;
 /// Resolves and downloads Maven artifacts into a project's `vendor/`.
 ///
 /// One add is one ephemeral coordinator actor. Its first command creates one
-/// download effect per coordinate. The actor runtime carries out those effects
-/// concurrently; each effect publishes byte progress immediately and emits
-/// one ordinary actor message when its file is safely in place. The split is
-/// important: progress is live, while completion is ordered state.
+/// resolution effect per root; after all roots resolve, the actor creates one
+/// download effect per binary, source, and javadoc artifact. The actor runtime
+/// carries out those effects concurrently. Each download publishes byte
+/// progress immediately and emits one ordinary actor message when its file is
+/// safely in place. The split is important: progress is live, while completion
+/// is ordered state.
 public final class Add {
 
     /// Maven Central, used when the command does not name a repository.
@@ -50,8 +52,9 @@ public final class Add {
 
     /// The result of one add operation.
     ///
-    /// `downloaded` and `cached` contain coordinates in command order. `failed`
-    /// contains one reason for each coordinate that did not reach `vendor/`.
+    /// `downloaded` and `cached` contain installed artifact labels in
+    /// resolution order. `failed` contains one reason for each required
+    /// artifact that did not reach `vendor/`; missing supplements are optional.
     public record Result(List<String> downloaded, List<String> cached, List<Failure> failed) {
         public Result {
             downloaded = List.copyOf(downloaded);
@@ -666,7 +669,8 @@ public final class Add {
             latest.put(event.coordinate(), event);
             try {
                 if (mode == Mode.TTY) {
-                    if (event.type().equals("start") && !order.contains(event.coordinate())) {
+                    if (!event.type().startsWith("resolve") && !event.type().equals("complete")
+                            && !order.contains(event.coordinate())) {
                         order.add(event.coordinate());
                     }
                     if (!order.isEmpty()) render();
@@ -728,6 +732,9 @@ public final class Add {
         private static String bar(String coordinate, Event event) {
             if (event == null) return "[                    ] " + coordinate + " waiting";
             if (event.type().equals("failed")) return "[--------------------] " + coordinate + " failed: " + clean(event.reason());
+            if (event.type().equals("optional-missing")) {
+                return "[....................] " + coordinate + " missing (optional)";
+            }
             if (event.type().equals("cached")) return "[####################] " + coordinate + " cached";
             if (event.type().equals("done")) return "[####################] " + coordinate + " done";
             var total = event.total();
