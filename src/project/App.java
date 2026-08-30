@@ -28,6 +28,12 @@ public final class App {
     private App() {}
 
     public static Application<State> of(State initial, Writer out, Writer err) {
+        return of(initial, out, err, ProcessRunner.system());
+    }
+
+    /// Creates the project application with the runner that starts compilers
+    /// and Java entrypoints. Other project effects keep their system bindings.
+    public static Application<State> of(State initial, Writer out, Writer err, ProcessRunner processes) {
         return Application.of(initial)
                 .on("project.new", App::create)
                 .on("project.build", App::build)
@@ -49,15 +55,15 @@ public final class App {
                 .on("selftest.done", App::finished)
                 .on("error", App::failed)
                 .effect("project.scaffold", App::scaffold)
-                .effect("project.native", (effect, emit) -> buildNative(effect, emit, out))
+                .effect("project.native", (effect, emit) -> buildNative(effect, emit, out, processes))
                 .effect("project.compile", App::compile)
-                .effect("project.launch", (effect, emit) -> launch(effect, emit, out))
-                .effect("project.launch.tests", (effect, emit) -> launchTests(effect, emit, out))
+                .effect("project.launch", (effect, emit) -> launch(effect, emit, out, processes))
+                .effect("project.launch.tests", (effect, emit) -> launchTests(effect, emit, out, processes))
                 .effect("project.selftest", App::selfTest)
-                .effect("project.bind", App::generate)
+                .effect("project.bind", (effect, emit) -> generate(effect, emit, processes))
                 .effect("project.hyperspec", (effect, emit) -> specs(effect, emit, out))
                 .effect("project.install", (effect, emit) -> vendor(effect, emit, out))
-                .effect("project.natives", (effect, emit) -> distribute(effect, emit, out))
+                .effect("project.natives", (effect, emit) -> distribute(effect, emit, out, processes))
                 .effect("project.report", (effect, _) -> write(effect, out))
                 .effect("project.problem", (effect, _) -> write(effect, err));
     }
@@ -231,9 +237,9 @@ public final class App {
                 .with("library", library));
     }
 
-    private static void buildNative(Effect effect, Effect.Emitter emit, Writer out) throws Exception {
+    private static void buildNative(Effect effect, Effect.Emitter emit, Writer out, ProcessRunner processes) throws Exception {
         var layout = new Layout(Path.of(effect.string("directory", ".")));
-        var result = Native.build(layout, out);
+        var result = Native.build(layout, out, processes);
         if (!result.ok()) {
             emit.emit(Message.error(String.join("\n", result.problems())));
             return;
@@ -256,7 +262,7 @@ public final class App {
                 .with("tests", tests));
     }
 
-    private static void launch(Effect effect, Effect.Emitter emit, Writer out) throws Exception {
+    private static void launch(Effect effect, Effect.Emitter emit, Writer out, ProcessRunner processes) throws Exception {
         var layout = new Layout(Path.of(effect.string("directory", ".")));
         var entrypoint = layout.entrypoint(effect.string("entrypoint", ""));
         if (entrypoint.isEmpty()) throw new IOException("no entrypoint to run — add src/<name>/main.java");
@@ -264,13 +270,14 @@ public final class App {
         for (var argument : effect.list("arguments")) {
             if (argument instanceof Json.Str(var text)) arguments.add(text);
         }
-        start(Launch.java(List.of(), running(layout, layout.entry(entrypoint)), "main", arguments), layout, emit, out);
+        start(Launch.java(List.of(), running(layout, layout.entry(entrypoint)), "main", arguments),
+                layout, emit, out, processes);
     }
 
-    private static void launchTests(Effect effect, Effect.Emitter emit, Writer out) throws Exception {
+    private static void launchTests(Effect effect, Effect.Emitter emit, Writer out, ProcessRunner processes) throws Exception {
         var layout = new Layout(Path.of(effect.string("directory", ".")));
         var arguments = effect.flag("all") ? List.of("--mode", "all") : List.<String>of();
-        start(Launch.java(List.of(), running(layout, layout.tests()), "run", arguments), layout, emit, out);
+        start(Launch.java(List.of(), running(layout, layout.tests()), "run", arguments), layout, emit, out, processes);
     }
 
     /// What a project runs against: its own classes, then the code it was
@@ -284,8 +291,9 @@ public final class App {
         return classpath;
     }
 
-    private static void start(List<String> command, Layout layout, Effect.Emitter emit, Writer out) throws Exception {
-        var status = Launch.run(command, layout.root(), out);
+    private static void start(List<String> command, Layout layout, Effect.Emitter emit, Writer out,
+            ProcessRunner processes) throws Exception {
+        var status = Launch.run(command, layout.root(), out, java.util.Map.of(), processes);
         emit.emit(Message.of("project.exited").with("status", Json.of(status)));
     }
 
@@ -300,12 +308,13 @@ public final class App {
                 .with("platforms", Json.Array.strings(result.platforms())));
     }
 
-    private static void distribute(Effect effect, Effect.Emitter emit, Writer out) throws Exception {
+    private static void distribute(Effect effect, Effect.Emitter emit, Writer out, ProcessRunner processes)
+            throws Exception {
         var home = Home.find();
         var built = new ArrayList<String>();
         var current = new ArrayList<String>();
         for (var module : Files.list(home.natives()).filter(Files::isDirectory).sorted().toList()) {
-            var result = Natives.distribute(module, home.distribution(), out);
+            var result = Natives.distribute(module, home.distribution(), out, processes);
             if (!result.ok()) throw new IOException(String.join("\n", result.problems()));
             built.addAll(result.built());
             current.addAll(result.current());
@@ -315,9 +324,10 @@ public final class App {
                 .with("current", Json.Array.strings(current)));
     }
 
-    private static void generate(Effect effect, Effect.Emitter emit) throws Exception {
+    private static void generate(Effect effect, Effect.Emitter emit, ProcessRunner processes) throws Exception {
         var layout = new Layout(Path.of(effect.string("directory", ".")));
-        var result = Bind.generate(layout, effect.string("module", ""), effect.string("package", ""), effect.string("class", "Api"));
+        var result = Bind.generate(layout, effect.string("module", ""), effect.string("package", ""),
+                effect.string("class", "Api"), processes);
         emit.emit(Message.of("project.bound")
                 .with("header", result.header().toString())
                 .with("output", result.output().toString())

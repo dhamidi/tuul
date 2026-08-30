@@ -17,6 +17,7 @@ import java.nio.file.Path;
 import java.util.LinkedHashMap;
 import java.util.List;
 import java.util.Map;
+import java.util.concurrent.atomic.AtomicReference;
 import java.util.jar.JarEntry;
 import java.util.jar.JarFile;
 import java.util.jar.JarOutputStream;
@@ -26,6 +27,7 @@ public final class ProjectTest {
     private ProjectTest() {}
 
     public static void run() throws IOException, InterruptedException {
+        controlsProcesses();
         var root = Files.createTempDirectory("tuul-project");
         root.toFile().deleteOnExit();
         var project = root.resolve("hello-world");
@@ -40,6 +42,25 @@ public final class ProjectTest {
         refuses(layout, project);
         vendored(layout, project);
         carries(project);
+    }
+
+    private static void controlsProcesses() throws IOException, InterruptedException {
+        var seen = new AtomicReference<ProcessRunner.Command>();
+        ProcessRunner processes = (command, out) -> {
+            seen.set(command);
+            out.write("controlled\n");
+            return 7;
+        };
+        var output = new StringWriter();
+        var directory = Path.of("fixture");
+        var status = Launch.run(List.of("tool", "argument"), directory, output, Map.of("MODE", "test"), processes);
+        Check.equal("an injected process runner supplies the exit status", 7, status);
+        Check.equal("an injected process runner supplies output", "controlled\n", output.toString());
+        Check.equal("the runner receives arguments without a shell", List.of("tool", "argument"),
+                seen.get().arguments());
+        Check.equal("the runner receives the working directory", directory, seen.get().directory());
+        Check.equal("the runner receives environment changes", Map.of("MODE", "test"), seen.get().environment());
+        Check.equal("ordinary launch output includes standard error", ProcessRunner.Errors.MERGE, seen.get().errors());
     }
 
     /// Runs the native compiler and installation checks in one focused fixture.

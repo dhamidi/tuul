@@ -31,6 +31,12 @@ public final class Native {
     private Native() {}
 
     public static Result build(Layout layout, Writer out) throws IOException, InterruptedException {
+        return build(layout, out, ProcessRunner.system());
+    }
+
+    /// Builds native modules through `processes`. The runner receives each
+    /// compiler command and streams its merged output.
+    public static Result build(Layout layout, Writer out, ProcessRunner processes) throws IOException, InterruptedException {
         var modules = layout.natives();
         if (modules.isEmpty()) return new Result(List.of(), List.of(), List.of());
 
@@ -45,7 +51,7 @@ public final class Native {
             }
             out.write("compiling native module " + module.getKey() + "\n");
             out.flush();
-            var failure = compile(layout, module.getKey(), module.getValue(), library);
+            var failure = compile(layout, module.getKey(), module.getValue(), library, processes);
             if (failure.isEmpty()) built.add(module.getKey());
             else problems.add(failure);
         }
@@ -53,7 +59,7 @@ public final class Native {
     }
 
     /// The compiler's own words on failure, and nothing on success.
-    private static String compile(Layout layout, String module, List<Path> sources, Path library)
+    private static String compile(Layout layout, String module, List<Path> sources, Path library, ProcessRunner processes)
             throws IOException, InterruptedException {
         Files.createDirectories(library.getParent());
         var command = new ArrayList<>(List.of(compiler(), "cc", "-shared", "-fPIC", "-O2", "-o", library.toString()));
@@ -62,7 +68,7 @@ public final class Native {
         command.addAll(flags(sources.getFirst().getParent()));
 
         var output = new StringWriter();
-        var status = Launch.run(command, layout.root(), output);
+        var status = Launch.run(command, layout.root(), output, java.util.Map.of(), processes);
         if (status == 0) return "";
         Files.deleteIfExists(library);
         return module + ": " + (output.toString().isBlank() ? "compiler exited with " + status : output.toString().strip());

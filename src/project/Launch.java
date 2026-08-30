@@ -2,9 +2,7 @@ package project;
 
 import java.io.File;
 import java.io.IOException;
-import java.io.InputStreamReader;
 import java.io.Writer;
-import java.nio.charset.StandardCharsets;
 import java.nio.file.Path;
 import java.util.ArrayList;
 import java.util.List;
@@ -22,39 +20,35 @@ public final class Launch {
     /// Streams the process output into `out` as it arrives and returns its exit
     /// status.
     public static int run(List<String> command, Path directory, Writer out) throws IOException, InterruptedException {
-        return run(command, directory, out, Map.of());
+        return run(command, directory, out, Map.of(), ProcessRunner.system());
     }
 
     /// The same, with part of the environment replaced — for proving that
     /// something is not being used by taking it away.
     public static int run(List<String> command, Path directory, Writer out, Map<String, String> environment)
             throws IOException, InterruptedException {
-        var builder = new ProcessBuilder(command).directory(directory.toFile()).redirectErrorStream(true);
-        builder.environment().putAll(environment);
-        var process = builder.start();
-        try (var output = new InputStreamReader(process.getInputStream(), StandardCharsets.UTF_8)) {
-            var buffer = new char[4096];
-            for (var read = output.read(buffer); read >= 0; read = output.read(buffer)) {
-                out.write(buffer, 0, read);
-                out.flush();
-            }
-        }
-        return process.waitFor();
+        return run(command, directory, out, environment, ProcessRunner.system());
+    }
+
+    /// Runs through `processes`. The runner receives merged standard error and
+    /// the supplied environment changes.
+    public static int run(List<String> command, Path directory, Writer out, Map<String, String> environment,
+            ProcessRunner processes) throws IOException, InterruptedException {
+        return processes.run(ProcessRunner.Command.merged(command, directory, environment), out);
     }
 
     /// Runs a command and captures only what it writes to stdout — for the
     /// programs whose output is data rather than conversation. Anything they
     /// say on stderr goes to the console, where a complaint belongs.
     public static int capture(List<String> command, Path directory, Writer out) throws IOException, InterruptedException {
-        var process = new ProcessBuilder(command)
-                .directory(directory.toFile())
-                .redirectError(ProcessBuilder.Redirect.INHERIT)
-                .start();
-        try (var output = new InputStreamReader(process.getInputStream(), StandardCharsets.UTF_8)) {
-            var buffer = new char[8192];
-            for (var read = output.read(buffer); read >= 0; read = output.read(buffer)) out.write(buffer, 0, read);
-        }
-        return process.waitFor();
+        return capture(command, directory, out, ProcessRunner.system());
+    }
+
+    /// Captures standard output through `processes`. Standard error is
+    /// inherited and is not written to `out`.
+    public static int capture(List<String> command, Path directory, Writer out, ProcessRunner processes)
+            throws IOException, InterruptedException {
+        return processes.run(ProcessRunner.Command.inherited(command, directory), out);
     }
 
     /// A command line for the JVM tuul is running on. Native access is enabled

@@ -24,6 +24,13 @@ public final class Bind {
 
     public static Result generate(Layout layout, String module, String packageName, String type)
             throws IOException, InterruptedException {
+        return generate(layout, module, packageName, type, ProcessRunner.system());
+    }
+
+    /// Generates a binding through `processes`. The runner receives the C
+    /// preprocessor command and writes its standard output.
+    public static Result generate(Layout layout, String module, String packageName, String type,
+            ProcessRunner processes) throws IOException, InterruptedException {
         var directory = layout.nativeRoot().resolve(module);
         var header = header(directory, module);
         var output = layout.src().resolve(packageName).resolve(type + ".java");
@@ -34,7 +41,7 @@ public final class Bind {
         command.add(header.toString());
 
         var preprocessed = new StringWriter();
-        var status = Launch.capture(command, layout.root(), preprocessed);
+        var status = Launch.capture(command, layout.root(), preprocessed, processes);
         if (status != 0) throw new IOException("the preprocessor refused " + header + " (exit " + status + ")");
 
         var declarations = Header.read(preprocessed.toString(), header.getFileName().toString());

@@ -35,6 +35,13 @@ public final class Natives {
     /// Cross-builds `module` — a directory of C under `native/` — into
     /// `out/<platform>/<library>`, skipping the platforms already up to date.
     public static Result distribute(Path module, Path out, Writer log) throws IOException, InterruptedException {
+        return distribute(module, out, log, ProcessRunner.system());
+    }
+
+    /// Cross-builds through `processes`. The runner receives one compiler
+    /// command for each stale platform.
+    public static Result distribute(Path module, Path out, Writer log, ProcessRunner processes)
+            throws IOException, InterruptedException {
         var sources = sources(module);
         if (sources.isEmpty()) throw new IOException("no C to build in " + module);
         if (!Native.compiler().equals("zig")) {
@@ -53,7 +60,7 @@ public final class Natives {
             }
             log.write("cross-building " + name + " for " + platform.directory() + "\n");
             log.flush();
-            var failure = compile(module, sources, platform, library);
+            var failure = compile(module, sources, platform, library, processes);
             if (failure.isEmpty()) built.add(platform.directory());
             else problems.add(failure);
         }
@@ -72,7 +79,8 @@ public final class Natives {
         return true;
     }
 
-    private static String compile(Path module, List<Path> sources, Platform platform, Path library)
+    private static String compile(Path module, List<Path> sources, Platform platform, Path library,
+            ProcessRunner processes)
             throws IOException, InterruptedException {
         Files.createDirectories(library.getParent());
         var command = new ArrayList<>(List.of(
@@ -82,7 +90,7 @@ public final class Natives {
         command.addAll(Native.flags(module));
 
         var output = new StringWriter();
-        var status = Launch.run(command, module, output);
+        var status = Launch.run(command, module, output, java.util.Map.of(), processes);
         if (status == 0) {
             sweep(library);
             return "";
