@@ -22,14 +22,12 @@ import sqlite3.Statement;
 /// still matches means the facts still hold. One that does not means the facts
 /// are gone — not corrected, gone — because a half-updated index is worse than
 /// no index at all.
-final class Store implements AutoCloseable {
+final class Store implements IndexStore {
 
     /// Where a body of facts came from, and whether what we have of it is still
     /// good. `complete` says the origin was indexed all at once, so a name that
     /// is missing from it is a name that does not exist — which is what lets a
     /// lookup for something unknown avoid running javac.
-    record Origin(long id, boolean fresh, boolean complete) {}
-
     private final Database database;
 
     private Store(Database database) {
@@ -54,17 +52,18 @@ final class Store implements AutoCloseable {
     /// Finds or makes the origin for a stamp. An origin whose stamp has moved
     /// on forgets everything it held, in the same transaction that records the
     /// new stamp.
-    Origin origin(String kind, String location, String stamp) {
+    @Override
+    public Snapshot origin(String kind, String location, String stamp) {
         try (var rows = database.query(
                 "select id, stamp, complete from origin where kind = ? and location = ?", kind, location)) {
             if (!rows.next()) {
                 database.execute("insert into origin (kind, location, stamp) values (?, ?, ?)", kind, location, stamp);
-                return new Origin(database.lastId(), false, false);
+                return new Snapshot(database.lastId(), false, false);
             }
             var id = rows.integer(0);
-            if (rows.text(1).equals(stamp)) return new Origin(id, true, rows.integer(2) != 0);
+            if (rows.text(1).equals(stamp)) return new Snapshot(id, true, rows.integer(2) != 0);
             forget(id, stamp);
-            return new Origin(id, false, false);
+            return new Snapshot(id, false, false);
         }
     }
 
@@ -78,7 +77,8 @@ final class Store implements AutoCloseable {
     /// Everything known about one type, or nothing. The name it answers with is
     /// the one a reader would write, which is not always the one it is filed
     /// under.
-    Optional<TypeInfo> type(long origin, String name) {
+    @Override
+    public Optional<TypeInfo> type(long origin, String name) {
         try (var rows = database.query(
                 "select id, kind, modifiers, superclass, doc, source, line from type where origin = ? and name = ?",
                 origin, name)) {
@@ -113,14 +113,16 @@ final class Store implements AutoCloseable {
 
     /// Every type name an origin holds, which is only meaningful for one that
     /// was indexed all at once.
-    List<String> names(long origin) {
+    @Override
+    public List<String> names(long origin) {
         return strings("select name from type where origin = ? order by id", origin);
     }
 
     /// The names an origin holds of one kind, in alphabetical order — which is
     /// the order a listing is read in, where `names` answers in the order
     /// things were indexed.
-    List<String> names(long origin, TypeInfo.Kind kind) {
+    @Override
+    public List<String> names(long origin, TypeInfo.Kind kind) {
         return strings("select name from type where origin = ? and kind = ? order by name", origin, kind.name());
     }
 
@@ -160,7 +162,8 @@ final class Store implements AutoCloseable {
     /// The second of those is why `json` finds `json.Json` rather than five of
     /// its nested types: somebody typing a bare name means the thing with that
     /// name, and a package is not something they should have to remember.
-    List<Catalog.Match> search(String text, int limit) {
+    @Override
+    public List<Catalog.Match> search(String text, int limit) {
         var match = query(text);
         if (match.isBlank()) return List.of();
 
@@ -191,7 +194,8 @@ final class Store implements AutoCloseable {
     /// that is the only name a type has to itself. Written with dots,
     /// `a.b.C.D` could as easily be a class `D` in a package `a.b.C`, which is
     /// why looking one up tries both.
-    void write(long origin, Map<String, TypeInfo> types, boolean complete) {
+    @Override
+    public void write(long origin, Map<String, TypeInfo> types, boolean complete) {
         database.transaction(() -> {
             try (var sink = new Sink()) {
                 types.forEach((name, type) -> sink.put(origin, name, type));

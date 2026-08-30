@@ -2,6 +2,7 @@ package project;
 
 import ffi.Library;
 import application.Message;
+import compiler.Compiler;
 import ffi.Platform;
 import harness.Check;
 import java.io.IOException;
@@ -17,6 +18,7 @@ import java.nio.file.Path;
 import java.util.LinkedHashMap;
 import java.util.List;
 import java.util.Map;
+import java.util.concurrent.atomic.AtomicInteger;
 import java.util.concurrent.atomic.AtomicReference;
 import java.util.jar.JarEntry;
 import java.util.jar.JarFile;
@@ -35,12 +37,8 @@ public final class ProjectTest {
         scaffolds(project);
         var layout = new Layout(project);
         reads(layout);
-        compiles(layout, project);
-        builds(layout);
-        caches(layout);
-        launches(layout);
-        refuses(layout, project);
-        vendored(layout, project);
+        controlsCompilation(layout);
+        controlsNativeCompilation(layout);
         carries(project);
     }
 
@@ -63,7 +61,7 @@ public final class ProjectTest {
         Check.equal("ordinary launch output includes standard error", ProcessRunner.Errors.MERGE, seen.get().errors());
     }
 
-    /// Runs the native compiler and installation checks in one focused fixture.
+    /// Runs real compilers, child JVMs, FFI, and installation in one fixture.
     ///
     /// The fixture is temporary and contains the scaffolded project required by
     /// both operations. The fast project suite does not call either operation.
@@ -73,9 +71,59 @@ public final class ProjectTest {
         var project = root.resolve("hello-world");
         scaffolds(project);
         var layout = new Layout(project);
-        Build.compile(layout);
         compiles(layout, project);
+        builds(layout);
+        caches(layout);
+        launches(layout);
+        refuses(layout, project);
+        vendored(layout, project);
         installs(layout);
+    }
+
+    private static void controlsCompilation(Layout layout) throws IOException {
+        var calls = new AtomicInteger();
+        Compiler compiler = (request, classes) -> {
+            calls.incrementAndGet();
+            var files = request.sources().stream().map(path -> path.getFileName().toString()).toList();
+            var name = files.contains("main.java")
+                    ? "main"
+                    : files.contains("run.java") ? "run" : "helloworld.Greeting";
+            try (var out = classes.open(name)) {
+                out.write(0);
+            }
+            return new Compiler.Result(1, List.of());
+        };
+
+        var built = Build.compile(layout, compiler);
+        Check.that("an injected Java compiler builds the project", built.ok());
+        Check.that("the injected compiler writes library output",
+                Files.isRegularFile(layout.classes().resolve("helloworld/Greeting.class")));
+        Check.that("the injected compiler writes entrypoint output",
+                Files.isRegularFile(layout.entry("cli").resolve("main.class")));
+        Check.that("an injected Java compiler builds tests", Build.compileTests(layout, compiler).ok());
+        Check.that("the injected compiler writes test output",
+                Files.isRegularFile(layout.tests().resolve("run.class")));
+
+        Build.compile(layout, compiler);
+        Build.compileTests(layout, compiler);
+        Check.equal("current outputs do not call the injected compiler again", 3, calls.get());
+    }
+
+    private static void controlsNativeCompilation(Layout layout) throws IOException, InterruptedException {
+        var calls = new AtomicInteger();
+        ProcessRunner processes = (command, output) -> {
+            calls.incrementAndGet();
+            var at = command.arguments().indexOf("-o");
+            Files.writeString(Path.of(command.arguments().get(at + 1)), "fixture library");
+            return 0;
+        };
+        var built = Native.build(layout, new StringWriter(), processes);
+        Check.equal("an injected process runner builds a native module", List.of("hello"), built.built());
+        Check.that("the injected process runner supplies the native output",
+                Files.isRegularFile(layout.library("hello")));
+        var current = Native.build(layout, new StringWriter(), processes);
+        Check.equal("a current native module starts no process", List.of("hello"), current.current());
+        Check.equal("the native compiler process ran once", 1, calls.get());
     }
 
     private static void scaffolds(Path project) throws IOException {

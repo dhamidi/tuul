@@ -21,6 +21,7 @@ void main(String[] arguments) {
             new Named("peg.PegTest", peg.PegTest::run),
             new Named("argparse.ArgparseTest", argparse.ArgparseTest::run),
             new Named("symbols.SymbolsTest", symbols.SymbolsTest::run),
+            new Named("symbols.SymbolIntegrationTest", symbols.SymbolsTest::integration),
             new Named("docs.DocsTest", docs.DocsTest::run),
             new Named("symbols.StoreTest", symbols.StoreTest::run),
             new Named("ffi.PlatformTest", ffi.PlatformTest::run),
@@ -85,6 +86,8 @@ private static final Set<String> PURE = Set.of(
 
 private static final Set<String> INTEGRATION = Set.of(
         "actors.ActorsTest",
+        "symbols.SymbolIntegrationTest",
+        "symbols.StoreTest",
         "web.cable.CableTest",
         "web.hyperspec.HyperspecTest",
         "browser.BrowserTest",

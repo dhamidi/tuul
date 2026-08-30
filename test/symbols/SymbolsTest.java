@@ -19,6 +19,10 @@ public final class SymbolsTest {
     private SymbolsTest() {}
 
     public static void run() throws IOException {
+        controlledCompilation();
+    }
+
+    public static void integration() throws IOException {
         try (var index = Index.of(List.of(sources()), List.of(), kept())) {
             project(index);
             platform(index);
@@ -33,7 +37,6 @@ public final class SymbolsTest {
         vendored();
         remembers();
         entrypoints();
-        controlledCompilation();
     }
 
     /// A caller can control project compilation without replacing dependency
@@ -54,7 +57,7 @@ public final class SymbolsTest {
             }
             return new Compiler.Result(1, List.of());
         };
-        try (var index = Index.of(List.of(root), List.of(), kept(), compiler)) {
+        try (var index = Index.of(List.of(root), List.of(), compiler, new MemoryStore())) {
             Check.that("an injected compiler supplies project classes",
                     index.lookup("symbols.SymbolsTest.Fixture").isPresent());
             Check.that("the catalog compiles its project once", index.names().contains("symbols.SymbolsTest$Fixture"));
@@ -681,4 +684,51 @@ public final class SymbolsTest {
     }
 
     private static final class Fixture {}
+
+    private static final class MemoryStore implements IndexStore {
+
+        private final Map<String, TypeInfo> types = new LinkedHashMap<>();
+        private String stamp = "";
+        private boolean complete;
+
+        @Override
+        public Snapshot origin(String kind, String location, String current) {
+            var fresh = stamp.equals(current);
+            if (!fresh) {
+                stamp = current;
+                types.clear();
+                complete = false;
+            }
+            return new Snapshot(1, fresh, complete);
+        }
+
+        @Override
+        public java.util.Optional<TypeInfo> type(long origin, String name) {
+            return java.util.Optional.ofNullable(types.get(name));
+        }
+
+        @Override
+        public List<String> names(long origin) {
+            return List.copyOf(types.keySet());
+        }
+
+        @Override
+        public List<String> names(long origin, TypeInfo.Kind kind) {
+            return types.values().stream().filter(type -> type.kind() == kind).map(TypeInfo::name).sorted().toList();
+        }
+
+        @Override
+        public List<Catalog.Match> search(String text, int limit) {
+            return List.of();
+        }
+
+        @Override
+        public void write(long origin, Map<String, TypeInfo> written, boolean complete) {
+            types.putAll(written);
+            this.complete = this.complete || complete;
+        }
+
+        @Override
+        public void close() {}
+    }
 }

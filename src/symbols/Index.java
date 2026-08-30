@@ -60,7 +60,7 @@ public final class Index implements Catalog {
     /// because a private member is not indexed.
     private final List<Path> roots;
     private final Vendor vendor;
-    private final Optional<Store> store;
+    private final Optional<IndexStore> store;
     private final String stamp;
     private final Compiler compiler;
     private Map<String, byte[]> classes;
@@ -69,7 +69,7 @@ public final class Index implements Catalog {
     /// walking the JDK's modules for every page would be a walk per page.
     private List<Catalog.Root> groups;
 
-    private Index(List<Path> roots, Vendor vendor, Optional<Store> store, String stamp, Compiler compiler) {
+    private Index(List<Path> roots, Vendor vendor, Optional<IndexStore> store, String stamp, Compiler compiler) {
         this.roots = List.copyOf(roots);
         this.vendor = vendor;
         this.store = store;
@@ -96,7 +96,15 @@ public final class Index implements Catalog {
     public static Index of(List<Path> sourceRoots, List<Path> vendorRoots, Path index, Compiler compiler)
             throws IOException {
         var vendor = Vendor.of(vendorRoots);
-        return new Index(sourceRoots, vendor, Store.open(index), stamp(sourceRoots, vendor), compiler);
+        return new Index(sourceRoots, vendor, IndexStore.open(index), stamp(sourceRoots, vendor), compiler);
+    }
+
+    /// Opens an index with a caller-supplied compiler and store. Closing the
+    /// index closes the store.
+    public static Index of(List<Path> sourceRoots, List<Path> vendorRoots, Compiler compiler, IndexStore store)
+            throws IOException {
+        var vendor = Vendor.of(vendorRoots);
+        return new Index(sourceRoots, vendor, Optional.of(store), stamp(sourceRoots, vendor), compiler);
     }
 
     /// Looks up a symbol by name. `a.b.Outer.Inner` also matches the nested
@@ -455,7 +463,7 @@ public final class Index implements Catalog {
 
     @Override
     public void close() {
-        store.ifPresent(Store::close);
+        store.ifPresent(IndexStore::close);
     }
 
     private Optional<TypeInfo> project(String name) {
@@ -485,7 +493,7 @@ public final class Index implements Catalog {
     /// The dependencies and the JDK are indexed a type at a time: there is no
     /// point enumerating a jar nobody asked about. So a miss here means *not
     /// indexed yet* rather than *not there*, and falls through to the work.
-    private Optional<TypeInfo> remembered(String kind, String location, String stamp, String name, Origins origins) {
+    private Optional<TypeInfo> remembered(String kind, String location, String stamp, String name, SymbolOrigin origins) {
         var origin = origin(kind, location, stamp);
         if (origin.isPresent() && origin.get().fresh()) {
             var kept = kept(origin.get().id(), name);
@@ -497,17 +505,13 @@ public final class Index implements Catalog {
         return built.map(Found::type);
     }
 
-    private interface Origins {
-        Optional<Origin> at(String candidate);
-    }
-
     /// A type and the binary name it was found under, which is what it gets
     /// filed as.
     private record Found(String name, TypeInfo type) {}
 
-    private Optional<Found> built(String name, Origins origins) {
+    private Optional<Found> built(String name, SymbolOrigin origins) {
         for (var candidate : candidates(name)) {
-            var found = origins.at(candidate);
+            var found = origins.lookup(candidate);
             if (found.isEmpty()) continue;
             return found.map(origin ->
                     new Found(candidate, document(Classes.inspect(origin.classFile()), candidate, origin)));
@@ -530,7 +534,7 @@ public final class Index implements Catalog {
     /// The index is an optimisation, never a gate. An index that is busy —
     /// another tuul is writing it — or that cannot be read at all means the
     /// answer comes the slow way, not that there is no answer.
-    private Optional<Store.Origin> origin(String kind, String location, String stamp) {
+    private Optional<IndexStore.Snapshot> origin(String kind, String location, String stamp) {
         try {
             return store.map(kept -> kept.origin(kind, location, stamp));
         } catch (SqliteException unavailable) {
