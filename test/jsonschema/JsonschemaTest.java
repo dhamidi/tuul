@@ -5,12 +5,15 @@ import java.io.IOException;
 import java.io.StringWriter;
 import java.net.URI;
 import java.util.ArrayList;
+import java.util.HashMap;
 import java.util.List;
+import java.util.Map;
 import json.Json;
 
 public final class JsonschemaTest {
 
     private static final Store SHARED = Store.of();
+    private static final Map<String, Schema> SCHEMAS = new HashMap<>();
 
     private JsonschemaTest() {}
 
@@ -635,7 +638,8 @@ public final class JsonschemaTest {
     }
 
     private static Output result(String schema, String instance) {
-        return SHARED.compile(Json.parse(schema)).validate(Json.parse(instance));
+        var compiled = SCHEMAS.computeIfAbsent(schema, text -> SHARED.compile(Json.parse(text)));
+        return compiled.validate(Json.parse(instance));
     }
 
     /// True when the output holds an error produced by the keyword at

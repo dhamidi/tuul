@@ -28,11 +28,12 @@ final class Meta {
             "meta/meta-data.json",
             "meta/format-annotation.json",
             "meta/content.json");
+    private static final List<Json> SCHEMAS = FILES.stream().map(Meta::read).toList();
 
     private Meta() {}
 
     static void load(Store store) {
-        FILES.forEach(file -> store.add(read(file)));
+        SCHEMAS.forEach(store::add);
     }
 
     /// A missing resource is a [SchemaException] naming the file, because a null

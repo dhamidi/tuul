@@ -13,6 +13,9 @@ public final class FetchTest {
 
     public static void run() throws Exception {
         modelsHeadersAndForms();
+    }
+
+    public static void integration() throws Exception {
         sendsStreamsCookiesAndRedirects();
     }
 
