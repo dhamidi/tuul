@@ -199,13 +199,15 @@ public final class Jsonrpc2Test {
     }
 
     private static void transport() throws Exception {
-        var methods = server();
+        var notified = new CountDownLatch(1);
+        var methods = server(notified);
         peers(methods, (client, _) -> {
             Check.equal("a call travels over a transport and comes back",
                     Json.of(19), client.call("subtract", Json.Array.of(List.of(Json.of(42), Json.of(23)))));
             var before = updates.size();
             client.notify("update", Json.Array.of(List.of(Json.of(1))));
-            Check.that("a notification runs on the server", waited(() -> updates.size() == before + 1));
+            Check.that("a notification runs on the server", notified.await(5, TimeUnit.SECONDS));
+            Check.equal("the notification updates the server once", before + 1, updates.size());
             Check.throwing("a failure on the server becomes a rejection here",
                     () -> quietly(() -> client.call("boom")));
         });
@@ -340,6 +342,10 @@ public final class Jsonrpc2Test {
     /// specification uses in its own examples, plus the three ways a call can
     /// fail from inside a method.
     private static Server server() {
+        return server(null);
+    }
+
+    private static Server server(CountDownLatch notified) {
         updates.clear();
         return Server.of()
                 .method("subtract", params -> Json.of(minuend(params) - subtrahend(params)))
@@ -352,6 +358,7 @@ public final class Jsonrpc2Test {
                     synchronized (updates) {
                         updates.add(params);
                     }
+                    if (notified != null) notified.countDown();
                     return Json.NULL;
                 })
                 .method("picky", _ -> {
@@ -408,20 +415,6 @@ public final class Jsonrpc2Test {
 
     private static List<Json> members(String document) {
         return ((Json.Array) Json.parse(document)).items();
-    }
-
-    private static boolean waited(Probe probe) throws Exception {
-        var deadline = System.nanoTime() + TimeUnit.SECONDS.toNanos(5);
-        while (System.nanoTime() < deadline) {
-            if (probe.ready()) return true;
-            Thread.sleep(10);
-        }
-        return false;
-    }
-
-    @FunctionalInterface
-    private interface Probe {
-        boolean ready();
     }
 
     private static void quietly(Body body) {

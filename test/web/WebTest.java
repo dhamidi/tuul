@@ -17,6 +17,8 @@ import java.nio.file.Files;
 import java.util.List;
 import java.util.Map;
 import java.util.concurrent.CopyOnWriteArrayList;
+import java.util.concurrent.CountDownLatch;
+import java.util.concurrent.TimeUnit;
 import web.assets.Assets;
 import web.dispatch.Router;
 import web.serve.Http;
@@ -37,9 +39,13 @@ public final class WebTest {
         middleware();
         responses();
         pages();
+        streamingInMemory();
+    }
+
+    public static void integration() throws Exception {
         sockets();
         hangups();
-        streaming();
+        streamingOverHttp();
     }
 
     private static void headers() {
@@ -351,12 +357,17 @@ public final class WebTest {
     /// is too polite to reproduce it: it reads the whole body before it lets go.
     private static void hangups() throws Exception {
         var reported = new CopyOnWriteArrayList<Exception>();
+        var ended = new CountDownLatch(1);
         Handler large = (request, response) -> {
-            response.header("Content-Type", "text/plain; charset=utf-8");
-            var out = response.writer();
-            for (var written = 0; written < 4096; written++) {
-                out.write("a line long enough that the socket buffer fills before the client is done\n");
-                out.flush();
+            try {
+                response.header("Content-Type", "text/plain; charset=utf-8");
+                var out = response.writer();
+                for (var written = 0; written < 4096; written++) {
+                    out.write("a line long enough that the socket buffer fills before the client is done\n");
+                    out.flush();
+                }
+            } finally {
+                ended.countDown();
             }
         };
         try (var server = Http.start(large, 0, reported::add)) {
@@ -366,14 +377,18 @@ public final class WebTest {
                 Check.that("the server started answering", socket.getInputStream().read() >= 0);
                 socket.setSoLinger(true, 0);
             }
-            Thread.sleep(400);
+            Check.that("the server observes the closed client", ended.await(5, TimeUnit.SECONDS));
             Check.equal("a client that hangs up is not reported as a failure: " + reported, List.of(), reported);
         }
 
         var broken = new CopyOnWriteArrayList<Exception>();
+        var failed = new CountDownLatch(1);
         try (var server = Http.start((request, response) -> {
             throw new IllegalStateException("no");
-        }, 0, broken::add)) {
+        }, 0, failure -> {
+            broken.add(failure);
+            failed.countDown();
+        })) {
             try {
                 HttpClient.newHttpClient().send(
                         HttpRequest.newBuilder(URI.create("http://localhost:" + server.port() + "/boom")).build(),
@@ -381,6 +396,7 @@ public final class WebTest {
             } catch (IOException ignored) {
                 // the answer is not the point here; what reached the consumer is
             }
+            Check.that("the server reports the handler failure", failed.await(5, TimeUnit.SECONDS));
             Check.equal("while a handler that throws still is, or the filter has swallowed everything",
                     1, broken.size());
         }
@@ -388,17 +404,25 @@ public final class WebTest {
 
     /// A response that stays open. Without this the interface cannot carry
     /// `web.cable`, and every other property here is beside the point.
-    private static void streaming() throws Exception {
-        Handler ticking = (request, response) -> {
+    private static void streamingInMemory() throws Exception {
+        var release = new CountDownLatch(1);
+        var finished = new CountDownLatch(1);
+        Handler held = (request, response) -> {
             var out = Responses.events(response);
-            for (var tick = 1; tick <= 3; tick++) {
-                eventstream.EventStream.write(new eventstream.Event("tick", String.valueOf(tick), ""), out);
+            try {
+                for (var tick = 1; tick <= 2; tick++) {
+                    eventstream.EventStream.write(new eventstream.Event("tick", String.valueOf(tick), ""), out);
+                    response.flush();
+                }
+                release.await();
+                eventstream.EventStream.write(new eventstream.Event("tick", "3", ""), out);
                 response.flush();
-                Thread.sleep(10);
+            } finally {
+                finished.countDown();
             }
         };
 
-        try (var open = Memory.open(ticking, get("/events"))) {
+        try (var open = Memory.open(held, get("/events"))) {
             Check.equal("an event stream says what it is",
                     "text/event-stream; charset=utf-8", open.headers().first("Content-Type").orElse(""));
             Check.equal("and tells a proxy not to buffer it", "no", open.headers().first("X-Accel-Buffering").orElse(""));
@@ -407,15 +431,22 @@ public final class WebTest {
             Check.equal("two events arrive before the handler has finished", 2, events.size());
             Check.equal("and are the events that were written",
                     "1", ((eventstream.Event) events.getFirst()).data());
+            Check.equal("the handler is waiting while those events are read", 1L, finished.getCount());
+            release.countDown();
+            Check.that("the handler finishes after it is released", finished.await(5, TimeUnit.SECONDS));
+        } finally {
+            release.countDown();
         }
 
-        var recorded = Memory.handle(ticking, get("/events"));
+        var recorded = Memory.handle(ticking(), get("/events"));
         Check.equal("the headers go out before the first event, and every event after that",
                 4, recorded.pushes());
         Check.that("and each push carried something new rather than repeating the last",
                 recorded.flushes().equals(recorded.flushes().stream().sorted().distinct().toList()));
+    }
 
-        try (var server = Http.start(ticking, 0)) {
+    private static void streamingOverHttp() throws Exception {
+        try (var server = Http.start(ticking(), 0)) {
             var client = HttpClient.newHttpClient();
             var uri = URI.create("http://localhost:" + server.port() + "/events");
             try (var signals = client.send(HttpRequest.newBuilder(uri).build(),
@@ -423,5 +454,15 @@ public final class WebTest {
                 Check.equal("and the same stream arrives over a socket", 3L, signals.count());
             }
         }
+    }
+
+    private static Handler ticking() {
+        return (request, response) -> {
+            var out = Responses.events(response);
+            for (var tick = 1; tick <= 3; tick++) {
+                eventstream.EventStream.write(new eventstream.Event("tick", String.valueOf(tick), ""), out);
+                response.flush();
+            }
+        };
     }
 }

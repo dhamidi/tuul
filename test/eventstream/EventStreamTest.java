@@ -33,6 +33,9 @@ public final class EventStreamTest {
         roundTrip();
         lazily();
         closes();
+    }
+
+    public static void integration() throws IOException, InterruptedException {
         overHttp();
     }
 
