@@ -26,6 +26,7 @@ public final class DocsTest {
         members(root);
         recursive(root);
         asJson(root);
+        search(root);
         documents(root);
     }
 
@@ -81,6 +82,21 @@ public final class DocsTest {
         Check.equal("and carries one description per member",
                 2,
                 Json.parse(answer.out()) instanceof Json.Object described ? described.list("members").size() : 0);
+    }
+
+    private static void search(Path root) throws IOException {
+        var text = ask(root, Message.of("docs.query").with("search", "Greeter"));
+        Check.that("text search identifies a dependency origin when it is useful",
+                text.out().contains("greeting.Greeter  [example:greeting:1.0]"));
+
+        var json = ask(root, Message.of("docs.query").with("search", "Greeter").with("json", true));
+        var matches = Json.parse(json.out()) instanceof Json.Object response
+                ? response.list("matches") : List.<Json>of();
+        Check.that("search JSON carries the symbol, origin, and source location",
+                !matches.isEmpty() && matches.getFirst() instanceof Json.Object found
+                        && found.string("symbol", "").equals("greeting.Greeter")
+                        && found.string("origin", "").equals("example:greeting:1.0")
+                        && found.string("source", "").endsWith("greeting-1.0-sources.jar!/greeting/Greeter.java"));
     }
 
     private static void documents(Path root) throws IOException {
@@ -174,7 +190,9 @@ public final class DocsTest {
 
         @Override
         public List<Match> search(String text, int limit) {
-            return List.of();
+            return List.of(new Match("greeting.Greeter", "CLASS", "public", "Says hello to somebody.",
+                    "example:greeting:1.0", "vendor/example/greeting/1.0/greeting-1.0-sources.jar!"
+                            + "/greeting/Greeter.java"));
         }
     }
 }

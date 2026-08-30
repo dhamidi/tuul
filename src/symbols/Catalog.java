@@ -13,8 +13,13 @@ public interface Catalog extends AutoCloseable {
     /// One source of symbols and the names at its top level.
     record Root(String name, String label, List<String> contents) {}
 
-    /// One search result. `modifiers` is empty when the symbol has none.
-    record Match(String symbol, String kind, String modifiers, String doc) {}
+    /// One search result. `origin` names the project, dependency coordinate, or
+    /// platform. `source` locates the declaration when source is available.
+    record Match(String symbol, String kind, String modifiers, String doc, String origin, String source) {
+        public Match withOrigin(String value) {
+            return new Match(symbol, kind, modifiers, doc, value, source);
+        }
+    }
 
     /// One package-document page: the selected document, if it has one, and
     /// every sibling needed to render its navigation.

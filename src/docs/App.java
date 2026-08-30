@@ -134,7 +134,9 @@ public final class App {
                     .map(match -> (Json) Json.Object.of()
                             .with("symbol", match.symbol())
                             .with("kind", match.kind())
-                            .with("doc", match.doc()))
+                            .with("doc", match.doc())
+                            .with("origin", match.origin())
+                            .with("source", match.source()))
                     .toList();
             emit.emit(Message.of("docs.found").with("search", wanted).with("matches", Json.Array.of(found)));
         }

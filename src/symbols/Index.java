@@ -513,13 +513,19 @@ public final class Index implements Catalog {
         return List.copyOf(compile().keySet());
     }
 
-    /// The symbols whose name or documentation match, best first. Only what has
-    /// been indexed can be found, so the project is indexed first — the JDK and
-    /// the jars turn up as they are asked about.
+    /// The symbols whose name or documentation match, best first.
+    ///
+    /// Search makes the project, selected dependency, and lightweight JDK name
+    /// generations current. Exact dependency lookup remains lazy until this
+    /// method runs. Exact JDK lookup adds the full type and source details on
+    /// demand.
     public List<Catalog.Match> search(String text, int limit) {
         var kept = store.orElseThrow(() -> new IllegalStateException("there is no index to search"));
         indexProject();
-        return kept.search(text, limit);
+        indexVendor();
+        indexPlatform();
+        return kept.search(text, limit).stream().map(match -> match.origin().equals("vendor")
+                ? match.withOrigin(vendor.origin(match.source()).orElse("vendor")) : match).toList();
     }
 
     @Override
@@ -541,14 +547,84 @@ public final class Index implements Catalog {
     }
 
     private Optional<TypeInfo> vendored(String name) {
-        return remembered("vendor", "vendor", vendor.stamp() + vendor.sourceStamp(), name, this::vendoredOrigin);
+        var stamp = vendor.stamp() + vendor.testStamp() + vendor.sourceStamp();
+        var origin = snapshot("vendor", "vendor", stamp);
+        if (origin.isPresent() && origin.get().fresh()) {
+            var kept = kept(origin.get().id(), name);
+            if (kept.isPresent()) return kept;
+            if (origin.get().complete()) return Optional.empty();
+        }
+        var built = built(name, this::vendoredOrigin);
+        built.ifPresent(found -> remember("vendor", "vendor", stamp, Map.of(found.name(), found.type())));
+        return built.map(Found::type);
     }
 
-    /// The JDK is stamped with its own version. It is the one origin that never
-    /// changes without being replaced outright.
+    /// Publishes one complete searchable generation for selected dependencies.
+    private void indexVendor() {
+        if (store.isEmpty()) return;
+        var stamp = vendor.stamp() + vendor.testStamp() + vendor.sourceStamp();
+        var current = snapshot("vendor", "vendor", stamp);
+        if (current.isPresent() && current.get().fresh() && current.get().complete()) return;
+        var types = new LinkedHashMap<String, TypeInfo>();
+        for (var name : vendor.typeNames()) {
+            built(name, this::vendoredOrigin).ifPresent(found -> types.put(found.name(), found.type()));
+        }
+        for (var name : vendor.packages()) vendoredPackage(name).ifPresent(type -> types.put(name, type));
+        store.orElseThrow().publish("vendor", "vendor", stamp, types, List.of());
+    }
+
+    /// The JDK is stamped with its own version. A lightweight search row is
+    /// replaced with full class and source details when an exact lookup asks
+    /// for it.
     private Optional<TypeInfo> platform(String name) {
-        return remembered("platform", System.getProperty("java.home"), Runtime.version().toString(), name,
-                Index::platformOrigin);
+        var location = System.getProperty("java.home");
+        var stamp = Runtime.version().toString();
+        var origin = snapshot("platform", location, stamp);
+        if (origin.isPresent() && origin.get().fresh()) {
+            var kept = kept(origin.get().id(), name);
+            if (kept.isPresent() && !kept.get().source().startsWith("jrt-name:")) return kept;
+            if (kept.isEmpty() && origin.get().complete()) return Optional.empty();
+        }
+        var built = built(name, Index::platformOrigin);
+        built.ifPresent(found -> remember("platform", location, stamp, Map.of(found.name(), found.type())));
+        return built.map(Found::type);
+    }
+
+    /// Publishes exported public JDK names without indexing all JDK source.
+    /// This keeps first search bounded while exact lookup can still attach the
+    /// full API and source documentation.
+    private void indexPlatform() {
+        if (store.isEmpty()) return;
+        var location = System.getProperty("java.home");
+        var stamp = Runtime.version().toString();
+        var current = snapshot("platform", location, stamp);
+        if (current.isPresent() && current.get().fresh() && current.get().complete()) return;
+
+        var types = new LinkedHashMap<String, TypeInfo>();
+        try (var listed = Files.list(modules())) {
+            for (var module : listed.toList()) {
+                for (var packageName : exports(module)) {
+                    var directory = module.resolve(packageName.replace('.', '/'));
+                    if (!Files.isDirectory(directory)) continue;
+                    try (var entries = Files.list(directory)) {
+                        for (var classFile : entries.filter(path -> path.toString().endsWith(".class")).toList()) {
+                            var bytes = read(classFile);
+                            if (!Classes.visible(bytes)) continue;
+                            var inspected = Classes.inspect(bytes);
+                            types.put(inspected.name(), searchable(inspected, "jrt-name:" + classFile));
+                        }
+                    }
+                }
+            }
+        } catch (IOException unreadable) {
+            throw new UncheckedIOException("cannot index JDK names", unreadable);
+        }
+        store.orElseThrow().publish("platform", location, stamp, types, List.of());
+    }
+
+    private static TypeInfo searchable(TypeInfo type, String source) {
+        return new TypeInfo(type.name(), type.kind(), type.modifiers(), List.of(), "", List.of(), List.of(), List.of(),
+                List.of(), List.of(), "", List.of(), source, 0);
     }
 
     /// The dependencies and the JDK are indexed a type at a time: there is no
@@ -814,8 +890,8 @@ public final class Index implements Catalog {
                     .findFirst()
                     .map(path -> {
                         var module = path.getName(1).toString();
-                        return new Origin(read(path), jdk(module, name),
-                                Archives.jdkSources().isPresent() ? jdkLocation(module, sourceFile(name)) : "");
+                        return new Origin(read(path), jdk(module, name), Archives.jdkSources().isPresent()
+                                ? jdkLocation(module, sourceFile(name)) : "jrt:" + path);
                     });
         } catch (IOException e) {
             return Optional.empty();

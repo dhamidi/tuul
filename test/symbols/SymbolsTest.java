@@ -61,6 +61,7 @@ public final class SymbolsTest {
             rendering(index);
         }
         vendored();
+        dependencySearch();
         remembers();
         documentCollisions();
         documentStamp();
@@ -415,6 +416,50 @@ public final class SymbolsTest {
         Check.that("the project still wins over a dependency of the same name",
                 index.lookup("using.Uses").orElseThrow().name().equals("using.Uses"));
         index.close();
+    }
+
+    /// A search starts from a cold persistent index. It must not depend on an
+    /// earlier exact lookup to discover a selected dependency.
+    private static void dependencySearch() throws IOException {
+        var project = Files.createTempDirectory("tuul-vendor-search");
+        project.toFile().deleteOnExit();
+        var vendor = vendor(project);
+        var indexFile = project.resolve("build/index.db");
+
+        try (var index = Index.of(List.of(), List.of(vendor), indexFile)) {
+            Check.that("exact dependency lookup works before search",
+                    index.lookup("plain.Widget").isPresent());
+            var result = index.search("Greeter", 10).stream()
+                    .filter(match -> match.symbol().equals("greeting.Greeter"))
+                    .findFirst().orElseThrow();
+            Check.equal("a cold search finds a dependency type", TypeInfo.Kind.CLASS.name(), result.kind());
+            Check.equal("a dependency result names its owning artifact",
+                    "unmanaged:greeting-1.0.jar", result.origin());
+            Check.that("a dependency result locates its source archive",
+                    result.source().contains("greeting-1.0-sources.jar"));
+            Check.that("exact dependency lookup works after search",
+                    index.lookup("greeting.Greeter").orElseThrow().doc().startsWith("Greets people by name."));
+        }
+
+        var changed = """
+                package greeting;
+
+                /** Greets people after its source archive changes. */
+                public class Greeter {
+                    public static final String PREFIX = "Hello, ";
+                    public enum Style { PLAIN, LOUD }
+                    public String greet(String name) { return PREFIX + name; }
+                }
+                """;
+        jar(vendor.resolve("greeting/greeting-1.0-sources.jar"),
+                Map.of("greeting/Greeter.java", changed.getBytes()));
+        try (var index = Index.of(List.of(), List.of(vendor), indexFile)) {
+            var result = index.search("Greeter", 10).stream()
+                    .filter(match -> match.symbol().equals("greeting.Greeter"))
+                    .findFirst().orElseThrow();
+            Check.that("a changed source archive refreshes dependency documentation",
+                    result.doc().startsWith("Greets people after its source archive changes."));
+        }
     }
 
     /// What the index is for: the second answer costs nothing, and a source

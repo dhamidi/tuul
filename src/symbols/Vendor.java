@@ -29,18 +29,20 @@ public final class Vendor {
     private final List<Path> binaries;
     private final Map<Path, Path> sources;
     private final List<Path> javadocs;
+    private final Map<Path, String> coordinates;
 
     private Vendor(List<Path> runtime, List<Path> test, List<Path> binaries,
-            Map<Path, Path> sources, List<Path> javadocs) {
+            Map<Path, Path> sources, List<Path> javadocs, Map<Path, String> coordinates) {
         this.runtime = List.copyOf(runtime);
         this.test = List.copyOf(test);
         this.binaries = binaries;
         this.sources = sources;
         this.javadocs = List.copyOf(javadocs);
+        this.coordinates = Map.copyOf(coordinates);
     }
 
     public static Vendor none() {
-        return new Vendor(List.of(), List.of(), List.of(), Map.of(), List.of());
+        return new Vendor(List.of(), List.of(), List.of(), Map.of(), List.of(), Map.of());
     }
 
     /// Reads each selected vendor view. A root without metadata uses the flat
@@ -51,16 +53,18 @@ public final class Vendor {
         var binaries = new ArrayList<Path>();
         var sources = new LinkedHashMap<Path, Path>();
         var javadocs = new ArrayList<Path>();
+        var coordinates = new LinkedHashMap<Path, String>();
         for (var root : roots) {
             var resolution = root.resolve(".tuul/resolution.json");
-            if (Files.isRegularFile(resolution)) managed(root, resolution, runtime, test, binaries, sources, javadocs);
-            else compatible(root, runtime, test, binaries, sources, javadocs);
+            if (Files.isRegularFile(resolution)) managed(root, resolution, runtime, test, binaries, sources, javadocs,
+                    coordinates);
+            else compatible(root, runtime, test, binaries, sources, javadocs, coordinates);
         }
-        return new Vendor(distinct(runtime), distinct(test), distinct(binaries), sources, distinct(javadocs));
+        return new Vendor(distinct(runtime), distinct(test), distinct(binaries), sources, distinct(javadocs), coordinates);
     }
 
     private static void compatible(Path root, List<Path> runtime, List<Path> test, List<Path> binaries,
-            Map<Path, Path> sources, List<Path> javadocs) throws IOException {
+            Map<Path, Path> sources, List<Path> javadocs, Map<Path, String> coordinates) throws IOException {
         var jars = new ArrayList<Path>();
         if (!Files.isDirectory(root)) return;
         try (var tree = Files.walk(root)) {
@@ -71,12 +75,14 @@ public final class Vendor {
         runtime.addAll(selected);
         test.addAll(selected);
         binaries.addAll(selected);
+        for (var binary : selected) coordinates.put(binary, "unmanaged:" + binary.getFileName());
         for (var binary : selected) attach(binary, jars).ifPresent(source -> sources.put(binary, source));
         javadocs.addAll(jars.stream().filter(jar -> jar.toString().endsWith(JAVADOC)).toList());
     }
 
     private static void managed(Path root, Path resolution, List<Path> runtime, List<Path> test,
-            List<Path> binaries, Map<Path, Path> sources, List<Path> javadocs) throws IOException {
+            List<Path> binaries, Map<Path, Path> sources, List<Path> javadocs,
+            Map<Path, String> coordinates) throws IOException {
         Json value;
         try (var reader = Files.newBufferedReader(resolution)) {
             value = Json.parse(reader);
@@ -96,7 +102,10 @@ public final class Vendor {
             var coordinate = file.string("coordinate", "");
             var kind = file.string("kind", "");
             switch (kind) {
-                case "binary" -> binaryByCoordinate.put(coordinate, path);
+                case "binary" -> {
+                    binaryByCoordinate.put(coordinate, path);
+                    coordinates.put(path, coordinate);
+                }
                 case "sources" -> sourceByCoordinate.put(coordinate.replaceFirst(":sources$", ""), path);
                 case "javadoc" -> javadocs.add(path);
                 default -> {}
@@ -149,6 +158,36 @@ public final class Vendor {
     /// Returns the javadoc archives for selected runtime and test binaries.
     public List<Path> javadocs() {
         return javadocs;
+    }
+
+    /// Returns every public dependency type in binary-name order.
+    public List<String> typeNames() {
+        var names = new TreeSet<String>();
+        for (var jar : binaries) {
+            var archive = Archives.of(jar);
+            if (archive.isEmpty()) continue;
+            try (var tree = Files.walk(archive.get().getPath("/"))) {
+                for (var path : tree.filter(Files::isRegularFile).toList()) {
+                    var entry = path.toString().replaceFirst("^/", "");
+                    if (!entry.endsWith(".class") || entry.startsWith("META-INF/versions/")
+                            || entry.endsWith("module-info.class") || !Classes.visible(read(path))) continue;
+                    names.add(entry.substring(0, entry.length() - ".class".length()).replace('/', '.'));
+                }
+            } catch (IOException unreadable) {
+                // This archive contributes no searchable names.
+            }
+        }
+        return List.copyOf(names);
+    }
+
+    /// Returns the coordinate that owns a source or binary archive location.
+    public Optional<String> origin(String location) {
+        for (var entry : coordinates.entrySet()) {
+            if (location.startsWith(entry.getKey().toString())) return Optional.of(entry.getValue());
+            var source = sources.get(entry.getKey());
+            if (source != null && location.startsWith(source.toString())) return Optional.of(entry.getValue());
+        }
+        return Optional.empty();
     }
 
     /// What the vendored jars looked like when they were last read: every jar's
@@ -213,7 +252,7 @@ public final class Vendor {
             if (found.isEmpty()) continue;
             var source = source(jar, sourceFile);
             return found.map(path -> new Origin(read(path), source.map(Found::text),
-                    source.map(Found::location).orElse("")));
+                    source.map(Found::location).orElse(jar + "!/" + classFile)));
         }
         return Optional.empty();
     }

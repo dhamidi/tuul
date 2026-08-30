@@ -205,25 +205,30 @@ final class Store implements IndexStore {
 
         var found = new ArrayList<Catalog.Match>();
         try (var rows = database.query("""
-                select symbol, kind, modifiers,
-                    case when search.document is null then doc else coalesce((
+                select search.symbol, search.kind, search.modifiers,
+                    case when search.document is null then search.doc else coalesce((
                         select case when instr(body, char(10)) = 0 then ''
                             else substr(body, instr(body, char(10)) + 1) end
                         from document where document.id = search.document
-                    ), '') end
+                    ), '') end,
+                    coalesce(origin.kind, ''), coalesce(type.source, document.source, '')
                 from search
+                left join type on type.id = search.owner
+                left join document on document.id = search.document
+                left join origin on origin.id = coalesce(type.origin, document.origin)
                 where search match ?
                 order by case
-                    when lower(replace(symbol, '$', '.')) = lower(?) then 0
-                    when member is null and lower(replace(symbol, '$', '.')) like '%.' || lower(?) then 1
-                    when member is null then 2
+                    when lower(replace(search.symbol, '$', '.')) = lower(?) then 0
+                    when search.member is null and lower(replace(search.symbol, '$', '.')) like '%.' || lower(?) then 1
+                    when search.member is null then 2
                     else 3
                 end, rank
                 limit ?
                 """, match, text.strip(), text.strip(), limit)) {
             while (rows.next()) {
                 found.add(new Catalog.Match(
-                        rows.text(0).replace('$', '.'), rows.text(1), rows.text(2), rows.text(3)));
+                        rows.text(0).replace('$', '.'), rows.text(1), rows.text(2), rows.text(3),
+                        rows.text(4), rows.text(5)));
             }
         }
         return List.copyOf(found);

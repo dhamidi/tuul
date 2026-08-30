@@ -225,7 +225,9 @@ public final class Docs {
     public static void matches(List<Json> matches, Writer out) throws IOException {
         for (var match : matches) {
             if (!(match instanceof Json.Object found)) continue;
-            out.write(found.string("symbol", "") + "\n");
+            var origin = found.string("origin", "");
+            out.write(found.string("symbol", "") + (origin.isEmpty() || origin.equals("project")
+                    ? "" : "  [" + origin + "]") + "\n");
             wrap(summary(found.string("doc", "")), "      ", out);
         }
     }
