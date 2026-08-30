@@ -9,19 +9,22 @@
 ///
 /// ## A first actor
 ///
-/// A [Definition] says what one type of actor is. It registers update functions
-/// and nothing else.
+/// A [Definition] says what one type of actor is. It declares imperative
+/// commands and queries with their update functions.
 ///
 /// ```
 /// record Counter(long total) {}
 ///
 /// final class Counting implements Definition<Counter> {
+///     static final MessageType ADD = MessageType.command("add");
+///     static final MessageType GET_TOTAL = MessageType.query("get-total");
+///
 ///     public String type() { return "counter"; }
 ///
-///     public Application<Counter> instantiate(Address self) {
-///         return Application.of(new Counter(0))
-///                 .on("add", (state, message) -> Step.of(new Counter(state.total() + 1)))
-///                 .on("total", (state, message) -> Step.of(state,
+///     public Behavior<Counter> instantiate(Address self) {
+///         return Behavior.of(new Counter(0))
+///                 .on(ADD, (state, message) -> Step.of(new Counter(state.total() + 1)))
+///                 .on(GET_TOTAL, (state, message) -> Step.of(state,
 ///                         ActorEffect.reply(
 ///                                 Message.of("total").with("value", Json.of(state.total())))));
 ///     }
@@ -39,19 +42,23 @@
 /// ```
 /// try (var system = ActorSystem.named("shop").rooted(Path.of("logs")).define(new Counting())) {
 ///     var counter = Address.of("counter", "42");
-///     system.tell(counter, Message.of("add"));
-///     var answer = system.ask(counter, Message.of("total"), Duration.ofSeconds(2)).get();
+///     system.tell(counter, Counting.ADD.message());
+///     var answer = system.ask(counter, Counting.GET_TOTAL.message(), Duration.ofSeconds(2)).get();
 /// }
 /// ```
 ///
 /// `actor.reply` carries no address. The system knows who is waiting on the
-/// message being handled, so a reply address never reaches an update function
-/// and never reaches a log.
+/// message being handled. A reply address never reaches an update function or
+/// a journal.
+///
+/// `add` is a command, so the actor writes it before handling it. `get-total`
+/// is a query, so the actor does not write it. A query handler can emit a reply,
+/// but [Behavior] prevents it from changing state.
 ///
 /// ## The law
 ///
 /// **Effects never run during replay.** Everything an effect learns comes back
-/// as a message, and every message entering a mailbox is logged, so the log
+/// as an imperative command. The actor journals that command, so the journal
 /// already holds what the outside world said. Replaying it rebuilds the state
 /// without sending yesterday's email a second time.
 ///
@@ -118,8 +125,8 @@
 /// ```
 /// var total = system.fleet("counter")
 ///         .over(IntStream.rangeClosed(1, 100).mapToObj(String::valueOf))
-///         .tell(address -> Message.of("add"))
-///         .ask(address -> Message.of("total"))
+///         .tell(address -> Counting.ADD.message())
+///         .ask(address -> Counting.GET_TOTAL.message())
 ///         .mapToDouble(reply -> reply.number("value"))
 ///         .sum();
 /// ```
@@ -154,8 +161,8 @@
 ///   - **A reply address is never logged, and losing it on replay is correct.**
 ///     The caller that was waiting died with the process, so there is nothing
 ///     left to answer. A conversation that must survive a restart puts the
-///     address in the payload on purpose and re-sends from `actors.resumed`.
-///   - **`actors.resumed` arrives after replay, before any live message.** It
+///     address in the payload on purpose and re-sends from `actors.resume`.
+///   - **`actors.resume` arrives after replay, before any live message.** It
 ///     is where a timer is re-armed or a cache is reloaded, because replay
 ///     rebuilt the state and ran nothing. It is a control message, so it is
 ///     never logged.
@@ -172,19 +179,21 @@
 ///     supervision tree.
 ///   - **A full mailbox does not block the sender.** [ActorSystem#tell(Address,
 ///     application.Message)] returns [DeliveryStatus#busy]. An actor sender also
-///     receives `error.communication` with cause `busy`.
+///     receives `handle-delivery-error` with cause `busy`.
 ///   - **Actor effects run in list order.** Two tells from one actor to one
 ///     destination enter that destination in the same order. External effect
 ///     handlers run concurrently and can emit in any order.
 ///   - **Self-messages are continuations.** They keep effect order. The actor
 ///     handles them before it reads the next inbound message.
-///   - **A query is logged too.** Every message that enters a mailbox is
-///     recorded, and a message that only reads the state is still a message. So
-///     asking a durable counter for its total adds an entry to its log. That
-///     follows from the law and it is not free: an actor that is read far more
-///     often than it is written grows a log full of questions. Either read it
-///     with [ActorSystem#inspect(Address)], which never enters the mailbox, or spawn
-///     the read side as its own undurable actor.
+///   - **Queries use the mailbox and not the journal.** They follow earlier
+///     accepted messages and can reply through ordinary effects. [Behavior]
+///     keeps their returned state from being committed.
+///   - **Schemas apply to payloads.** A schema does not see the message type,
+///     timestamp, reply address, or deadline. An invalid payload is refused
+///     before mailbox admission with [DeliveryStatus#invalid].
+///   - **Declarations are discoverable.**
+///     [ActorSystem#messageTypes(Address)] returns every command and query with
+///     its kind and optional schema. It does not summon the actor.
 ///
 /// ## One process owns one actor
 ///

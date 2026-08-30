@@ -2,9 +2,10 @@ package project;
 
 import actors.ActorSystem;
 import actors.Address;
+import actors.Behavior;
 import actors.Definition;
 import actors.DeliveryStatus;
-import application.Application;
+import actors.MessageType;
 import application.Effect;
 import application.Message;
 import application.Step;
@@ -30,8 +31,9 @@ import java.util.concurrent.atomic.AtomicBoolean;
 final class Progress implements Definition<Progress.State> {
 
     static final String TYPE = "add.progress";
-    static final String WAKE = "add.progress.wake";
+    static final MessageType WAKE = MessageType.command("wake-progress");
     static final String CLOSE = "add.progress.close";
+    static final MessageType CLOSE_MESSAGE = MessageType.command("close-progress");
     static final String RENDER = "add.progress.render";
 
     private final Writer out;
@@ -58,10 +60,10 @@ final class Progress implements Definition<Progress.State> {
     }
 
     @Override
-    public Application<State> instantiate(Address self) {
-        return Application.of(new State())
+    public Behavior<State> instantiate(Address self) {
+        return Behavior.of(new State())
                 .on(WAKE, Progress::wake)
-                .on(CLOSE, Progress::close);
+                .on(CLOSE_MESSAGE, Progress::close);
     }
 
     void attach(ActorSystem system, Address address) {
@@ -83,7 +85,7 @@ final class Progress implements Definition<Progress.State> {
             closeOutput(null, null);
             return;
         }
-        if (system.tell(address, Message.of(CLOSE)) != DeliveryStatus.accepted) {
+        if (system.tell(address, CLOSE_MESSAGE.message()) != DeliveryStatus.accepted) {
             closed.complete(null);
             return;
         }
@@ -93,7 +95,7 @@ final class Progress implements Definition<Progress.State> {
     private void signal() {
         if (system == null) return;
         if (!wakePending.compareAndSet(false, true)) return;
-        if (system.tell(address, Message.of(WAKE)) != DeliveryStatus.accepted) {
+        if (system.tell(address, WAKE.message()) != DeliveryStatus.accepted) {
             wakePending.set(false);
         }
     }

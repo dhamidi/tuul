@@ -8,6 +8,10 @@ public enum DeliveryStatus {
     accepted,
     busy,
     expired,
+    /// The actor does not declare this message type.
+    unsupported,
+    /// The message payload does not satisfy its declared JSON Schema.
+    invalid,
     unknown,
     quarantined,
     unreachable,

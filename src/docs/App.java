@@ -57,7 +57,7 @@ public final class App {
                 .on("docs.found", App::found)
                 .on("docs.roots", App::rooted)
                 .on("docs.missing", App::missing)
-                .on("error", App::failed)
+                .on(Message.HANDLE_ERROR, App::failed)
                 .effect("symbols.lookup", (effect, emit) -> waiting(err, inactivity,
                         () -> look(effect, emit, catalogs)))
                 .effect("symbols.search", (effect, emit) -> waiting(err, inactivity,

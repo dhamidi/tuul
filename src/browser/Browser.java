@@ -1,5 +1,6 @@
 package browser;
 
+import application.Message;
 import browser.Symbols.Found;
 import browser.Symbols.Symbol;
 import java.io.IOException;
@@ -187,7 +188,7 @@ public final class Browser implements AutoCloseable {
                 .on(Routes.HOME.name(), Symbols::searched)
                 .on(Routes.SEARCH.name(), Symbols::searched)
                 .on(Symbols.MATCHED, Symbols::matched)
-                .on("error", Symbols::unsearched)
+                .on(Message.HANDLE_ERROR, Symbols::unsearched)
                 .effect(Symbols.SEARCH, Symbols.searching(index, MATCHES))
                 .render((found, request, response) -> render(
                         Views.RESULTS.equals(frame(request))
@@ -213,7 +214,7 @@ public final class Browser implements AutoCloseable {
                 .on(Routes.SYMBOL.name(), Symbols::asked)
                 .on(Symbols.FOUND, Symbols::found)
                 .on(Symbols.MISSING, Symbols::missing)
-                .on("error", Symbols::failed)
+                .on(Message.HANDLE_ERROR, Symbols::failed)
                 .effect(Symbols.LOOK, Symbols.looking(index))
                 .render(this::symbol);
     }
@@ -224,7 +225,7 @@ public final class Browser implements AutoCloseable {
                 .on(Routes.DOCUMENT.name(), Documents::asked)
                 .on(Documents.FOUND, Documents::found)
                 .on(Documents.MISSING, Documents::missing)
-                .on("error", Documents::failed)
+                .on(Message.HANDLE_ERROR, Documents::failed)
                 .effect(Documents.LOOK, Documents.looking(index))
                 .render(this::document);
     }

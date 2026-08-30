@@ -9,26 +9,25 @@ import java.util.concurrent.ConcurrentHashMap;
 import java.util.concurrent.atomic.AtomicLong;
 import json.Json;
 
-/// One live actor: an [application.Application] with a name, a mailbox, and a
-/// log.
+/// One live actor: a [Behavior] with a name, a mailbox, and a log.
 ///
 /// ## How it works
 ///
 /// A virtual thread owns the actor. It replays the log, delivers
-/// `actors.resumed`, and then takes one message at a time from the mailbox
+/// `actors.resume`, and then takes one message at a time from the mailbox
 /// forever. Because that thread is the only one that touches the state, no
 /// update function ever needs a lock.
 ///
-/// Handling one message is three steps in a fixed order:
+/// Handling one message is four steps in a fixed order:
 ///
-/// 1. Append the command to the log, unless it is a control message.
+/// 1. Append a command to the log. Do not append a query or control message.
 /// 2. Advance the state with it. No effect runs here.
 /// 3. Run actor effects in list order. Run external effects concurrently.
 /// 4. Put emitted messages into the continuation queue in arrival order.
 ///
 /// Step 3 is what makes step 1 sufficient. An effect that reads a socket or a
-/// clock hands back what it learned as a message, that message enters the
-/// mailbox, and the log records it. Replay therefore never needs to run an
+/// clock hands back what it learned as an imperative command. That command
+/// enters the mailbox, and the log records it. Replay never needs to run an
 /// effect to know what the outside world said.
 ///
 /// ## The law
@@ -59,7 +58,7 @@ import json.Json;
 ///
 /// ```
 /// live:    seq 12  add    {"sku": …}       throws, state unchanged
-///          seq 13  error  {"reason": …}    the failure, logged like any message
+///          seq 13  handle-error  {"reason": …}    the failure, logged like any message
 ///
 /// replay:  seq 12  throws again, state unchanged   the same outcome as live
 ///          seq 13  replays                         the same outcome as live
@@ -90,24 +89,23 @@ final class Actor {
     static final String STOP = "actors.stop";
 
     /// The message delivered once, after replay and before any live message.
-    static final String RESUMED = "actors.resumed";
+    static final String RESUME = "actors.resume";
     static final String INSPECT = "actors.inspect";
 
-    /// Pairs a definition with the application it built, so that the state type
+    /// Pairs a definition with the behavior it built, so that the state type
     /// stays inside this object.
     ///
     /// [ActorSystem] holds actors of many types in one map and must not name their
-    /// state types. Capturing `S` here is what lets `inspect` call
-    /// `definition.inspect(application.state())` without a cast, and it is why
-    /// no `S` ever escapes to a caller.
+    /// state types. Capturing `S` here lets `inspect` call the definition with
+    /// the behavior state without a cast. No `S` escapes to a caller.
     private static final class Body<S> {
 
         private final Definition<S> definition;
-        private final Application<S> application;
+        private final Behavior<S> behavior;
 
         private Body(Definition<S> definition, Address self) {
             this.definition = definition;
-            this.application = definition.instantiate(self);
+            this.behavior = definition.instantiate(self);
         }
 
         static <S> Body<S> of(Definition<S> definition, Address self) {
@@ -115,19 +113,27 @@ final class Actor {
         }
 
         Step<S> advance(Message message) {
-            return application.advance(message);
+            return behavior.advance(message);
         }
 
         Json inspect() {
-            return definition.inspect(application.state());
+            return definition.inspect(behavior.state());
         }
 
         boolean settled() {
-            return definition.settled(application.state());
+            return definition.settled(behavior.state());
         }
 
         Application<S> application() {
-            return application;
+            return behavior.application();
+        }
+
+        MessageType messageType(String type) {
+            return behavior.messageType(type);
+        }
+
+        List<MessageType> messageTypes() {
+            return behavior.messageTypes();
         }
     }
 
@@ -165,6 +171,14 @@ final class Actor {
 
     Application<?> application() {
         return body.application();
+    }
+
+    MessageType messageType(String type) {
+        return body.messageType(type);
+    }
+
+    List<MessageType> messageTypes() {
+        return body.messageTypes();
     }
 
     /// The delivery being handled right now, which is how `actor.reply` finds
@@ -285,9 +299,9 @@ final class Actor {
             resume();
             while (true) {
                 var delivery = mailbox.take();
-                if (delivery.command().type().equals(STOP)) return;
-                if (delivery.command().type().equals(INSPECT)) {
-                    inspect(delivery.command());
+                if (delivery.message().type().equals(STOP)) return;
+                if (delivery.message().type().equals(INSPECT)) {
+                    inspect(delivery.message());
                     continue;
                 }
                 handle(delivery);
@@ -351,7 +365,7 @@ final class Actor {
         apply(Delivery.replayed(address, command), Log.seq(command));
     }
 
-    /// Delivers `actors.resumed` with effects enabled.
+    /// Delivers `actors.resume` with effects enabled.
     ///
     /// Replay rebuilt the state and ran nothing, so anything that lived outside
     /// the log is gone: a timer that had been scheduled, a request that was in
@@ -359,11 +373,13 @@ final class Actor {
     /// an actor gets to put them back. It is a control message, so it is not
     /// logged and it does not become part of the history.
     private void resume() {
-        handle(Delivery.of(address, Message.of(RESUMED)));
+        handle(Delivery.of(address, Message.of(RESUME)));
     }
 
     private void handle(Delivery delivery) {
-        var seq = delivery.control() ? 0 : log.append(delivery.command());
+        var messageType = body.messageType(delivery.message().type());
+        var query = messageType != null && messageType.kind() == MessageType.Kind.query;
+        var seq = delivery.control() || query ? 0 : log.append(delivery.message());
         apply(delivery, seq);
     }
 
@@ -392,16 +408,18 @@ final class Actor {
     private void apply(Delivery delivery, long seq) {
         current = delivery;
         try {
-            var step = body.advance(delivery.command());
+            var step = body.advance(delivery.message());
             var emitted = system.perform(this, step.effects());
-            for (var message : emitted) mailbox.self(new Delivery(message.at(clock()), address, address, null, null));
+            for (var message : emitted) {
+                system.deliver(new Delivery(message.at(clock()), address, address, null, null));
+            }
             if (seq > 0 && spawn.redelivers()) log.applied(seq);
             handled++;
             lastAt = clock();
             settled = asks();
             if (system.tracingMessages()) {
                 system.trace(address, Trace.Kind.handled, Json.Object.of()
-                        .with("type", delivery.command().type())
+                        .with("type", delivery.message().type())
                         .with("seq", seq));
             }
         } finally {

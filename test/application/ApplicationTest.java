@@ -85,7 +85,8 @@ public final class ApplicationTest {
                 })
                 .on("ask", (state, message) -> Step.of(state, Effect.of("broken")))
                 .on("astray", (state, message) -> Step.of(state, Effect.of("nobody.handles.this")))
-                .on("error", (state, message) -> Step.of(concat(state, "error:" + message.string("reason", ""))))
+                .on(Message.HANDLE_ERROR,
+                        (state, message) -> Step.of(concat(state, "error:" + message.string("reason", ""))))
                 .effect("broken", (effect, _) -> {
                     throw new IllegalStateException("effect failed");
                 });
@@ -98,10 +99,10 @@ public final class ApplicationTest {
                 List.of("error:no", "error:effect failed", "error:no handler for effect: nobody.handles.this"),
                 app.dispatch(Message.of("astray")));
 
-        var broken = Application.<Integer>of(0).on("error", (state, message) -> {
+        var broken = Application.<Integer>of(0).on(Message.HANDLE_ERROR, (state, message) -> {
             throw new IllegalStateException("still no");
         });
-        Check.equal("an error about an error does not loop", 0, broken.dispatch(Message.of("error")));
+        Check.equal("an error about an error does not loop", 0, broken.dispatch(Message.of(Message.HANDLE_ERROR)));
     }
 
     /// The effects of one step run together, and the step is over only when all

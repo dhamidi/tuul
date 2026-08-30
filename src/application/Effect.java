@@ -80,7 +80,7 @@ public record Effect(Json.Object body, Json.Object envelope) implements Envelope
     ///
     /// An effect that does not say what it sends is a mistake in the update
     /// that built it, not a message with no type, so this refuses instead of
-    /// inventing one. [Application] turns the throw into an `error` message, so
+    /// inventing one. [Application] turns the throw into `handle-error`, so
     /// it is loud and it does not take the loop down.
     public Message message() {
         var sending = envelope.string(SENDING, "");
@@ -125,7 +125,7 @@ public record Effect(Json.Object body, Json.Object envelope) implements Envelope
     }
 
     /// Carries out one kind of effect. A throw is caught by the application and
-    /// reported as an `error` message, so no handler can take the loop down.
+    /// reported as `handle-error`, so no handler can take the loop down.
     @FunctionalInterface
     public interface Handler {
         void run(Effect effect, Emitter emit) throws Exception;

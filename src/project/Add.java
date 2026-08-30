@@ -3,9 +3,10 @@ package project;
 import actors.ActorEffect;
 import actors.ActorSystem;
 import actors.Address;
+import actors.Behavior;
 import actors.Definition;
+import actors.MessageType;
 import actors.Spawn;
-import application.Application;
 import application.Effect;
 import application.Message;
 import application.Step;
@@ -201,12 +202,14 @@ public final class Add {
     private static final String COORDINATOR = "add";
     private static final String DOWNLOAD = "add.download";
     private static final String RESOLVE = "add.resolve";
-    private static final String RESOLVED = "add.resolved";
-    private static final String RESOLUTION_FAILED = "add.resolve-failed";
-    private static final String DOWNLOADED = "add.downloaded";
-    private static final String CACHED = "add.cached";
-    private static final String OPTIONAL_MISSING = "add.optional-missing";
-    private static final String FAILED = "add.failed";
+    private static final MessageType START = MessageType.command("start-add");
+    private static final MessageType RECORD_RESOLUTION = MessageType.command("record-resolution");
+    private static final MessageType RECORD_RESOLUTION_FAILURE = MessageType.command("record-resolution-failure");
+    private static final MessageType RECORD_DOWNLOAD = MessageType.command("record-download");
+    private static final MessageType RECORD_CACHE = MessageType.command("record-cache");
+    private static final MessageType RECORD_OPTIONAL_MISSING = MessageType.command("record-optional-missing");
+    private static final MessageType RECORD_FAILURE = MessageType.command("record-failure");
+    private static final MessageType GET_RESULT = MessageType.query("get-result");
     private static final String RESULT = "add.result";
     private static final Duration ASK_DEADLINE = Duration.ofDays(1);
     private static final Duration ACTOR_EFFECT_DEADLINE = Duration.ofDays(1);
@@ -332,8 +335,8 @@ public final class Add {
             system.effect(Progress.CLOSE, progress::closeOutput);
             system.effect(DOWNLOAD, (effect, emit) -> download(effect, emit, services, progress));
             progress.attach(system, progressAddress);
-            system.tell(root, Message.of("add.start"));
-            var answer = system.ask(root, Message.of(RESULT), ASK_DEADLINE).join();
+            system.tell(root, START.message());
+            var answer = system.ask(root, GET_RESULT.message(), ASK_DEADLINE).join();
             var result = result(answer);
             progress.publish(Event.complete(result.downloaded().size(), result.cached().size(), result.failed().size()));
             progress.close();
@@ -578,20 +581,20 @@ public final class Add {
         try {
             var result = services.download(artifact.coordinate().text(), artifact.kind(), progress::publish);
             switch (result.status()) {
-                case DOWNLOADED -> emit.emit(Message.of(DOWNLOADED).with("coordinate", artifact.label())
+                case DOWNLOADED -> emit.emit(RECORD_DOWNLOAD.message().with("coordinate", artifact.label())
                         .with("target", result.target()));
-                case CACHED -> emit.emit(Message.of(CACHED).with("coordinate", artifact.label())
+                case CACHED -> emit.emit(RECORD_CACHE.message().with("coordinate", artifact.label())
                         .with("target", result.target()));
-                case OPTIONAL_MISSING -> emit.emit(Message.of(OPTIONAL_MISSING).with("coordinate", artifact.label())
+                case OPTIONAL_MISSING -> emit.emit(RECORD_OPTIONAL_MISSING.message().with("coordinate", artifact.label())
                         .with("reason", result.reason()));
-                case FAILED -> emit.emit(Message.of(FAILED).with("coordinate", artifact.label())
+                case FAILED -> emit.emit(RECORD_FAILURE.message().with("coordinate", artifact.label())
                         .with("reason", result.reason()));
             }
         } catch (Exception failure) {
             if (Thread.currentThread().isInterrupted()) throw new RuntimeException(failure);
             var reason = failure.getMessage() == null ? failure.toString() : failure.getMessage();
             progress.publish(Event.failed(artifact.label(), reason));
-            emit.emit(Message.of(FAILED).with("coordinate", artifact.label()).with("reason", reason));
+            emit.emit(RECORD_FAILURE.message().with("coordinate", artifact.label()).with("reason", reason));
         }
     }
 
@@ -1163,16 +1166,16 @@ public final class Add {
         }
 
         @Override
-        public Application<Job> instantiate(Address self) {
-            return Application.of(Job.waiting(roots).resolvedAll(artifacts))
-                    .on("add.start", Coordinator::start)
-                    .on(RESOLVED, Coordinator::resolved)
-                    .on(RESOLUTION_FAILED, Coordinator::resolutionFailed)
-                    .on(DOWNLOADED, Coordinator::downloaded)
-                    .on(CACHED, Coordinator::cached)
-                    .on(OPTIONAL_MISSING, Coordinator::optionalMissing)
-                    .on(FAILED, Coordinator::failed)
-                    .on(RESULT, Coordinator::answer);
+        public Behavior<Job> instantiate(Address self) {
+            return Behavior.of(Job.waiting(roots).resolvedAll(artifacts))
+                    .on(START, Coordinator::start)
+                    .on(RECORD_RESOLUTION, Coordinator::resolved)
+                    .on(RECORD_RESOLUTION_FAILURE, Coordinator::resolutionFailed)
+                    .on(RECORD_DOWNLOAD, Coordinator::downloaded)
+                    .on(RECORD_CACHE, Coordinator::cached)
+                    .on(RECORD_OPTIONAL_MISSING, Coordinator::optionalMissing)
+                    .on(RECORD_FAILURE, Coordinator::failed)
+                    .on(GET_RESULT, Coordinator::answer);
         }
 
         private static Step<Job> start(Job state, Message message) {

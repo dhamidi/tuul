@@ -88,7 +88,7 @@ public final class UpdatesTest {
         Check.equal("a failure is reported in the index's own words",
                 "the index is a directory", failed.state().problem());
 
-        var silent = Symbols.failed(Symbol.nothing(), Message.of("error"));
+        var silent = Symbols.failed(Symbol.nothing(), Message.of(Message.HANDLE_ERROR));
         Check.equal("and has something to say even when nothing was said",
                 "something went wrong", silent.state().problem());
     }
@@ -126,7 +126,7 @@ public final class UpdatesTest {
         Check.equal("a search that could not run says so", "fts5 said no", unsearched.state().problem());
         Check.that("and offers nothing", unsearched.state().matches().isEmpty());
         Check.equal("a failure with no reason still has one", "the index could not be searched",
-                Symbols.unsearched(Found.nothing(), Message.of("error")).state().problem());
+                Symbols.unsearched(Found.nothing(), Message.of(Message.HANDLE_ERROR)).state().problem());
     }
 
     /// The two records, which are the state — everything above is a way of

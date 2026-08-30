@@ -4,7 +4,7 @@ import java.nio.file.Path;
 
 /// An actor could not be summoned because somebody else owns it.
 ///
-/// This is deliberately not an `error.communication` notice. An undeliverable
+/// This is deliberately not a `handle-delivery-error` notice. An undeliverable
 /// message is a runtime condition that a sender can compensate for, and two
 /// processes running one actor is a deployment fault that nobody downstream can
 /// do anything about. It travels as an exception so that it reaches whoever

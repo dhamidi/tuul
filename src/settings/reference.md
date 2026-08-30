@@ -380,7 +380,7 @@ state and therefore cannot be present in inspection.
 
 Inspection of an unloaded actor replays its log without effects. It does not
 run initializers. `ActorSystem.summon` is the startup operation that loads the
-actor and permits `actors.resumed` effects.
+actor and permits `actors.resume` effects.
 
 ## Message protocol
 
@@ -454,7 +454,7 @@ The protocol has no `settings.get` message.
 
 ## Initialization sequence
 
-On `actors.resumed`, the actor examines initializer declarations in full
+On `actors.resume`, the actor examines initializer declarations in full
 pointer order.
 
 For each declaration:
@@ -486,12 +486,12 @@ condition is derived entirely from recorded messages. A recorded initializer
 result therefore makes the same decision during replay.
 
 Replay suppresses effects. It applies recorded initializer result messages.
-After replay, `actors.resumed` can retry an eligible path whose source was
+After replay, `actors.resume` can retry an eligible path whose source was
 missing or failed.
 
 The settings definition uses ordinary `Spawn.durable()` behavior. It does not
 enable effect redelivery. A reinitialization request stays in replay-derived
-state until a valid result clears it. `actors.resumed` therefore emits its
+state until a valid result clears it. `actors.resume` therefore emits its
 effect again after the actor is summoned following a crash.
 
 ## Validation
@@ -603,7 +603,7 @@ Changing a contribution schema, secret declaration, or message interpretation
 can still change replay. The new definition must remain compatible with every
 retained value that the application must keep.
 
-`actors.resumed` is not recorded. Initializer effects are not recorded.
+`actors.resume` is not recorded. Initializer effects are not recorded.
 Successful initializer result messages are recorded.
 
 ## Required actor-runtime addition
@@ -616,7 +616,7 @@ public void summon(Address address)
 
 `summon` loads an actor without delivering or recording an application
 message. It is idempotent for a loaded actor. It replays a durable log, sends
-`actors.resumed` with effects enabled, and returns after the actor accepts the
+`actors.resume` with effects enabled, and returns after the actor accepts the
 summon request. It does not wait for all emitted effects to settle.
 
 The runtime already has this operation internally. The settings implementation

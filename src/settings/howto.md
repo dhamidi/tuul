@@ -331,5 +331,5 @@ system.history(Settings.address(), 0, 100)
 ```
 
 History contains accepted and rejected command attempts as delivered. It also
-contains successful initializer results. It does not contain `actors.resumed`
+contains successful initializer results. It does not contain `actors.resume`
 or initializer effects.

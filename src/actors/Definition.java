@@ -1,16 +1,15 @@
 package actors;
 
-import application.Application;
 import java.util.stream.Stream;
 import json.Json;
 
-/// A definition says what one type of actor is: how to build a fresh instance,
+/// A definition says what one type of actor is: how to build a fresh behavior,
 /// and how to show its state to a person.
 ///
 /// ## How an instance is built
 ///
 /// [ActorSystem] calls [#instantiate(Address)] every time it summons an actor of
-/// this type, and then replays that actor's log through the application it
+/// this type, and then replays that actor's log through the behavior it
 /// received. The state a caller sees is therefore always the fold of the
 /// recorded commands through the definition that is registered *now*, never a
 /// stored state from an earlier version of the code. Changing an update
@@ -19,7 +18,8 @@ import json.Json;
 ///
 /// ## What belongs here and what does not
 ///
-/// A definition registers update functions. It does not register effect
+/// A definition declares imperative commands and queries. It registers their
+/// update functions. It does not register effect
 /// handlers. Handlers are given to [ActorSystem#effect(String, Effect.Handler)] once,
 /// at startup, because a handler owns a connection, a file or a socket, and
 /// those must not be rebuilt every time an actor is summoned. The split also
@@ -40,10 +40,14 @@ public interface Definition<S> {
     /// address of an instance and it must not contain a slash or a colon.
     String type();
 
-    /// A fresh application for one instance, with its initial state and its
-    /// update functions. The address is passed so that an actor can address
-    /// its own children without being told who it is.
-    Application<S> instantiate(Address self);
+    /// A fresh behavior for one instance, with its initial state and its
+    /// imperative message declarations. The address is passed so that an actor
+    /// can address its own children without being told who it is.
+    ///
+    /// Declare state-changing input with [MessageType#command(String)]. Declare
+    /// read-only input with [MessageType#query(String)]. The runtime refuses a
+    /// message that this behavior does not declare.
+    Behavior<S> instantiate(Address self);
 
     /// This state as JSON, for an inspector or a person at a terminal.
     default Json inspect(S state) {

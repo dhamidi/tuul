@@ -68,7 +68,7 @@ public final class App {
                 .on("project.built", App::built)
                 .on("project.exited", App::exited)
                 .on("selftest.done", App::finished)
-                .on("error", App::failed)
+                .on(Message.HANDLE_ERROR, App::failed)
                 .effect("project.scaffold", App::scaffold)
                 .effect("project.native", (effect, emit) -> buildNative(effect, emit, out, processes))
                 .effect("project.compile", App::compile)

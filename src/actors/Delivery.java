@@ -7,8 +7,8 @@ import java.time.Instant;
 ///
 /// ## What is logged and what is not
 ///
-/// The `command` and the `at` timestamp are written to the log. The `from`,
-/// `replyTo` and `deadline` fields are not. That split is deliberate and it is
+/// A command and its `at` timestamp are written to the log. A query is not.
+/// The `from`, `replyTo` and `deadline` fields are never written. That split is
 /// the reason this type exists instead of a message with more fields.
 ///
 /// A reply address belongs to a caller that is waiting right now. Writing it to
@@ -54,20 +54,20 @@ import java.time.Instant;
 /// it would remove the only thing keeping a caller's address out of a permanent
 /// record of intent.
 ///
-/// @param command  the message the actor will handle, stamped with when it
+/// @param message  the message the actor will handle, stamped with when it
 ///                 arrived
 /// @param to       the actor it is addressed to
 /// @param from     the actor that sent it, or null when it came from outside
 /// @param replyTo  where an `actor.reply` should go, or null
 /// @param deadline when this message stops being worth handling, or null
-public record Delivery(Message command, Address to, Address from, Address replyTo, Instant deadline) {
+public record Delivery(Message message, Address to, Address from, Address replyTo, Instant deadline) {
 
     /// A delivery with no routing beyond its destination, stamped now.
-    public static Delivery of(Address to, Message command) {
-        return new Delivery(command.at(System.currentTimeMillis()), to, null, null, null);
+    public static Delivery of(Address to, Message message) {
+        return new Delivery(message.at(System.currentTimeMillis()), to, null, null, null);
     }
 
-    /// A delivery replayed out of a log. The command carries the recorded
+    /// A delivery replayed out of a log. The message carries the recorded
     /// timestamp already, and no routing at all, because none of the routing
     /// was recorded.
     public static Delivery replayed(Address to, Message command) {
@@ -76,30 +76,30 @@ public record Delivery(Message command, Address to, Address from, Address replyT
 
     /// When this message arrived, in epoch milliseconds.
     public long at() {
-        return command.at();
+        return message.at();
     }
 
     public Delivery from(Address from) {
-        return new Delivery(command, to, from, replyTo, deadline);
+        return new Delivery(message, to, from, replyTo, deadline);
     }
 
     public Delivery replyTo(Address replyTo) {
-        return new Delivery(command, to, from, replyTo, deadline);
+        return new Delivery(message, to, from, replyTo, deadline);
     }
 
     public Delivery deadline(Instant deadline) {
-        return new Delivery(command, to, from, replyTo, deadline);
+        return new Delivery(message, to, from, replyTo, deadline);
     }
 
     public Delivery to(Address to) {
-        return new Delivery(command, to, from, replyTo, deadline);
+        return new Delivery(message, to, from, replyTo, deadline);
     }
 
     /// Whether this message is a control message. Control messages live in the
     /// `actors.` namespace, they are never written to a log, and they are never
     /// replayed.
     public boolean control() {
-        return command.type().startsWith("actors.");
+        return message.type().startsWith("actors.");
     }
 
     /// Whether the deadline has already passed. A delivery in this state is

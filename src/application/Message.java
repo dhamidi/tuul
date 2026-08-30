@@ -2,13 +2,19 @@ package application;
 
 import json.Json;
 
-/// Something that happened. Applications react to messages and to nothing
-/// else.
+/// One instruction for an application. Applications react to messages and to
+/// nothing else.
 ///
 /// A message is its payload and its envelope, kept apart — see [Envelope] for
 /// why. `with` adds to the payload, so everything a sender says lands where a
 /// handler reads it and nowhere near the type.
 public record Message(Json.Object body, Json.Object envelope) implements Envelope {
+
+    /// The imperative type used to ask an application to handle a failure.
+    public static final String HANDLE_ERROR = "handle-error";
+
+    /// The imperative type used to ask an application to handle a timeout.
+    public static final String HANDLE_TIMEOUT = "handle-timeout";
 
     /// The envelope field that says when this message was delivered, in epoch
     /// milliseconds.
@@ -42,10 +48,10 @@ public record Message(Json.Object body, Json.Object envelope) implements Envelop
         return new Message(payload, document.without(BODY));
     }
 
-    /// Failures travel as ordinary messages; nothing about them is special
-    /// except that the application will not report an error about an error.
+    /// Asks an application to handle a failure. The application will not report
+    /// a failure about this message if its handler also fails.
     public static Message error(String reason) {
-        return of("error").with("reason", reason);
+        return of(HANDLE_ERROR).with("reason", reason);
     }
 
     public Message with(String name, Json value) {

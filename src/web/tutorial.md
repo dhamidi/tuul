@@ -163,7 +163,7 @@ var notesApplication = Application.of(new NoteState("", false, ""))
                 Effect.of("notes.read")))
         .on("notes.loaded", (state, message) -> Step.of(
                 new NoteState(message.body().string("title", ""), false, "")))
-        .on("error", (state, message) -> Step.of(
+        .on(Message.HANDLE_ERROR, (state, message) -> Step.of(
                 new NoteState(state.latestTitle(), false,
                         message.body().string("reason", "error"))))
         .effect("notes.read", (effect, emit) -> emit.emit(
@@ -215,7 +215,7 @@ var notesPage = Page.of(() -> new NoteState("", false, ""))
                         .with("title", NotesStore.latestTitle())))
         .on("notes.loaded", (state, message) -> application.Step.of(
                 new NoteState(message.body().string("title", ""), false, "")))
-        .on("error", (state, message) ->
+        .on(Message.HANDLE_ERROR, (state, message) ->
                 application.Step.of(new NoteState(state.latestTitle(), false,
                         message.body().string("reason", "error"))))
         .render((state, request, response) ->
@@ -286,21 +286,22 @@ for page state. A background summary job is different: it must keep its state
 after the POST request ends, process one message at a time, and recover its
 state after a restart.
 
-An actor is not a second application model. It is the same `Application` with
+An actor is not a second application model. It is a `Behavior` with
 three runtime services:
 
 - an `Address` names one instance;
 - a mailbox serializes messages for that address;
 - a command log lets the system rebuild state.
 
-A `Definition<S>` tells the actor system how to build a fresh application for
-one actor address. It registers updates, but it does not open resources or
-register external effect handlers.
+A `Definition<S>` tells the actor system how to build a fresh behavior for one
+actor address. It declares imperative message types and their updates. It does
+not open resources or register external effect handlers.
 
 ```java
 import actors.Address;
+import actors.Behavior;
 import actors.Definition;
-import application.Application;
+import actors.MessageType;
 import application.Effect;
 import application.Message;
 import application.Step;
@@ -309,21 +310,25 @@ import json.Json;
 record SummaryState(String status, String summary, String error) {}
 
 final class SummaryJobs implements Definition<SummaryState> {
+    static final MessageType RUN = MessageType.command("run");
+    static final MessageType RECORD_SUMMARY = MessageType.command("record-summary");
+    static final MessageType HANDLE_ERROR = MessageType.command(Message.HANDLE_ERROR);
+
     public String type() {
         return "note-summary";
     }
 
-    public Application<SummaryState> instantiate(Address self) {
-        return Application.of(new SummaryState("queued", "", ""))
-                .on("run", (state, message) -> Step.of(
+    public Behavior<SummaryState> instantiate(Address self) {
+        return Behavior.of(new SummaryState("queued", "", ""))
+                .on(RUN, (state, message) -> Step.of(
                         new SummaryState("running", "", ""),
                         Effect.of("summary.generate")
                                 .with("jobId", self.id())
                                 .with("noteId", message.body().string("noteId", ""))))
-                .on("summary.generated", (state, message) -> Step.of(
+                .on(RECORD_SUMMARY, (state, message) -> Step.of(
                         new SummaryState("done",
                                 message.body().string("summary", ""), "")))
-                .on("error", (state, message) -> Step.of(
+                .on(HANDLE_ERROR, (state, message) -> Step.of(
                         new SummaryState("failed", "",
                                 message.body().string("reason", "error"))));
     }
@@ -365,14 +370,14 @@ var actorSystem = ActorSystem.named("notes")
             var summary = Summaries.generateOnce( // app-owned, idempotent I/O
                     effect.string("jobId", ""),
                     effect.string("noteId", ""));
-            emit.emit(application.Message.of("summary.generated")
+            emit.emit(SummaryJobs.RECORD_SUMMARY.message()
                     .with("summary", summary));
         });
 ```
 
 The effect handler belongs to the system because it owns long-lived resources.
-It emits `summary.generated`, which enters the actor mailbox as another
-message. The log therefore records both the command and what the outside world
+It emits `record-summary`, which enters the actor mailbox as another command.
+The log therefore records both the command and what the outside world
 returned.
 
 Durable state and effect delivery are separate choices:

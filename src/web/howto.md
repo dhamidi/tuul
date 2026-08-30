@@ -183,24 +183,28 @@ using `Part.filename()` or `Part.suggested()` as the destination.
 8. Return before the actor finishes. `tell` reports admission with
    `DeliveryStatus`; it does not wait for processing.
 9. Expose status through `system.inspect(address)` or a route that polls it.
-10. Use `system.ask(address, message, deadline)` only when a bounded reply is
-    part of the request. An ask enters the mailbox and is logged.
+10. Declare a query and use `system.ask(address, query.message(), deadline)`
+    when a bounded reply is part of the request. A query enters the mailbox and
+    is not logged.
 11. Close the actor system during application shutdown.
 
 ```java
 record JobState(String status, String result) {}
 
 final class Jobs implements actors.Definition<JobState> {
+    static final actors.MessageType RUN = actors.MessageType.command("run");
+    static final actors.MessageType RECORD_RESULT = actors.MessageType.command("record-result");
+
     public String type() { return "note-job"; }
 
-    public application.Application<JobState> instantiate(actors.Address self) {
-        return application.Application.of(new JobState("queued", ""))
-                .on("run", (state, message) -> application.Step.of(
+    public actors.Behavior<JobState> instantiate(actors.Address self) {
+        return actors.Behavior.of(new JobState("queued", ""))
+                .on(RUN, (state, message) -> application.Step.of(
                         new JobState("running", ""),
                         application.Effect.of("job.work")
                                 .with("jobId", self.id())
                                 .with("input", message.body().string("input", ""))))
-                .on("finished", (state, message) -> application.Step.of(
+                .on(RECORD_RESULT, (state, message) -> application.Step.of(
                         new JobState("done", message.body().string("result", ""))));
     }
 
@@ -216,11 +220,10 @@ system.define(new Jobs(), actors.Spawn.durable().redelivers(true));
 system.effect("job.work", (effect, emit) -> {
     var result = JobWorker.performOnce( // application-owned idempotent effect
             effect.string("jobId", ""), effect.string("input", ""));
-    emit.emit(application.Message.of("finished").with("result", result));
+    emit.emit(Jobs.RECORD_RESULT.message().with("result", result));
 });
 var address = actors.Address.of("note-job", requestId); // app-owned id
-var status = system.tell(address,
-        application.Message.of("run").with("input", input));
+var status = system.tell(address, Jobs.RUN.message().with("input", input));
 Responses.empty(status == actors.DeliveryStatus.accepted ? 202 : 503, response);
 ```
 

@@ -252,7 +252,7 @@ public final class ActorSystem implements AutoCloseable {
         traces.publish(Trace.of(address, kind, detail));
     }
 
-    /// How many `error.communication` notices had nowhere to go. A notice that
+    /// How many `handle-delivery-error` notices had nowhere to go. A notice that
     /// cannot be delivered is dropped rather than answered, because two full
     /// mailboxes pointed at each other would otherwise answer each other
     /// forever.
@@ -277,19 +277,14 @@ public final class ActorSystem implements AutoCloseable {
 
     /// Sends a message and waits for one answer.
     ///
-    /// **To read an actor, use [#inspect(Address)] instead.** An ask enters the
-    /// mailbox, and every message that enters a mailbox is logged, so asking a
-    /// post for its text writes a command every time anybody reads it. The log
-    /// of a page that is read a thousand times a day then holds a thousand
-    /// questions a day and one answer. [#inspect(Address)] never enters the
-    /// mailbox and writes nothing.
+    /// Use a declared query to read through the mailbox without writing to the
+    /// journal. The query follows messages that the mailbox accepted earlier.
+    /// Its effects can reply, but [Behavior] prevents its handler from changing
+    /// state. A command sent with this method is still a command and is still
+    /// journaled.
     ///
-    /// The two doors look far apart because they are: writing is a message and
-    /// reading is not. [#inspect(Address)] answers with [json.Json] rather than
-    /// the state type, so a caller that wants a record back writes a
-    /// `from(Json)` for each of its states. That cost is deliberate and
-    /// [Definition#inspect(Object)] says why: the state type must not leave the
-    /// system.
+    /// Use [#inspect(Address)] for the definition's operational JSON view. An
+    /// inspection does not run a user handler or an effect.
     ///
     /// The reply address contains this system's name and a sequence number. A
     /// pending table maps that address to one future. A transport routes the
@@ -349,7 +344,7 @@ public final class ActorSystem implements AutoCloseable {
         var here = to.here();
         var waiting = asks.remove(here);
         if (waiting != null) {
-            waiting.complete(delivery.command());
+            waiting.complete(delivery.message());
             return DeliveryStatus.accepted;
         }
         if (!definitions.containsKey(here.type())) {
@@ -366,6 +361,15 @@ public final class ActorSystem implements AutoCloseable {
         } catch (IllegalStateException stopped) {
             if (closed) return DeliveryStatus.closed;
             throw stopped;
+        }
+        var messageType = target.messageType(delivery.message().type());
+        if (messageType == null) {
+            refuse(delivery, Undeliverable.Cause.unsupported);
+            return DeliveryStatus.unsupported;
+        }
+        if (!messageType.validate(delivery.message()).valid()) {
+            refuse(delivery, Undeliverable.Cause.invalid);
+            return DeliveryStatus.invalid;
         }
         if (delivery.from() != null && here.equals(delivery.from().here()) && target.ownsCurrentThread()) {
             target.self(delivery.to(here));
@@ -398,7 +402,7 @@ public final class ActorSystem implements AutoCloseable {
         }
         var replyTo = delivery.replyTo() == null ? null : delivery.replyTo().in(name);
         try {
-            transport.deliver(delivery.to(), delivery.command(), replyTo);
+            transport.deliver(delivery.to(), delivery.message(), replyTo);
             return DeliveryStatus.accepted;
         } catch (Exception e) {
             refuse(delivery, Undeliverable.Cause.unreachable);
@@ -423,8 +427,8 @@ public final class ActorSystem implements AutoCloseable {
     private void refuse(Delivery delivery, Undeliverable.Cause cause) {
         trace(delivery.to(), Trace.Kind.undeliverable, Json.Object.of()
                 .with("cause", cause.name())
-                .with("type", delivery.command().type()));
-        var notice = new Undeliverable(delivery.to(), cause, delivery.command()).notice();
+                .with("type", delivery.message().type()));
+        var notice = new Undeliverable(delivery.to(), cause, delivery.message()).notice();
         if (delivery.replyTo() != null) {
             if (delivery.replyTo().foreign(name)) {
                 deliver(Delivery.of(delivery.replyTo(), notice));
@@ -436,7 +440,7 @@ public final class ActorSystem implements AutoCloseable {
                 return;
             }
         }
-        if (delivery.from() == null || delivery.command().type().equals(Undeliverable.TYPE)) {
+        if (delivery.from() == null || delivery.message().type().equals(Undeliverable.TYPE)) {
             dropped.incrementAndGet();
             return;
         }
@@ -666,7 +670,7 @@ public final class ActorSystem implements AutoCloseable {
         for (var item : pending) {
             if (item.future().isDone()) continue;
             item.future().cancel(true);
-            step.emit(Message.of("error.timeout")
+            step.emit(Message.of(Message.HANDLE_TIMEOUT)
                     .with("reason", "the effect did not finish within " + actor.spawn().effects())
                     .with("while", item.effect().type()));
             trace(actor.address(), Trace.Kind.abandoned,
@@ -726,7 +730,7 @@ public final class ActorSystem implements AutoCloseable {
     ///
     /// A timer is an effect, so it does not survive replay. An actor that needs
     /// a deadline to survive keeps the deadline in its state, computed from
-    /// [Delivery#at()], and arms the timer again from `actors.resumed`. The
+    /// [Delivery#at()], and arms the timer again from `actors.resume`. The
     /// message a timer delivers should carry the deadline it was armed for, so
     /// that a duplicate firing after a restart is recognised and ignored.
     private void schedule(Address self, Effect effect) {
@@ -864,7 +868,7 @@ public final class ActorSystem implements AutoCloseable {
     /// This is replay with a stopping point, and it never touches the running
     /// actor. A shadow instance is built from the definition, advanced through
     /// the log up to that sequence number, read, and thrown away. It cannot
-    /// summon anything, so it never fires `actors.resumed` and never re-arms a
+    /// summon anything, so it never fires `actors.resume` and never re-arms a
     /// timer, and because no effect runs it cannot reach the outside world.
     ///
     /// A scrubber over an actor's history is this method in a loop.
@@ -887,7 +891,8 @@ public final class ActorSystem implements AutoCloseable {
     /// `GET /posts/<anything>` would otherwise write three files per name
     /// anybody typed, and nothing bounds how many names there are.
     private <S> Json shadow(Definition<S> definition, Address address, long seq) {
-        var application = definition.instantiate(address);
+        var behavior = definition.instantiate(address);
+        var application = behavior.application();
         if (!spawnFor(address).keepsLog() || !logs.exists(address)) return definition.inspect(application.state());
         try (var commands = logs.open(address).replay(0, seq)) {
             commands.forEach(application::advance);
@@ -903,6 +908,32 @@ public final class ActorSystem implements AutoCloseable {
         var here = address.here();
         if (!logs.exists(here)) return Stream.of();
         return logs.open(here).replay(from, limit);
+    }
+
+    /// The imperative command and query types that one actor accepts.
+    ///
+    /// A loaded actor returns the declarations of its live behavior. An
+    /// unloaded actor builds a fresh behavior from the registered definition.
+    /// This method does not summon the actor, open its log, send
+    /// `actors.resume`, or run an effect. The returned list is a snapshot in
+    /// declaration order.
+    ///
+    /// An unknown actor type throws. A foreign address also throws because a
+    /// transport carries deliveries and does not expose remote definitions.
+    public List<MessageType> messageTypes(Address address) {
+        if (address.foreign(name)) {
+            throw new IllegalArgumentException("cannot inspect message types in another actor system: " + address);
+        }
+        var here = address.here();
+        var actor = loaded.get(here);
+        if (actor != null && !actor.finished()) return actor.messageTypes();
+        var definition = definitions.get(here.type());
+        if (definition == null) throw new IllegalArgumentException("no definition for " + here.type());
+        return types(definition, here);
+    }
+
+    private static <S> List<MessageType> types(Definition<S> definition, Address address) {
+        return definition.instantiate(address).messageTypes();
     }
 
     /// The state of many actors, read without summoning any of them.

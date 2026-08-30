@@ -83,7 +83,7 @@ The function is a test source. A deployed application uses
 `System::getenv`.
 
 `summon` loads the actor without writing a command. The runtime replays its
-history and then sends `actors.resumed`. The settings actor emits one
+history and then sends `actors.resume`. The settings actor emits one
 `settings.resolve` effect for each eligible missing setting.
 
 The initializer reads the source and emits `settings.initialized`. The runtime

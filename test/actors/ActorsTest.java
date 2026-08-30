@@ -22,10 +22,27 @@ import json.Json;
 
 public final class ActorsTest {
 
+    private static final MessageType WRITE_NOTE = MessageType.command("write-note");
+    private static final MessageType MARK = MessageType.command("mark");
+    private static final MessageType ADD = MessageType.command("add");
+    private static final MessageType GET_TOTAL = MessageType.query("get-total");
+    private static final MessageType SHOUT = MessageType.command("shout");
+    private static final MessageType GO = MessageType.command("go");
+    private static final MessageType SAY_HELLO = MessageType.command("say-hello");
+    private static final MessageType WAIT = MessageType.command("wait");
+    private static final MessageType FAIL = MessageType.command("fail");
+    private static final MessageType DIE = MessageType.command("die");
+    private static final MessageType START = MessageType.command("start");
+    private static final MessageType FORWARD = MessageType.command("forward");
+    private static final MessageType HANDLE_ONE = MessageType.command("handle-one");
+    private static final MessageType HANDLE_TWO = MessageType.command("handle-two");
+    private static final MessageType DO_NOTHING = MessageType.command("do-nothing");
+
     private ActorsTest() {}
 
     public static void run() throws Exception {
         addresses();
+        protocols();
         stamping();
         replays();
         upgrades();
@@ -57,6 +74,78 @@ public final class ActorsTest {
     }
 
     // ---- reading does not write ------------------------------------------
+
+    private static void protocols() throws Exception {
+        Check.throwing("a legacy dotted message type is refused in favor of an imperative phrase",
+                () -> MessageType.command("counter.add"));
+        var add = MessageType.command("add", Json.parse("""
+                {
+                  "type": "object",
+                  "properties": {"by": {"type": "number", "minimum": 1}},
+                  "required": ["by"],
+                  "additionalProperties": false
+                }
+                """));
+        var getTotal = MessageType.query("get-total");
+        var compiled = jsonschema.Store.of().compile(Json.parse("{\"type\":\"object\"}"));
+        var findTotal = MessageType.query("find-total", compiled);
+        Check.equal("a caller can attach a schema compiled in its own store",
+                compiled, findTotal.schema().orElseThrow());
+        Definition<Counter> counter = new Definition<>() {
+            @Override
+            public String type() {
+                return "declared-counter";
+            }
+
+            @Override
+            public Behavior<Counter> instantiate(Address self) {
+                return Behavior.of(new Counter(0))
+                        .on(add, (state, message) ->
+                                Step.of(new Counter(state.total() + amount(message))))
+                        .on(getTotal, (state, message) -> Step.of(new Counter(999),
+                                ActorEffect.reply(Message.of("total")
+                                        .with("value", Json.of(state.total())))));
+            }
+
+            @Override
+            public Json inspect(Counter state) {
+                return Json.Object.of().with("total", state.total());
+            }
+        };
+
+        var root = root();
+        var address = counter.at("1");
+        try (var system = ActorSystem.named("test").rooted(root).define(counter)) {
+            var declared = system.messageTypes(address);
+            Check.equal("message discovery includes every user command and query in declaration order",
+                    List.of(add, getTotal), declared.stream()
+                            .filter(type -> type.equals(add) || type.equals(getTotal)).toList());
+            Check.equal("a command declaration says it journals", MessageType.Kind.command, add.kind());
+            Check.equal("a query declaration says it does not journal", MessageType.Kind.query, getTotal.kind());
+            Check.that("message discovery includes the attached JSON Schema", add.schema().isPresent());
+            Check.equal("message discovery does not summon or create a journal", 0L, system.known().count());
+
+            Check.equal("an undeclared message is a delivery error", DeliveryStatus.unsupported,
+                    system.tell(address, Message.of("change-total")));
+            Check.equal("a schema-invalid command is a delivery error", DeliveryStatus.invalid,
+                    system.tell(address, add.message()));
+            Check.equal("an invalid command never enters the journal", 0L,
+                    system.history(address, 0, 100).count());
+
+            Check.equal("a schema-valid command is accepted", DeliveryStatus.accepted,
+                    system.tell(address, add.message().with("by", 3.0)));
+            var first = system.ask(address, getTotal.message()).get();
+            var second = system.ask(address, getTotal.message()).get();
+            Check.equal("a query can reply through ordinary actor effects", 3.0, first.number("value", 0));
+            Check.equal("a query cannot commit the state its handler returns", 3.0, second.number("value", 0));
+            Check.equal("queries do not enter the journal", List.of("add"),
+                    system.history(address, 0, 100).map(Message::type).toList());
+
+            var invalid = system.ask(address, add.message(), Duration.ofSeconds(1)).get();
+            Check.equal("an invalid ask receives a delivery error", Undeliverable.Cause.invalid,
+                    Undeliverable.causeOf(invalid));
+        }
+    }
 
     /// Inspecting an actor that has never existed used to create its log.
     ///
@@ -143,9 +232,9 @@ public final class ActorsTest {
     /// out by a replay in a different process lifetime.
     private static void shadowing() throws Exception {
         var payload = Json.Object.of().with("type", "invoice").with("id", Json.of(7));
-        var message = Message.of("note.write", payload);
+        var message = WRITE_NOTE.message(payload);
         Check.equal("a payload keeps its own type", "invoice", message.string("type", ""));
-        Check.equal("and the envelope keeps the message's", "note.write", message.type());
+        Check.equal("and the envelope keeps the message's", "write-note", message.type());
 
         var root = root();
         var address = Address.of("shadowing", "1");
@@ -176,9 +265,9 @@ public final class ActorsTest {
         }
 
         @Override
-        public Application<Kept> instantiate(Address self) {
-            return Application.of(new Kept("", 0))
-                    .on("note.write", (state, message) ->
+        public Behavior<Kept> instantiate(Address self) {
+            return Behavior.of(new Kept("", 0))
+                    .on(WRITE_NOTE, (state, message) ->
                             Step.of(new Kept(message.string("type", ""), message.number("id", 0))));
         }
 
@@ -199,9 +288,9 @@ public final class ActorsTest {
         }
 
         @Override
-        public Application<Marked> instantiate(Address self) {
-            return Application.of(new Marked(0))
-                    .on("mark", (state, message) -> Step.of(new Marked(message.at())));
+        public Behavior<Marked> instantiate(Address self) {
+            return Behavior.of(new Marked(0))
+                    .on(MARK, (state, message) -> Step.of(new Marked(message.at())));
         }
 
         @Override
@@ -370,9 +459,9 @@ public final class ActorsTest {
         }
 
         @Override
-        public Application<Counter> instantiate(Address self) {
-            return Application.of(new Counter(0))
-                    .on("add", (state, message) -> Step.of(new Counter(state.total() + amount(message)),
+        public Behavior<Counter> instantiate(Address self) {
+            return Behavior.of(new Counter(0))
+                    .on(ADD, (state, message) -> Step.of(new Counter(state.total() + amount(message)),
                             Effect.of("record").with("by", Json.of(amount(message)))));
         }
 
@@ -601,9 +690,9 @@ public final class ActorsTest {
             }
 
             @Override
-            public Application<Counter> instantiate(Address self) {
-                return Application.of(new Counter(0))
-                        .on("add", (state, message) -> Step.of(new Counter(state.total() + 1)));
+            public Behavior<Counter> instantiate(Address self) {
+                return Behavior.of(new Counter(0))
+                        .on(ADD, (state, message) -> Step.of(new Counter(state.total() + 1)));
             }
 
             @Override
@@ -647,9 +736,9 @@ public final class ActorsTest {
         }
 
         @Override
-        public Application<Counter> instantiate(Address self) {
-            return Application.of(new Counter(0))
-                    .on("add", (state, message) -> Step.of(new Counter(state.total() + amount(message))));
+        public Behavior<Counter> instantiate(Address self) {
+            return Behavior.of(new Counter(0))
+                    .on(ADD, (state, message) -> Step.of(new Counter(state.total() + amount(message))));
         }
 
         @Override
@@ -751,8 +840,8 @@ public final class ActorsTest {
         try (var one = ActorSystem.named("test").rooted(root).define(definitionOf("free"), Spawn.ephemeral());
                 var two = ActorSystem.named("test").rooted(root).define(definitionOf("free"), Spawn.ephemeral())) {
             var free = Address.of("free", "1");
-            one.tell(free, Message.of("nothing"));
-            two.tell(free, Message.of("nothing"));
+            one.tell(free, DO_NOTHING.message());
+            two.tell(free, DO_NOTHING.message());
             settle();
             Check.that("an undurable actor is not claimed, because it shares no history", true);
         }
@@ -856,7 +945,7 @@ public final class ActorsTest {
 
             system.tell(address, smuggled);
             settle();
-            system.ask(address, Message.of("total"), Duration.ofSeconds(2)).get();
+            system.ask(address, GET_TOTAL.message(), Duration.ofSeconds(2)).get();
             settle();
 
             try (var history = system.history(address, 0, 100)) {
@@ -888,10 +977,10 @@ public final class ActorsTest {
         }
 
         @Override
-        public Application<Counter> instantiate(Address self) {
-            return Application.of(new Counter(0))
-                    .on("add", (state, message) -> Step.of(new Counter(state.total() + weight * amount(message))))
-                    .on("total", (state, message) -> Step.of(state,
+        public Behavior<Counter> instantiate(Address self) {
+            return Behavior.of(new Counter(0))
+                    .on(ADD, (state, message) -> Step.of(new Counter(state.total() + weight * amount(message))))
+                    .on(GET_TOTAL, (state, message) -> Step.of(state,
                             ActorEffect.reply(Message.of("total")
                                     .with("value", Json.of(state.total())))));
         }
@@ -997,9 +1086,9 @@ public final class ActorsTest {
             }
 
             @Override
-            public Application<Long> instantiate(Address self) {
-                return Application.of(0L)
-                        .on("shout", (state, message) -> Step.of(state + 1, Effect.of("record")));
+            public Behavior<Long> instantiate(Address self) {
+                return Behavior.of(0L)
+                        .on(SHOUT, (state, message) -> Step.of(state + 1, Effect.of("record")));
             }
 
             @Override
@@ -1046,7 +1135,7 @@ public final class ActorsTest {
         try (var system = ActorSystem.named("test").define(new Counting(1), Spawn.ephemeral())) {
             var address = Address.of("counter", "1");
             system.tell(address, Message.of("add").with("by", Json.of(2)));
-            var answer = system.ask(address, Message.of("total"), Duration.ofSeconds(2)).get();
+            var answer = system.ask(address, GET_TOTAL.message(), Duration.ofSeconds(2)).get();
             Check.equal("an ask comes back with the answer", 2.0, number(answer.get("value")));
         }
 
@@ -1054,7 +1143,7 @@ public final class ActorsTest {
         try (var system = ActorSystem.named("test").define(silent, Spawn.ephemeral())) {
             var failed = false;
             try {
-                system.ask(silent.at("1"), Message.of("nothing"), Duration.ofMillis(150)).get();
+                system.ask(silent.at("1"), DO_NOTHING.message(), Duration.ofMillis(150)).get();
             } catch (Exception expected) {
                 failed = true;
             }
@@ -1062,16 +1151,16 @@ public final class ActorsTest {
         }
 
         var closing = ActorSystem.named("closing").define(silent, Spawn.ephemeral());
-        var pending = closing.ask(silent.at("1"), Message.of("nothing"), Duration.ofMinutes(1));
+        var pending = closing.ask(silent.at("1"), DO_NOTHING.message(), Duration.ofMinutes(1));
         closing.close();
         Check.that("closing a system fails its pending asks", pending.isCompletedExceptionally());
         Check.that("a closed system refuses a new ask",
-                closing.ask(silent.at("1"), Message.of("nothing")).isCompletedExceptionally());
+                closing.ask(silent.at("1"), DO_NOTHING.message()).isCompletedExceptionally());
 
         try (var system = ActorSystem.named("test").define(silent, Spawn.ephemeral())) {
             var refused = false;
             try {
-                system.ask(silent.at("1"), Message.of("nothing"), Duration.ZERO);
+                system.ask(silent.at("1"), DO_NOTHING.message(), Duration.ZERO);
             } catch (IllegalArgumentException expected) {
                 refused = true;
             }
@@ -1079,7 +1168,7 @@ public final class ActorsTest {
         }
     }
 
-    // ---- error.communication ---------------------------------------------
+    // ---- handle-delivery-error -------------------------------------------
 
     private static void undeliverable() throws Exception {
         var notices = new CopyOnWriteArrayList<Message>();
@@ -1091,12 +1180,12 @@ public final class ActorsTest {
             }
 
             @Override
-            public Application<Long> instantiate(Address self) {
-                return Application.of(0L)
-                        .on("go", (state, message) -> Step.of(state,
+            public Behavior<Long> instantiate(Address self) {
+                return Behavior.of(0L)
+                        .on(GO, (state, message) -> Step.of(state,
                                 ActorEffect.tell(Address.parse(message.string("to", "")),
-                                        Message.of("hello"))))
-                        .on(Undeliverable.TYPE, (state, message) -> {
+                                        SAY_HELLO.message())))
+                        .on(Undeliverable.MESSAGE, (state, message) -> {
                             notices.add(message);
                             return Step.of(state);
                         });
@@ -1110,7 +1199,7 @@ public final class ActorsTest {
             Check.equal("and the cause says why", Undeliverable.Cause.unknown,
                     Undeliverable.causeOf(notices.getFirst()));
             Check.equal("the notice carries the message that did not arrive",
-                    "hello", Undeliverable.commandOf(notices.getFirst()).type());
+                    "say-hello", Undeliverable.messageOf(notices.getFirst()).type());
             Check.equal("and the address it was going to",
                     Address.of("nobody", "1"), Undeliverable.toOf(notices.getFirst()));
         }
@@ -1134,15 +1223,10 @@ public final class ActorsTest {
             }
 
             @Override
-            public Application<Long> instantiate(Address self) {
-                return Application.of(0L).on("wait", (state, message) -> {
-                    try {
-                        held.await(2, TimeUnit.SECONDS);
-                    } catch (InterruptedException e) {
-                        Thread.currentThread().interrupt();
-                    }
-                    return Step.of(state);
-                });
+            public Behavior<Long> instantiate(Address self) {
+                return Behavior.of(0L)
+                        .on(WAIT, (state, message) -> await(state, held))
+                        .on(SAY_HELLO, (state, message) -> await(state, held));
             }
         };
         try (var system = ActorSystem.named("test")
@@ -1157,6 +1241,15 @@ public final class ActorsTest {
             Check.that("a mailbox that stays full tells the sender it is busy",
                     notices.stream().anyMatch(n -> Undeliverable.causeOf(n) == Undeliverable.Cause.busy));
         }
+    }
+
+    private static Step<Long> await(Long state, CountDownLatch held) {
+        try {
+            held.await(2, TimeUnit.SECONDS);
+        } catch (InterruptedException e) {
+            Thread.currentThread().interrupt();
+        }
+        return Step.of(state);
     }
 
     // ---- failing open ----------------------------------------------------
@@ -1174,10 +1267,10 @@ public final class ActorsTest {
             }
 
             @Override
-            public Application<Long> instantiate(Address self) {
-                return Application.of(0L)
-                        .on("add", (state, message) -> Step.of(state + 1))
-                        .on("boom", (state, message) -> {
+            public Behavior<Long> instantiate(Address self) {
+                return Behavior.of(0L)
+                        .on(ADD, (state, message) -> Step.of(state + 1))
+                        .on(FAIL, (state, message) -> {
                             throw new IllegalStateException("no");
                         });
             }
@@ -1190,15 +1283,15 @@ public final class ActorsTest {
 
         try (var system = ActorSystem.named("test").rooted(root).define(brittle)) {
             system.tell(address, Message.of("add"));
-            system.tell(address, Message.of("boom"));
+            system.tell(address, FAIL.message());
             system.tell(address, Message.of("add"));
             settle();
             Check.equal("a throwing update leaves the state alone and the others still run",
                     2.0, number(system.inspect(address)));
             Check.that("the poison command is in the log",
-                    system.history(address, 0, 100).anyMatch(m -> m.type().equals("boom")));
+                    system.history(address, 0, 100).anyMatch(m -> m.type().equals("fail")));
             Check.that("and so is the error it produced",
-                    system.history(address, 0, 100).anyMatch(m -> m.type().equals("error")));
+                    system.history(address, 0, 100).anyMatch(m -> m.type().equals(Message.HANDLE_ERROR)));
         }
 
         try (var system = ActorSystem.named("test").rooted(root).define(brittle)) {
@@ -1220,11 +1313,11 @@ public final class ActorsTest {
             }
 
             @Override
-            public Application<Long> instantiate(Address self) {
+            public Behavior<Long> instantiate(Address self) {
                 lives.incrementAndGet();
-                return Application.of(0L)
-                        .on("add", (state, message) -> Step.of(state + 1))
-                        .on("die", (state, message) -> {
+                return Behavior.of(0L)
+                        .on(ADD, (state, message) -> Step.of(state + 1))
+                        .on(DIE, (state, message) -> {
                             throw new StackOverflowError("the thread is over");
                         });
             }
@@ -1283,8 +1376,8 @@ public final class ActorsTest {
             }
 
             @Override
-            public Application<Long> instantiate(Address self) {
-                return Application.of(0L).on("die", (state, message) -> {
+            public Behavior<Long> instantiate(Address self) {
+                return Behavior.of(0L).on(DIE, (state, message) -> {
                     throw new StackOverflowError("again");
                 });
             }
@@ -1317,10 +1410,10 @@ public final class ActorsTest {
             }
 
             @Override
-            public Application<Long> instantiate(Address self) {
-                return Application.of(0L)
-                        .on("add", (state, message) -> Step.of(state + 1))
-                        .on("actors.resumed", (state, message) -> {
+            public Behavior<Long> instantiate(Address self) {
+                return Behavior.of(0L)
+                        .on(ADD, (state, message) -> Step.of(state + 1))
+                        .resuming((state, message) -> {
                             resumed.incrementAndGet();
                             return Step.of(state);
                         });
@@ -1335,7 +1428,7 @@ public final class ActorsTest {
         try (var system = ActorSystem.named("test").rooted(root).define(waking)) {
             system.tell(address, Message.of("add"));
             settle();
-            Check.equal("actors.resumed arrives once when the actor loads", 1, resumed.get());
+            Check.equal("actors.resume arrives once when the actor loads", 1, resumed.get());
             Check.that("and it is not written to the log",
                     system.history(address, 0, 100).noneMatch(m -> m.type().startsWith("actors.")));
             system.evict(address);
@@ -1374,7 +1467,7 @@ public final class ActorsTest {
                     .over(ids)
                     .concurrency(32)
                     .tell(address -> Message.of("add").with("by", Json.of(2)))
-                    .ask(address -> Message.of("total"))
+                    .ask(address -> GET_TOTAL.message())
                     .toList();
 
             Check.equal("a fleet answers for every actor it named", 100, answers.size());
@@ -1400,7 +1493,7 @@ public final class ActorsTest {
             Check.equal("a message addressed to another system arrives there",
                     4.0, total(billing, Address.of("counter", "7")));
 
-            var answer = orders.ask(there, Message.of("total"), Duration.ofSeconds(2)).get();
+            var answer = orders.ask(there, GET_TOTAL.message(), Duration.ofSeconds(2)).get();
             Check.equal("and an ask across systems comes back", 4.0, number(answer.get("value")));
         }
     }
@@ -1416,18 +1509,18 @@ public final class ActorsTest {
             }
 
             @Override
-            public Application<Long> instantiate(Address self) {
-                return Application.of(0L)
-                        .on("start", (state, message) -> Step.of(state,
-                                Effect.send(Message.of("one")), tell(self, "two")))
-                        .on("forward", (state, message) -> Step.of(state,
-                                tell(self.sibling("receiver"), "one"),
-                                tell(self.sibling("receiver"), "two")))
-                        .on("one", (state, message) -> {
+            public Behavior<Long> instantiate(Address self) {
+                return Behavior.of(0L)
+                        .on(START, (state, message) -> Step.of(state,
+                                Effect.send(HANDLE_ONE.message()), tell(self, HANDLE_TWO)))
+                        .on(FORWARD, (state, message) -> Step.of(state,
+                                tell(self.sibling("receiver"), HANDLE_ONE),
+                                tell(self.sibling("receiver"), HANDLE_TWO)))
+                        .on(HANDLE_ONE, (state, message) -> {
                             received.add("one");
                             return Step.of(state + 1);
                         })
-                        .on("two", (state, message) -> {
+                        .on(HANDLE_TWO, (state, message) -> {
                             received.add("two");
                             return Step.of(state + 1);
                         });
@@ -1449,8 +1542,8 @@ public final class ActorsTest {
         }
     }
 
-    private static Effect tell(Address to, String type) {
-        return ActorEffect.tell(to, Message.of(type));
+    private static Effect tell(Address to, MessageType type) {
+        return ActorEffect.tell(to, type.message());
     }
 
     /// A foreign reply address cannot complete an ask in the receiving system.
@@ -1462,8 +1555,8 @@ public final class ActorsTest {
             beta.tell(Address.of("counter", "local"), Message.of("add").with("by", Json.of(3)));
             settle();
 
-            var remote = alpha.ask(Address.at("beta", "counter", "remote"), Message.of("total"));
-            var local = beta.ask(Address.of("counter", "local"), Message.of("total"));
+            var remote = alpha.ask(Address.at("beta", "counter", "remote"), GET_TOTAL.message());
+            var local = beta.ask(Address.of("counter", "local"), GET_TOTAL.message());
             Check.equal("a remote ask receives the remote answer", 7.0,
                     number(remote.get().get("value")));
             Check.equal("a local ask receives its own answer", 3.0,
@@ -1481,8 +1574,8 @@ public final class ActorsTest {
             }
 
             @Override
-            public Application<Long> instantiate(Address self) {
-                return Application.of(0L).on("wait", (state, message) -> {
+            public Behavior<Long> instantiate(Address self) {
+                return Behavior.of(0L).on(WAIT, (state, message) -> {
                     try {
                         held.await(2, TimeUnit.SECONDS);
                     } catch (InterruptedException interrupted) {
@@ -1559,8 +1652,8 @@ public final class ActorsTest {
             }
 
             @Override
-            public Application<Long> instantiate(Address self) {
-                return Application.of(0L);
+            public Behavior<Long> instantiate(Address self) {
+                return Behavior.of(0L).on(DO_NOTHING, (state, message) -> Step.of(state));
             }
         };
     }

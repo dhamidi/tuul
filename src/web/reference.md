@@ -291,8 +291,8 @@ Web code may hold an `actors.ActorSystem` and call `tell`, `ask`, `inspect`,
 call `tell` and return an immediate mailbox-admission result for background
 work.
 
-An actor type implements `Definition<S>`. `instantiate(Address)` returns an
-`Application<S>` with `on` updates. Updates return `Step<S>` and may request
+An actor type implements `Definition<S>`. `instantiate(Address)` returns a
+`Behavior<S>` with declared `MessageType` updates. Updates return `Step<S>` and may request
 `ActorEffect.tell`, `reply`, `schedule`, `spawn`, or `evict`. Register external
 effect handlers with `ActorSystem.effect`. `Address.of(type, id)` names a local
 actor. `Spawn.durable()` is the default; `Spawn.ephemeral()` keeps no log.
@@ -302,8 +302,8 @@ effects. The default also suppresses effects for an unapplied tail.
 `Spawn.redelivers(true)` runs the complete effect list again for that tail and
 requires idempotent effects. `ActorSystem.tell` returns `DeliveryStatus`; it
 does not wait for a log append or processing. `ask` has a deadline and enters
-the mailbox. `inspect` returns definition-provided JSON without adding a query
-command to the log.
+the mailbox. A declared query is not logged and cannot change state. `inspect`
+returns definition-provided JSON without running a user handler.
 
 The actor owns actor state and the system owns logs, scheduling, and effect
 handlers. The web handler owns the HTTP response. Neither side owns the other

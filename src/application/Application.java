@@ -41,8 +41,8 @@ import json.Json;
 /// ## Failing open
 ///
 /// The loop fails open at both ends. An update that throws leaves the state
-/// alone and asks for one effect that sends an `error` message back. An effect
-/// with no handler, or a handler that throws, emits an `error` message too.
+/// alone and asks for one effect that sends a `handle-error` message back. An
+/// effect with no handler, or a handler that throws, emits `handle-error` too.
 /// Nothing an application does to itself can stop it from finishing the
 /// messages it already has.
 ///
@@ -155,8 +155,8 @@ public final class Application<S> {
     /// history — calls this and never calls [#perform(List)].
     ///
     /// An update that throws leaves the state alone and answers with a step
-    /// whose one effect sends an `error` message. An update that throws while
-    /// handling an `error` message answers with nothing, because an application
+    /// whose one effect sends `handle-error`. An update that throws while
+    /// handling `handle-error` answers with nothing, because an application
     /// that reports an error about an error never stops.
     public Step<S> advance(Message message) {
         var step = update(message);
@@ -194,7 +194,7 @@ public final class Application<S> {
     /// [#fenced()].
     ///
     /// Nothing here propagates a failure, because there is nothing to propagate
-    /// — an effect that throws has already been turned into an `error` message
+    /// — an effect that throws has already been turned into `handle-error`
     /// by [#run]. That is why an ordinary executor is enough, and it is why this
     /// does not reach for `StructuredTaskScope` while that is still a preview
     /// API: tuul's class files would be pinned to one exact JDK build, and so
@@ -236,8 +236,8 @@ public final class Application<S> {
     /// Runs one effect on the calling thread and emits its result through
     /// `emit`. This method does not create a thread and does not change state.
     ///
-    /// If the effect has no handler, this method emits `error`. If the handler
-    /// throws an exception, this method also emits `error`.
+    /// If the effect has no handler, this method emits `handle-error`. If the
+    /// handler throws an exception, this method also emits `handle-error`.
     ///
     /// A runtime calls this method when it already owns effect scheduling.
     /// [#perform(List)] schedules a complete concurrent step instead.
@@ -260,7 +260,7 @@ public final class Application<S> {
         }
         effecting.shutdownNow();
         abandoned.addAndGet(outstanding.size());
-        outstanding.values().forEach(effect -> fence.emit(Message.of("error.timeout")
+        outstanding.values().forEach(effect -> fence.emit(Message.of(Message.HANDLE_TIMEOUT)
                 .with("reason", "the effect did not finish within " + patience)
                 .with("while", effect.type())));
     }
@@ -269,7 +269,7 @@ public final class Application<S> {
         try {
             return updates.getOrDefault(message.type(), Updates.ignore()).update(state, message);
         } catch (Exception e) {
-            if (message.type().equals("error")) return Step.of(state);
+            if (message.type().equals(Message.HANDLE_ERROR)) return Step.of(state);
             return Step.of(state, Effect.send(failure(e).with("while", message.type())));
         }
     }

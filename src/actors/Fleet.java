@@ -22,7 +22,7 @@ import java.util.stream.Stream;
 /// var total = system.fleet("counter")
 ///         .over(IntStream.rangeClosed(1, 100).mapToObj(String::valueOf))
 ///         .tell(address -> Message.of("increment"))
-///         .ask(address -> Message.of("total"))
+///         .ask(address -> Message.of("get-total"))
 ///         .mapToLong(reply -> reply.number("value"))
 ///         .sum();
 /// ```

@@ -86,7 +86,7 @@ The actor update cannot call `System.getenv`. Replay must depend only on the
 recorded messages and the current definition. Reading process state during
 replay would produce a different actor from the same history.
 
-After replay, the runtime sends `actors.resumed`. The actor finds eligible
+After replay, the runtime sends `actors.resume`. The actor finds eligible
 missing paths and emits `settings.resolve`. An external handler reads the
 environment. Its successful result comes back as `settings.initialized` and is
 recorded.
@@ -96,7 +96,7 @@ The sequence is:
 ```text
 first summon
     -> replay
-    -> actors.resumed
+    -> actors.resume
     -> settings.resolve effect
     -> environment read
     -> recorded settings.initialized
@@ -104,7 +104,7 @@ first summon
 
 later summon
     -> replay restores the value
-    -> actors.resumed finds nothing to initialize
+    -> actors.resume finds nothing to initialize
 ```
 
 Changing the environment after the first success changes nothing. A person can
@@ -119,7 +119,7 @@ A missing value can mean that initialization has not happened. It can also
 mean that a person deliberately removed an optional value.
 
 The state must distinguish those cases. An accepted unset records explicit
-absence for matching initializer paths. A later `actors.resumed` respects that
+absence for matching initializer paths. A later `actors.resume` respects that
 decision.
 
 `settings.reinitialize` clears the decision for selected paths. This makes the
@@ -144,7 +144,7 @@ can test it without I/O. Replay suppresses it. A crash can repeat it safely.
 
 The application must register handlers and summon the singleton during
 assembly. `ActorSystem.summon` is one direct operation. It avoids writing a
-meaningless boot command only to make `actors.resumed` run.
+meaningless boot command only to make `actors.resume` run.
 
 ## Writes are messages; reads are inspection
 

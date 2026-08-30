@@ -75,7 +75,7 @@ import java.time.Duration;
 ///                 quarantined
 /// @param window   the period the restart count is measured over
 /// @param effects  how long the effects of one step may run before the actor
-///                 stops waiting for them and reports `error.timeout`
+///                 stops waiting for them and reports `handle-timeout`
 /// @param idle     how long an actor may sit unused before it is evicted. Zero
 ///                 or less means it is never evicted for being idle.
 /// @param durability how hard the log works to keep a command it has just
