@@ -5,7 +5,10 @@ import java.io.IOException;
 import java.net.URI;
 import java.nio.file.Files;
 import java.nio.file.Path;
+import java.time.Duration;
 import java.util.List;
+import java.util.concurrent.CountDownLatch;
+import java.util.concurrent.TimeUnit;
 import symbols.Index;
 import web.assets.Bundled;
 import web.assets.Hotwired;
@@ -62,15 +65,19 @@ public final class BrowserTest {
                 Check.equal("a page is listening before the shutdown", 1, listening(browser, 1));
 
                 var failure = new java.util.concurrent.atomic.AtomicReference<Exception>();
+                var closed = new CountDownLatch(1);
                 var closing = Thread.ofVirtual().start(() -> {
                     try {
                         browser.close();
                     } catch (Exception thrown) {
                         failure.set(thrown);
+                    } finally {
+                        closed.countDown();
                     }
                 });
-                closing.join(java.time.Duration.ofSeconds(15));
                 Check.that("closing returns rather than waiting for something that never ends",
+                        closed.await(15, TimeUnit.SECONDS));
+                Check.that("the close signal arrives rather than waiting for something that never ends",
                         !closing.isAlive());
                 Check.that("and does not throw", failure.get() == null);
 
@@ -90,8 +97,7 @@ public final class BrowserTest {
     /// thread of its own, so a subscription appears a moment after the response
     /// does — see the longer note in [HandlerTest].
     private static int listening(Browser browser, int wanted) throws InterruptedException {
-        var deadline = System.nanoTime() + java.time.Duration.ofSeconds(2).toNanos();
-        while (System.nanoTime() < deadline && browser.cable().subscribers() != wanted) Thread.sleep(5);
+        browser.cable().awaitSubscribers(wanted, Duration.ofSeconds(2));
         return browser.cable().subscribers();
     }
 

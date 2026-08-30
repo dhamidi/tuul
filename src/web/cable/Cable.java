@@ -2,6 +2,7 @@ package web.cable;
 
 import eventstream.Event;
 import java.io.IOException;
+import java.time.Duration;
 import java.util.ArrayList;
 import java.util.Comparator;
 import java.util.HashMap;
@@ -172,6 +173,26 @@ public final class Cable implements AutoCloseable {
         }
     }
 
+    /// Waits until the cable has the requested number of subscribers.
+    ///
+    /// The method returns `true` when the state matches and `false` when the
+    /// bounded wait expires. A subscriber joining or leaving wakes the waiter.
+    public boolean awaitSubscribers(int wanted, Duration patience) throws InterruptedException {
+        if (wanted < 0) throw new IllegalArgumentException("subscriber count must not be negative");
+        if (patience.isNegative() || patience.isZero()) throw new IllegalArgumentException("patience must be positive");
+        lock.lock();
+        try {
+            var left = patience.toNanos();
+            while (subscriptions.size() != wanted) {
+                if (left <= 0) return false;
+                left = ended.awaitNanos(left);
+            }
+            return true;
+        } finally {
+            lock.unlock();
+        }
+    }
+
     /// The element that makes a page listen.
     ///
     /// [#feature(Topics)] puts this in the body of every page, which is why
@@ -262,6 +283,7 @@ public final class Cable implements AutoCloseable {
         try {
             if (closed) throw new IllegalStateException("this cable is closed");
             subscriptions.add(subscription);
+            ended.signalAll();
             return sequence;
         } finally {
             lock.unlock();

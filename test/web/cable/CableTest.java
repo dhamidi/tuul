@@ -51,7 +51,7 @@ public final class CableTest {
                 Check.equal("a stream answers 200", 200, page.status());
                 Check.equal("and says what it is",
                         "text/event-stream; charset=utf-8", page.header("Content-Type"));
-                await(() -> cable.subscribers() == 1);
+                await(cable, 1);
                 Check.equal("a page that connected is a subscriber", 1, cable.subscribers("symbols"));
 
                 cable.broadcast("symbols", Turbo.append("results", Tags.div(Tags.text("json.Json"))));
@@ -75,7 +75,7 @@ public final class CableTest {
             try (var symbols = listen(handler, "/updates?topic=symbols");
                     var builds = listen(handler, "/updates?topic=builds");
                     var both = listen(handler, "/updates?topic=symbols&topic=builds")) {
-                await(() -> cable.subscribers() == 3);
+                await(cable, 3);
 
                 cable.broadcast("symbols", Event.of("a symbol"));
                 Check.equal("a broadcast reaches the topic's subscribers", "a symbol", symbols.event().data());
@@ -107,11 +107,11 @@ public final class CableTest {
             var handler = cable.stream(Topics.fixed("symbols"));
             var staying = listen(handler, "/updates");
             var leaving = listen(handler, "/updates");
-            await(() -> cable.subscribers() == 2);
+            await(cable, 2);
 
             leaving.close();
             cable.broadcast("symbols", Event.of("after the client left"));
-            await(() -> cable.subscribers() == 1);
+            await(cable, 1);
             Check.equal("a client that goes away stops being a subscriber", 1, cable.subscribers());
             Check.equal("and the ones still there are unaffected",
                     "after the client left", staying.event().data());
@@ -136,13 +136,13 @@ public final class CableTest {
             var handler = cable.stream(Topics.fixed("symbols"));
             String first;
             try (var page = listen(handler, "/updates")) {
-                await(() -> cable.subscribers() == 1);
+                await(cable, 1);
                 cable.broadcast("symbols", Event.of("one"));
                 first = page.event().id();
                 cable.broadcast("symbols", Event.of("two"));
                 page.event();
             }
-            await(() -> cable.subscribers() == 0);
+            await(cable, 0);
             cable.broadcast("symbols", Event.of("three"));
 
             try (var back = listen(handler, "/updates", first)) {
@@ -151,9 +151,9 @@ public final class CableTest {
                 cable.broadcast("symbols", Event.of("four"));
                 Check.equal("and then carries on live", "four", back.event().data());
             }
-            await(() -> cable.subscribers() == 0);
+            await(cable, 0);
             try (var fresh = listen(handler, "/updates")) {
-                await(() -> cable.subscribers() == 1);
+                await(cable, 1);
                 cable.broadcast("symbols", Event.of("five"));
                 Check.equal("a client with no id is told nothing it did not ask for",
                         "five", fresh.event().data());
@@ -167,7 +167,7 @@ public final class CableTest {
             var handler = cable.stream(Topics.fixed("symbols"));
             String first;
             try (var page = listen(handler, "/updates")) {
-                await(() -> cable.subscribers() == 1);
+                await(cable, 1);
                 cable.broadcast("symbols", Event.of("one"));
                 first = page.event().id();
             }
@@ -188,7 +188,7 @@ public final class CableTest {
             cable.broadcast("symbols", Event.of("one"));
             cable.broadcast("symbols", Event.of("two"));
             try (var back = listen(handler, "/updates", "beefcafe-1")) {
-                await(() -> cable.subscribers() == 1);
+                await(cable, 1);
                 cable.broadcast("symbols", Event.of("three"));
                 Check.equal("unless the application would rather it did not", "three", back.event().data());
             }
@@ -198,7 +198,7 @@ public final class CableTest {
     private static void shutdown() throws Exception {
         var cable = Cable.of(quick());
         try (var page = listen(cable.stream(Topics.fixed("symbols")), "/updates")) {
-            await(() -> cable.subscribers() == 1);
+                await(cable, 1);
             cable.close();
             Check.equal("closing ends every subscription", 0, cable.subscribers());
             Check.that("and the client's stream ends with it", page.ended());
@@ -267,9 +267,8 @@ public final class CableTest {
     }
 
     /// Waits for something a virtual thread is about to make true.
-    private static void await(java.util.function.BooleanSupplier settled) throws InterruptedException {
-        var deadline = System.nanoTime() + PATIENCE.toNanos();
-        while (!settled.getAsBoolean() && System.nanoTime() < deadline) Thread.sleep(5);
+    private static void await(Cable cable, int wanted) throws InterruptedException {
+        cable.awaitSubscribers(wanted, PATIENCE);
     }
 
     /// A page with the stream open, reading it as it arrives.
@@ -283,6 +282,8 @@ public final class CableTest {
         private final Memory.Open open;
         private final BlockingQueue<Signal> signals = new LinkedBlockingQueue<>();
         private final List<String> lines = new ArrayList<>();
+        private final java.util.concurrent.locks.ReentrantLock lineLock = new java.util.concurrent.locks.ReentrantLock();
+        private final java.util.concurrent.locks.Condition lineChanged = lineLock.newCondition();
         private final CountDownLatch finished = new CountDownLatch(1);
         private final Thread reading;
 
@@ -300,8 +301,12 @@ public final class CableTest {
         }
 
         private void record(String line) {
-            synchronized (lines) {
+            lineLock.lock();
+            try {
                 lines.add(line);
+                lineChanged.signalAll();
+            } finally {
+                lineLock.unlock();
             }
         }
 
@@ -326,14 +331,17 @@ public final class CableTest {
         }
 
         private boolean await(java.util.function.Predicate<String> wanted) throws InterruptedException {
-            var deadline = System.nanoTime() + PATIENCE.toNanos();
-            while (System.nanoTime() < deadline) {
-                synchronized (lines) {
-                    if (lines.stream().anyMatch(wanted)) return true;
+            lineLock.lock();
+            try {
+                var left = PATIENCE.toNanos();
+                while (!lines.stream().anyMatch(wanted)) {
+                    if (left <= 0) return false;
+                    left = lineChanged.awaitNanos(left);
                 }
-                Thread.sleep(5);
+                return true;
+            } finally {
+                lineLock.unlock();
             }
-            return false;
         }
 
         private boolean ended() throws InterruptedException {

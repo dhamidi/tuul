@@ -70,6 +70,7 @@ public final class Conn implements Closeable {
     private final ConcurrentHashMap<Id, Thread> inbound = new ConcurrentHashMap<>();
     private final ConcurrentHashMap.KeySetView<Id, Boolean> cancelled = ConcurrentHashMap.newKeySet();
     private final AtomicLong fenced = new AtomicLong();
+    private final CompletableFuture<Void> fencedSignal = new CompletableFuture<>();
     private final AtomicBoolean started = new AtomicBoolean();
     private final AtomicBoolean closed = new AtomicBoolean();
     private final CompletableFuture<Void> finished = new CompletableFuture<>();
@@ -260,6 +261,17 @@ public final class Conn implements Closeable {
         return fenced.get();
     }
 
+    boolean awaitFenced(Duration patience) throws InterruptedException {
+        try {
+            fencedSignal.get(patience.toNanos(), TimeUnit.NANOSECONDS);
+            return true;
+        } catch (TimeoutException timeout) {
+            return false;
+        } catch (ExecutionException impossible) {
+            return false;
+        }
+    }
+
     @Override
     public void close() throws IOException {
         if (!closed.compareAndSet(false, true)) return;
@@ -402,6 +414,7 @@ public final class Conn implements Closeable {
         var future = pending.remove(response.id());
         if (future == null) {
             fenced.incrementAndGet();
+            fencedSignal.complete(null);
             return;
         }
         switch (response) {

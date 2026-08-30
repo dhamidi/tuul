@@ -291,8 +291,11 @@ public final class Jsonrpc2Test {
             Check.that("server progress notifies arrived", ticks.await(5, TimeUnit.SECONDS));
         });
 
+        var started = new CountDownLatch(1);
+        var release = new CountDownLatch(1);
         peers(Server.of().method("slow", params -> {
-            Thread.sleep(400);
+            started.countDown();
+            release.await(5, TimeUnit.SECONDS);
             return Json.of("late");
         }), (client, _) -> {
             try {
@@ -301,8 +304,9 @@ public final class Jsonrpc2Test {
             } catch (TimeoutException e) {
                 Check.that("a slow call timed out", true);
             }
-            Thread.sleep(500);
-            Check.that("the late answer was fenced", client.fenced() >= 1);
+            Check.that("the slow method started", started.await(5, TimeUnit.SECONDS));
+            release.countDown();
+            Check.that("the late answer was fenced", client.awaitFenced(Duration.ofSeconds(5)));
         });
     }
 

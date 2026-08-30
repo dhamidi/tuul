@@ -534,12 +534,13 @@ public final class ActorsTest {
         try (var system = ActorSystem.named("test").rooted(root)
                 .define(new Counting(1), brief)
                 .sweeping(Duration.ofMillis(40))) {
+            var evicted = eviction(system, address);
             system.tell(address, Message.of("add").with("by", Json.of(3)));
-            Thread.sleep(120);
+            total(system, address);
             Check.that("the actor is loaded while it is being used", isLoaded(system, address));
 
-            Thread.sleep(1_200);
-            Check.that("an idle actor is evicted", !isLoaded(system, address));
+            Check.that("an idle actor is evicted", evicted.await(2, TimeUnit.SECONDS));
+            Check.that("and is no longer loaded", !isLoaded(system, address));
             Check.that("the log survives passivation",
                     system.known().anyMatch(entry -> entry.address().equals(address)));
             Check.equal("and the state comes back from it", 3.0, total(system, address));
@@ -552,8 +553,8 @@ public final class ActorsTest {
             var busy = Address.of("counter", "busy");
             for (var round = 0; round < 12; round++) {
                 system.tell(busy, Message.of("add"));
-                Thread.sleep(100);
             }
+            total(system, busy);
             Check.that("an actor that keeps working is not swept out", isLoaded(system, busy));
         }
 
@@ -563,27 +564,30 @@ public final class ActorsTest {
                 .sweeping(Duration.ofMillis(40))) {
             var pinned = Address.of("counter", "pinned");
             system.tell(pinned, Message.of("add"));
-            Thread.sleep(1_200);
+            total(system, pinned);
             Check.that("an actor with no idle timeout is never swept", isLoaded(system, pinned));
         }
 
         // A settled actor goes without waiting out its idle period, and the
         // registry says so before it goes.
+        var settled = new CountDownLatch(1);
         var patient = Spawn.durable().idle(Duration.ofMinutes(10));
         try (var system = ActorSystem.named("test").rooted(root())
-                .define(new Closing(), patient)
+                .define(new Closing(settled), patient)
                 .sweeping(Duration.ofMillis(40))) {
             var closing = Address.of("closing", "1");
             system.tell(closing, Message.of("add").with("by", Json.of(1)));
-            settle();
+            total(system, closing);
             Check.that("an unsettled actor stays loaded", isLoaded(system, closing));
             Check.that("and the registry reports it as unsettled",
                     system.known().noneMatch(entry -> entry.address().equals(closing) && entry.settled()));
 
+            var evicted = eviction(system, closing);
             system.tell(closing, Message.of("add").with("by", Json.of(20)));
-            Thread.sleep(300);
+            Check.that("the actor reports that it is settled", settled.await(2, TimeUnit.SECONDS));
             Check.that("a settled actor is evicted although its idle period has not passed",
-                    !isLoaded(system, closing));
+                    evicted.await(2, TimeUnit.SECONDS));
+            Check.that("and is no longer loaded", !isLoaded(system, closing));
             Check.equal("and it still answers, because settled is a hint and not a closure",
                     21.0, total(system, closing));
         }
@@ -618,7 +622,7 @@ public final class ActorsTest {
                 .sweeping(Duration.ofMillis(40))) {
             var faulty = Address.of("broken", "1");
             system.tell(faulty, Message.of("add"));
-            settle();
+            total(system, faulty);
             Check.equal("a definition whose settled hint throws keeps working", 1.0, total(system, faulty));
             Check.that("and stays loaded, because a broken hint answers false", isLoaded(system, faulty));
         }
@@ -626,6 +630,16 @@ public final class ActorsTest {
 
     /// A definition that calls itself settled once its total reaches a limit.
     private static final class Closing implements Definition<Counter> {
+
+        private final CountDownLatch settled;
+
+        private Closing() {
+            this(null);
+        }
+
+        private Closing(CountDownLatch settled) {
+            this.settled = settled;
+        }
 
         @Override
         public String type() {
@@ -645,12 +659,37 @@ public final class ActorsTest {
 
         @Override
         public boolean settled(Counter state) {
-            return state.total() >= 10;
+            var result = state.total() >= 10;
+            if (result && settled != null) settled.countDown();
+            return result;
         }
     }
 
     private static boolean isLoaded(ActorSystem system, Address address) {
         return system.known().anyMatch(entry -> entry.address().equals(address) && entry.loaded());
+    }
+
+    private static CountDownLatch eviction(ActorSystem system, Address address) {
+        var evicted = new CountDownLatch(1);
+        system.traces().subscribe(new java.util.concurrent.Flow.Subscriber<>() {
+
+            @Override
+            public void onSubscribe(java.util.concurrent.Flow.Subscription subscription) {
+                subscription.request(Long.MAX_VALUE);
+            }
+
+            @Override
+            public void onNext(Trace trace) {
+                if (trace.kind() == Trace.Kind.evicted && trace.address().equals(address)) evicted.countDown();
+            }
+
+            @Override
+            public void onError(Throwable thrown) {}
+
+            @Override
+            public void onComplete() {}
+        });
+        return evicted;
     }
 
     // ---- ownership -------------------------------------------------------

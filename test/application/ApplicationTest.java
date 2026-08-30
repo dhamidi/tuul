@@ -109,16 +109,19 @@ public final class ApplicationTest {
     private static void concurrent() {
         var running = new AtomicInteger();
         var peak = new AtomicInteger();
+        var started = new java.util.concurrent.CountDownLatch(3);
         var app = Application.<Integer>of(0)
                 .on("start", (state, message) -> new Step<>(state, List.of(Effect.of("slow"), Effect.of("slow"), Effect.of("slow"))))
                 .on("done", (state, message) -> Step.of(state + 1))
                 .effect("slow", (effect, emit) -> {
                     peak.accumulateAndGet(running.incrementAndGet(), Math::max);
-                    Thread.sleep(50);
+                    started.countDown();
+                    started.await(5, java.util.concurrent.TimeUnit.SECONDS);
                     running.decrementAndGet();
                     emit.emit(Message.of("done"));
                 });
         Check.equal("every effect reported back", 3, app.dispatch(Message.of("start")));
+        Check.that("all effects started before any one finished", started.getCount() == 0);
         Check.that("effects of a step run at the same time", peak.get() > 1);
 
         // Running together means running in no order. An actor that replies to

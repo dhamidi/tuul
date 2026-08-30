@@ -301,10 +301,10 @@ final class Actor {
             inspections.values().forEach(result -> result.completeExceptionally(
                     new IllegalStateException("the actor stopped during inspection")));
             inspections.clear();
+            system.unloaded(this);
             system.trace(address, Trace.Kind.evicted, Json.Object.of()
                     .with("handled", handled)
                     .with("settled", settled));
-            system.unloaded(this);
         }
     }
 
