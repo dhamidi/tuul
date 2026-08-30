@@ -33,7 +33,7 @@ import sqlite3.SqliteException;
 /// kept in a [Store] between runs. A lookup starts there, and only falls
 /// through to javac when the sources have moved on. The compile is lazy for the
 /// same reason: a question the index can answer must not pay for one.
-public final class Index implements AutoCloseable {
+public final class Index implements Catalog {
 
     /// Derived data, and deliberately under `build/`: deleting it costs the
     /// time to build it again and nothing else.
@@ -44,8 +44,6 @@ public final class Index implements AutoCloseable {
     /// `name` is what the root is called in a URL or a message; `label` is what
     /// a reader is shown. They differ because `platform` is a good key and a
     /// poor heading.
-    public record Root(String name, String label, List<String> contents) {}
-
     public static final String PROJECT = "project";
 
     public static final String DEPENDENCIES = "dependencies";
@@ -59,8 +57,6 @@ public final class Index implements AutoCloseable {
     /// a symbol that was declared with none. It is here so that a result can say
     /// `static` without the page being opened; it can never say `private`,
     /// because a private member is not indexed.
-    public record Match(String symbol, String kind, String modifiers, String doc) {}
-
     private final List<Path> roots;
     private final Vendor vendor;
     private final Optional<Store> store;
@@ -69,7 +65,7 @@ public final class Index implements AutoCloseable {
 
     /// Worked out once: the roots do not change while a server is running, and
     /// walking the JDK's modules for every page would be a walk per page.
-    private List<Root> groups;
+    private List<Catalog.Root> groups;
 
     private Index(List<Path> roots, Vendor vendor, Optional<Store> store, String stamp) {
         this.roots = List.copyOf(roots);
@@ -366,18 +362,18 @@ public final class Index implements AutoCloseable {
     /// A dependency contributes its packages rather than itself, because a jar
     /// is a file and not a symbol; an empty root is left out, since a project
     /// with no dependencies should not be told it has a dependencies section.
-    public List<Root> roots() {
+    public List<Catalog.Root> roots() {
         if (groups == null) {
-            var found = new ArrayList<Root>();
-            add(found, new Root(PROJECT, "This project", projectPackages()));
-            add(found, new Root(DEPENDENCIES, "Dependencies", vendor.packages()));
-            add(found, new Root(PLATFORM, "The JDK", platformModules()));
+            var found = new ArrayList<Catalog.Root>();
+            add(found, new Catalog.Root(PROJECT, "This project", projectPackages()));
+            add(found, new Catalog.Root(DEPENDENCIES, "Dependencies", vendor.packages()));
+            add(found, new Catalog.Root(PLATFORM, "The JDK", platformModules()));
             groups = List.copyOf(found);
         }
         return groups;
     }
 
-    private static void add(List<Root> roots, Root root) {
+    private static void add(List<Catalog.Root> roots, Catalog.Root root) {
         if (!root.contents().isEmpty()) roots.add(root);
     }
 
@@ -441,7 +437,7 @@ public final class Index implements AutoCloseable {
     /// The symbols whose name or documentation match, best first. Only what has
     /// been indexed can be found, so the project is indexed first — the JDK and
     /// the jars turn up as they are asked about.
-    public List<Match> search(String text, int limit) {
+    public List<Catalog.Match> search(String text, int limit) {
         var kept = store.orElseThrow(() -> new IllegalStateException("there is no index to search"));
         indexProject();
         return kept.search(text, limit);

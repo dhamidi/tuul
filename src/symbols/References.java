@@ -32,7 +32,7 @@ import java.util.function.BiFunction;
 /// reference — `[the docs]` is prose, and is not looked up at all.
 public final class References {
 
-    private final Index index;
+    private final Catalog catalog;
     private final String scope;
     private final BiFunction<String, String, String> url;
 
@@ -44,13 +44,13 @@ public final class References {
     /// not a name is asked about once.
     private final Map<String, String> resolved = new HashMap<>();
 
-    private References(Index index, String scope, BiFunction<String, String, String> url) {
-        this.index = index;
+    private References(Catalog catalog, String scope, BiFunction<String, String, String> url) {
+        this.catalog = catalog;
         this.scope = scope;
         this.url = url;
     }
 
-    /// A [markdown.Links] over `index`, reading references the way they would
+    /// A [markdown.Links] over `catalog`, reading references the way they would
     /// be read in the doc comment of `scope`, and pointing at wherever `url`
     /// says a symbol and one of its members live.
     ///
@@ -58,8 +58,8 @@ public final class References {
     /// an empty member when the reference named a type. Whether a member gets
     /// an anchor of its own is a question about a page, and is answered by
     /// whoever has one.
-    public static markdown.Links of(Index index, String scope, BiFunction<String, String, String> url) {
-        var references = new References(index, scope, url);
+    public static markdown.Links of(Catalog catalog, String scope, BiFunction<String, String, String> url) {
+        var references = new References(catalog, scope, url);
         return references::destination;
     }
 
@@ -96,12 +96,12 @@ public final class References {
     /// An empty type is `[#advance(Message)]`, a reference to a member of the
     /// type the comment is on, and that is `scope` itself.
     private Optional<TypeInfo> symbol(String type) {
-        if (type.isEmpty()) return index.lookup(scope);
+        if (type.isEmpty()) return catalog.lookup(scope);
         var enclosing = scope.lastIndexOf('.');
-        return index.lookup(type)
-                .or(() -> scope.isEmpty() ? Optional.empty() : index.lookup(scope + "." + type))
+        return catalog.lookup(type)
+                .or(() -> scope.isEmpty() ? Optional.empty() : catalog.lookup(scope + "." + type))
                 .or(() -> enclosing < 0 ? Optional.empty()
-                        : index.lookup(scope.substring(0, enclosing) + "." + type));
+                        : catalog.lookup(scope.substring(0, enclosing) + "." + type));
     }
 
     /// Whether the type declares something by this name.

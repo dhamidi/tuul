@@ -6,7 +6,7 @@ import application.Step;
 import java.util.List;
 import json.Json;
 import symbols.Docs;
-import symbols.Index;
+import symbols.Catalog;
 
 /// What the browser knows while it answers one request, and how it comes to
 /// know it.
@@ -126,7 +126,7 @@ public final class Symbols {
 
     /// Looks a symbol up. The only place in the browser that reads the index,
     /// which is why it is the only place that can be slow.
-    public static Effect.Handler looking(Index index) {
+    public static Effect.Handler looking(Catalog index) {
         return (effect, emit) -> {
             var name = effect.string("symbol", "");
             emit.emit(index.lookup(name)
@@ -141,7 +141,7 @@ public final class Symbols {
     /// a symbol and links to where it is written, and the index knows nothing
     /// about parameters, so three rows would render as the same line three
     /// times pointing at the same anchor.
-    public static Effect.Handler searching(Index index, int limit) {
+    public static Effect.Handler searching(Catalog index, int limit) {
         return (effect, emit) -> {
             var query = effect.string("query", "");
             if (query.isEmpty()) {

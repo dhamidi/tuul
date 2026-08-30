@@ -13,6 +13,8 @@ import java.util.List;
 import java.util.Set;
 import json.Json;
 import symbols.Docs;
+import symbols.Catalog;
+import symbols.CatalogFactory;
 import symbols.Index;
 
 /// `tuul docs` as an application: which messages it understands, and how the
@@ -30,6 +32,12 @@ public final class App {
     private App() {}
 
     public static Application<State> of(State initial, Writer out, Writer err) {
+        return of(initial, out, err, CatalogFactory.system());
+    }
+
+    /// Creates the docs application with the catalog factory that runs symbol
+    /// queries. The factory receives the paths carried by each query effect.
+    public static Application<State> of(State initial, Writer out, Writer err, CatalogFactory catalogs) {
         return Application.of(initial)
                 .on("docs.query", App::query)
                 .on("docs.result", App::result)
@@ -37,8 +45,8 @@ public final class App {
                 .on("docs.roots", App::rooted)
                 .on("docs.missing", App::missing)
                 .on("error", App::failed)
-                .effect("symbols.lookup", App::look)
-                .effect("symbols.search", App::search)
+                .effect("symbols.lookup", (effect, emit) -> look(effect, emit, catalogs))
+                .effect("symbols.search", (effect, emit) -> search(effect, emit, catalogs))
                 .effect("docs.print", (effect, _) -> print(effect, out))
                 .effect("docs.report", (effect, _) -> report(effect, err));
     }
@@ -100,15 +108,15 @@ public final class App {
     /// Back from the message it travelled in. A root is JSON on the way here
     /// like everything else, and [Docs] prints the records rather than the
     /// object, because the same records are what a caller in Java would hold.
-    private static List<Index.Root> roots(Json.Object listing) {
-        var roots = new ArrayList<Index.Root>();
+    private static List<Catalog.Root> roots(Json.Object listing) {
+        var roots = new ArrayList<Catalog.Root>();
         for (var value : listing.list("roots")) {
             if (!(value instanceof Json.Object root)) continue;
             var contents = new ArrayList<String>();
             for (var name : root.list("contains")) {
                 if (name instanceof Json.Str(var text)) contents.add(text);
             }
-            roots.add(new Index.Root(root.string("root", ""), root.string("label", ""), List.copyOf(contents)));
+            roots.add(new Catalog.Root(root.string("root", ""), root.string("label", ""), List.copyOf(contents)));
         }
         return List.copyOf(roots);
     }
@@ -119,9 +127,9 @@ public final class App {
 
     /// Searching needs the project indexed, so this is where a first search
     /// pays for one — and every search after it does not.
-    private static void search(Effect effect, Effect.Emitter emit) throws IOException {
+    private static void search(Effect effect, Effect.Emitter emit, CatalogFactory catalogs) throws IOException {
         var wanted = effect.string("search", "");
-        try (var index = index(effect)) {
+        try (var index = catalog(effect, catalogs)) {
             var found = index.search(wanted, MATCHES).stream()
                     .map(match -> (Json) Json.Object.of()
                             .with("symbol", match.symbol())
@@ -132,15 +140,15 @@ public final class App {
         }
     }
 
-    private static void look(Effect effect, Effect.Emitter emit) throws IOException {
+    private static void look(Effect effect, Effect.Emitter emit, CatalogFactory catalogs) throws IOException {
         var symbol = effect.string("symbol", "");
         if (symbol.isEmpty()) {
-            try (var index = index(effect)) {
+            try (var index = catalog(effect, catalogs)) {
                 emit.emit(Message.of("docs.roots", Docs.describe(index.roots())));
             }
             return;
         }
-        try (var index = index(effect)) {
+        try (var index = catalog(effect, catalogs)) {
             emit.emit(index.lookup(symbol)
                     .map(type -> Message.of("docs.result", described(index, type, effect)))
                     .orElseGet(() -> Message.of("docs.missing").with("symbol", symbol)));
@@ -148,7 +156,7 @@ public final class App {
     }
 
     /// One symbol, and what it holds when the caller asked for that.
-    private static Json.Object described(Index index, symbols.TypeInfo type, Effect effect) {
+    private static Json.Object described(Catalog index, symbols.TypeInfo type, Effect effect) {
         var description = Docs.describe(type, effect.flag("all"));
         if (!effect.flag("members")) return description;
         return description.with("members", Json.Array.of(
@@ -164,7 +172,7 @@ public final class App {
     /// A subpackage is skipped unless `recursive` is set, because `web` holds
     /// eight of them and a reader who asked about `web` asked about `web`. The
     /// `seen` set makes a name appear once however many ways it is reached.
-    private static List<Json> members(Index index, Json.Object description, boolean all, boolean recursive,
+    private static List<Json> members(Catalog index, Json.Object description, boolean all, boolean recursive,
             Set<String> seen) {
         var described = new ArrayList<Json>();
         for (var name : strings(description.list("nested"))) {
@@ -231,8 +239,8 @@ public final class App {
 
     /// The index this question is answered from. Everything it needs travels in
     /// the effect, so nothing here reads a field of the state.
-    private static Index index(Effect effect) throws IOException {
-        return Index.of(paths(effect.list("sourcePath")), paths(effect.list("vendorPath")),
+    private static Catalog catalog(Effect effect, CatalogFactory catalogs) throws IOException {
+        return catalogs.open(paths(effect.list("sourcePath")), paths(effect.list("vendorPath")),
                 Path.of(effect.string("index", Index.INDEX.toString())));
     }
 

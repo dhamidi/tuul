@@ -11,6 +11,7 @@ import java.util.Map;
 import java.util.concurrent.ExecutorService;
 import java.util.concurrent.Executors;
 import symbols.Index;
+import symbols.Catalog;
 import symbols.References;
 import web.Feature;
 import web.Features;
@@ -67,11 +68,11 @@ public final class Browser implements AutoCloseable {
     /// worth saying: what you are reading has been rebuilt.
     public static final String INDEX = "index";
 
-    private final Index index;
+    private final Catalog index;
     private final Features wiring;
     private final Cable cable;
 
-    private Browser(Index index, Features wiring, Cable cable) {
+    private Browser(Catalog index, Features wiring, Cable cable) {
         this.index = index;
         this.wiring = wiring;
         this.cable = cable;
@@ -86,7 +87,7 @@ public final class Browser implements AutoCloseable {
     /// notice changing, or nothing to notice nothing — which is what a test
     /// wants, and what somebody browsing a project that is not being rebuilt
     /// wants too.
-    public static Browser of(Index index, Path watched) {
+    public static Browser of(Catalog index, Path watched) {
         var cable = Cable.of();
         return new Browser(index, Features.of(Routes.of(), Ui.feature(),
                 cable.feature(Topics.fixed(INDEX)), own(watch(cable, watched))), cable);

@@ -160,11 +160,11 @@ final class Store implements AutoCloseable {
     /// The second of those is why `json` finds `json.Json` rather than five of
     /// its nested types: somebody typing a bare name means the thing with that
     /// name, and a package is not something they should have to remember.
-    List<Index.Match> search(String text, int limit) {
+    List<Catalog.Match> search(String text, int limit) {
         var match = query(text);
         if (match.isBlank()) return List.of();
 
-        var found = new ArrayList<Index.Match>();
+        var found = new ArrayList<Catalog.Match>();
         try (var rows = database.query("""
                 select symbol, kind, modifiers, doc from search
                 where search match ?
@@ -177,7 +177,7 @@ final class Store implements AutoCloseable {
                 limit ?
                 """, match, text.strip(), text.strip(), limit)) {
             while (rows.next()) {
-                found.add(new Index.Match(
+                found.add(new Catalog.Match(
                         rows.text(0).replace('$', '.'), rows.text(1), rows.text(2), rows.text(3)));
             }
         }

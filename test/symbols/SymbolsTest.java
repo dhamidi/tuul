@@ -422,7 +422,7 @@ public final class SymbolsTest {
         var roots = index.roots();
         Check.that("there are roots at all", !roots.isEmpty());
 
-        var named = roots.stream().map(Index.Root::name).toList();
+        var named = roots.stream().map(Catalog.Root::name).toList();
         Check.that("the project is one of them", named.contains(Index.PROJECT));
         Check.that("and so is the JDK", named.contains(Index.PLATFORM));
         Check.that("a root with nothing in it is not offered, so a project with no jars is not told it has some",

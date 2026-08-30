@@ -8,7 +8,7 @@ import harness.Check;
 import java.util.List;
 import java.util.Map;
 import json.Json;
-import symbols.Index;
+import symbols.Catalog;
 
 /// The updates, which are arithmetic on values.
 ///
@@ -22,7 +22,7 @@ public final class UpdatesTest {
 
     private UpdatesTest() {}
 
-    public static void run(Index index) {
+    public static void run(Catalog index) {
         asking();
         answering();
         searching();
@@ -153,7 +153,7 @@ public final class UpdatesTest {
     /// The two handlers that read the index. They are effects rather than
     /// updates precisely because they are the slow half, and this is the only
     /// place in this file that needs an index at all.
-    private static void handlers(Index index) {
+    private static void handlers(Catalog index) {
         var found = emitted(Symbols.looking(index), Effect.of(Symbols.LOOK).with("symbol", "json.Json"));
         Check.equal("looking up a symbol answers with what it is", Symbols.FOUND, found.type());
         Check.equal("described the way tuul docs describes it", "json.Json", found.string("class", ""));

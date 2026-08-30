@@ -14,6 +14,7 @@ import json.Json;
 import markdown.Links;
 import markdown.Markdown;
 import symbols.Index;
+import symbols.Catalog;
 import web.Contribution;
 import web.Features;
 import web.dispatch.Router;
@@ -108,7 +109,7 @@ public final class Views {
     /// application, which is this application's own and has to come after the
     /// import map it imports through.
     public static Html page(Features wiring, String heading, Submission search,
-                            List<Index.Root> roots, Node... content) {
+                            List<Catalog.Root> roots, Node... content) {
         var routes = wiring.routes();
         return document(
                 lang("en"),
@@ -148,7 +149,7 @@ public final class Views {
     ///
     /// The project is open and the rest are closed, because a reader of a
     /// project came for the project, and ninety JDK modules unfolded is a wall.
-    public static Html tree(Router routes, List<Index.Root> roots) {
+    public static Html tree(Router routes, List<Catalog.Root> roots) {
         if (roots.isEmpty()) return Html.nothing();
         return Ui.stack(Props.of("gap", "none"),
                 Html.each(roots, root -> Ui.disclosure(
@@ -161,7 +162,7 @@ public final class Views {
 
     /// The same tree as a page of its own, for the opener to point at where
     /// there is no room for a pane and no JavaScript to open one.
-    public static Html browsing(Router routes, List<Index.Root> roots) {
+    public static Html browsing(Router routes, List<Catalog.Root> roots) {
         return Ui.stack(Props.of("gap", "lg"),
                 Ui.heading(Props.of("level", "1"), text("What there is")),
                 tree(routes, roots));

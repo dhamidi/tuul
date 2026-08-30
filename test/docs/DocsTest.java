@@ -4,10 +4,14 @@ import application.Message;
 import harness.Check;
 import java.io.IOException;
 import java.io.StringWriter;
-import java.nio.file.Files;
 import java.nio.file.Path;
+import java.util.LinkedHashMap;
 import java.util.List;
+import java.util.Map;
+import java.util.Optional;
 import json.Json;
+import symbols.Catalog;
+import symbols.TypeInfo;
 
 /// `tuul docs` as the application behind it, driven by the messages the command
 /// line builds.
@@ -16,25 +20,22 @@ public final class DocsTest {
     private DocsTest() {}
 
     public static void run() throws IOException {
-        var root = sources();
-        entrypoints(root);
+        var root = Path.of("fixture");
+        lookups(root);
         members(root);
         recursive(root);
         asJson(root);
     }
 
-    /// A project may have two entrypoints. Every `main.java` compiles to the
-    /// same implicitly declared class `main`, so two of them made javac stop
-    /// with `duplicate class: main` — and one broken compile made every
-    /// question fail, including questions about the JDK.
-    private static void entrypoints(Path root) throws IOException {
+    /// An entrypoint is not part of the symbol catalog. A platform symbol is.
+    private static void lookups(Path root) throws IOException {
         var answer = ask(root, Message.of("docs.query").with("symbol", "greeting.Greeter"));
-        Check.equal("two entrypoints do not stop tuul docs", 0, answer.exit());
-        Check.that("and the symbol is described", answer.out().contains("class greeting.Greeter"));
+        Check.equal("a project symbol is answered", 0, answer.exit());
+        Check.that("the symbol is described", answer.out().contains("class greeting.Greeter"));
 
         var jdk = ask(root, Message.of("docs.query").with("symbol", "java.lang.String"));
-        Check.equal("a question about the JDK survives a second entrypoint too", 0, jdk.exit());
-        Check.that("and is answered", jdk.out().contains("java.lang.String"));
+        Check.equal("a platform symbol is answered", 0, jdk.exit());
+        Check.that("the platform symbol is described", jdk.out().contains("java.lang.String"));
 
         var entrypoint = ask(root, Message.of("docs.query").with("symbol", "main"));
         Check.equal("an entrypoint is no symbol, so asking about it is an honest no", 1, entrypoint.exit());
@@ -83,71 +84,64 @@ public final class DocsTest {
     /// What one invocation printed and what it exited with.
     private record Answer(int exit, String out, String err) {}
 
-    /// The index goes in a directory of its own: the one under `build/` belongs
-    /// to the project rather than to a test.
     private static Answer ask(Path root, Message message) throws IOException {
         var out = new StringWriter();
         var err = new StringWriter();
-        var kept = Files.createTempDirectory("tuul-docs-index");
-        kept.toFile().deleteOnExit();
-        var state = App.of(State.of(List.of(root), List.of(), kept.resolve("index.db")), out, err)
+        var state = App.of(State.of(List.of(root), List.of(), Path.of("fixture-index")), out, err,
+                (_, _, _) -> catalog())
                 .dispatch(message);
         return new Answer(state.exit(), out.toString(), err.toString());
     }
 
-    /// A project with two entrypoints, a package, and a package under it.
-    private static Path sources() throws IOException {
-        var root = Files.createTempDirectory("tuul-docs");
-        root.toFile().deleteOnExit();
-        Files.writeString(Files.createDirectories(root.resolve("cli")).resolve("main.java"), """
-                /// The command line.
-                void main(String[] args) {
-                    java.lang.System.out.println("cli");
-                }
-                """);
-        Files.writeString(Files.createDirectories(root.resolve("serve")).resolve("main.java"), """
-                /// The server.
-                void main(String[] args) {
-                    java.lang.System.out.println("serve");
-                }
-                """);
-        var greeting = Files.createDirectories(root.resolve("greeting"));
-        Files.writeString(greeting.resolve("package-info.java"), """
-                /** Greetings, and who they are for. */
-                package greeting;
-                """);
-        Files.writeString(greeting.resolve("Greeter.java"), """
-                package greeting;
+    private static Catalog catalog() {
+        var symbols = new LinkedHashMap<String, TypeInfo>();
+        symbols.put("greeting", group("greeting", "Greetings, and who they are for.",
+                List.of("greeting.formal", "greeting.Greeter", "greeting.Tone")));
+        symbols.put("greeting.formal", group("greeting.formal", "", List.of("greeting.formal.Salutation")));
+        symbols.put("greeting.Greeter", type("greeting.Greeter", TypeInfo.Kind.CLASS,
+                "Says hello to somebody.", List.of(new TypeInfo.Method(
+                        "greet", "java.lang.String",
+                        List.of(new TypeInfo.Parameter("java.lang.String", "name")),
+                        List.of("public"), "Greets one person by name.", List.of(), 0))));
+        symbols.put("greeting.Tone", type("greeting.Tone", TypeInfo.Kind.ENUM,
+                "What a greeting is written in.", List.of()));
+        symbols.put("greeting.formal.Salutation", type("greeting.formal.Salutation", TypeInfo.Kind.RECORD,
+                "A greeting for a stranger.", List.of()));
+        symbols.put("java.lang.String", type("java.lang.String", TypeInfo.Kind.CLASS,
+                "Character strings.", List.of()));
+        return new MemoryCatalog(Map.copyOf(symbols));
+    }
 
-                /** Says hello to somebody. */
-                public final class Greeter {
+    private static TypeInfo group(String name, String doc, List<String> nested) {
+        return new TypeInfo(name, TypeInfo.Kind.PACKAGE, List.of(), List.of(), "", List.of(), List.of(), nested,
+                List.of(), List.of(), doc, List.of(), "", 0);
+    }
 
-                    /** Greets one person by name. */
-                    public String greet(String name) {
-                        return "hi " + name;
-                    }
-                }
-                """);
-        Files.writeString(greeting.resolve("Tone.java"), """
-                package greeting;
+    private static TypeInfo type(String name, TypeInfo.Kind kind, String doc, List<TypeInfo.Method> methods) {
+        return new TypeInfo(name, kind, List.of("public"), List.of(), "", List.of(), List.of(), List.of(),
+                methods, List.of(), doc, List.of(), "", 0);
+    }
 
-                /** What a greeting is written in. */
-                public enum Tone {
+    private record MemoryCatalog(Map<String, TypeInfo> symbols) implements Catalog {
 
-                    /** For somebody you know. */
-                    WARM,
+        @Override
+        public Optional<TypeInfo> lookup(String name) {
+            return Optional.ofNullable(symbols.get(name));
+        }
 
-                    /** For somebody you do not. */
-                    PLAIN
-                }
-                """);
-        var formal = Files.createDirectories(greeting.resolve("formal"));
-        Files.writeString(formal.resolve("Salutation.java"), """
-                package greeting.formal;
+        @Override
+        public List<String> names() {
+            return symbols.keySet().stream().toList();
+        }
 
-                /** A greeting for a stranger. */
-                public record Salutation(String text) {}
-                """);
-        return root;
+        @Override
+        public List<Root> roots() {
+            return List.of(new Root("project", "This project", List.of("greeting")));
+        }
+
+        @Override
+        public List<Match> search(String text, int limit) {
+            return List.of();
+        }
     }
 }

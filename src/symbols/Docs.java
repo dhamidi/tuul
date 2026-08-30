@@ -202,7 +202,7 @@ public final class Docs {
     /// `java.util.concurrent` shortened to `concurrent` names nothing anybody
     /// can ask about. That is the same reason a package page lists what it
     /// holds in full.
-    public static void roots(List<Index.Root> roots, Writer out) throws IOException {
+    public static void roots(List<Catalog.Root> roots, Writer out) throws IOException {
         var first = true;
         for (var root : roots) {
             if (!first) out.write("\n");
@@ -214,7 +214,7 @@ public final class Docs {
 
     /// The same listing as a message, which is what the browser renders and
     /// `--json` prints.
-    public static Json.Object describe(List<Index.Root> roots) {
+    public static Json.Object describe(List<Catalog.Root> roots) {
         var described = new ArrayList<Json>();
         for (var root : roots) {
             described.add(Json.Object.of()

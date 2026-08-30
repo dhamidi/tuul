@@ -239,7 +239,7 @@ public final class ViewsTest {
     /// has twice broken the other.
     private static void navigates() {
         var tree = Views.tree(Routes.of(), List.of(
-                new symbols.Index.Root("project", "This project", List.of("json")))).markup();
+                new symbols.Catalog.Root("project", "This project", List.of("json")))).markup();
         Check.that("a tree row targets the content pane",
                 tree.contains("data-turbo-frame=\"content\""));
         Check.that("and advances the address bar",
