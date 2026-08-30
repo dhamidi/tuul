@@ -172,7 +172,8 @@ final class Progress implements Definition<Progress.State> {
             case "start", "progress" -> out.write(" " + event.bytes() + "/" + event.total());
             case "done", "cached" -> out.write(" " + event.target());
             case "resolved" -> out.write(" " + event.bytes() + " artifacts");
-            case "resolve-failed", "failed", "optional-missing" -> out.write(" " + clean(event.reason()));
+            case "selected", "omitted", "resolve-failed", "failed", "optional-missing" ->
+                out.write(" " + clean(event.reason()));
             default -> {}
         }
         out.write("\n");

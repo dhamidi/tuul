@@ -29,8 +29,8 @@ public final class AddTest {
         var releaseFirstBatch = new CountDownLatch(1);
         var services = new Add.Services() {
             @Override
-            public List<String> resolve(List<String> coordinate) {
-                return coordinates;
+            public Add.Resolved resolve(List<String> coordinate) {
+                return new Add.Resolved(coordinates, List.of());
             }
 
             @Override
@@ -62,8 +62,8 @@ public final class AddTest {
         var cachedCalls = new CopyOnWriteArrayList<String>();
         var cachedServices = new Add.Services() {
             @Override
-            public List<String> resolve(List<String> coordinate) {
-                return List.of("com.acme.cached:library:1.0");
+            public Add.Resolved resolve(List<String> coordinate) {
+                return new Add.Resolved(List.of("com.acme.cached:library:1.0"), List.of());
             }
 
             @Override

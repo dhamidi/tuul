@@ -21,9 +21,12 @@ import java.nio.file.Path;
 import java.nio.file.StandardCopyOption;
 import java.time.Duration;
 import java.util.ArrayList;
+import java.util.Comparator;
 import java.util.LinkedHashMap;
+import java.util.LinkedHashSet;
 import java.util.List;
 import java.util.Map;
+import java.util.UUID;
 import java.util.function.Consumer;
 import json.Json;
 
@@ -70,9 +73,16 @@ public final class Add {
     public record Failure(String coordinate, String reason) {}
 
     interface Services {
-        List<String> resolve(List<String> coordinates) throws Exception;
+        Resolved resolve(List<String> coordinates) throws Exception;
 
         Download download(String coordinate, String kind, Consumer<Event> events) throws Exception;
+    }
+
+    record Resolved(List<String> artifacts, List<Event> plan) {
+        Resolved {
+            artifacts = List.copyOf(artifacts);
+            plan = List.copyOf(plan);
+        }
     }
 
     record Download(Status status, String target, String reason) {
@@ -99,12 +109,12 @@ public final class Add {
 
     /// A live change in one download. Subscribers must treat it as immutable.
     ///
-    /// `type` is `resolve`, `resolved`, `resolve-failed`, `start`, `progress`,
-    /// `done`, `cached`, `optional-missing`, `failed`, or `complete`.
+    /// `type` is `resolve`, `resolved`, `resolve-failed`, `selected`, `omitted`,
+    /// `start`, `progress`, `done`, `cached`, `optional-missing`, `failed`, or `complete`.
     /// `bytes` and `total` apply to `start` and `progress`. A negative `total`
     /// means that the response did not provide a content length. `target`
-    /// applies to `done` and `cached`. `reason` applies to failures. For
-    /// `complete`, `coordinate` is `all` and `reason` is the summary.
+    /// applies to `done` and `cached`. `reason` explains plan and failure
+    /// events. For `complete`, `coordinate` is `all` and `reason` is the summary.
     public record Event(String type, String coordinate, long bytes, long total,
             String target, String reason) {
         public Event {
@@ -198,8 +208,15 @@ public final class Add {
             var sources = repositories == null || repositories.isEmpty() ? List.of(CENTRAL)
                     : repositories.stream().map(Add::repository).distinct().toList();
             Files.createDirectories(layout.vendor());
+            var staging = layout.vendor().resolve(".tuul").resolve("staging-" + UUID.randomUUID());
+            Files.createDirectories(staging);
             try (var session = fetch.session().redirects(Redirects.BROWSER)) {
-                return run(coordinates, out, mode, new MavenServices(layout.vendor(), sources, session));
+                var services = new MavenServices(layout.vendor(), staging, sources, session);
+                var result = run(coordinates, out, mode, services);
+                if (result.ok()) services.publish();
+                return result;
+            } finally {
+                delete(staging);
             }
         }
 
@@ -248,7 +265,9 @@ public final class Add {
         List<Coordinate> artifacts;
         for (var root : roots) progress.publish(Event.resolve(root.text()));
         try {
-            artifacts = services.resolve(roots.stream().map(Coordinate::text).toList()).stream()
+            var resolved = services.resolve(roots.stream().map(Coordinate::text).toList());
+            for (var event : resolved.plan()) progress.publish(event);
+            artifacts = resolved.artifacts().stream()
                     .map(Coordinate::parse).toList();
             for (var root : roots) progress.publish(Event.resolved(root.text(), artifacts.size()));
         } catch (Exception failure) {
@@ -293,29 +312,49 @@ public final class Add {
 
     private static final class MavenServices implements Services {
         private final Path vendor;
+        private final Path staging;
+        private final Path tree;
         private final List<URI> repositories;
         private final fetch.Session session;
+        private Maven.Resolution resolution;
 
-        private MavenServices(Path vendor, List<URI> repositories, fetch.Session session) {
+        private MavenServices(Path vendor, Path staging, List<URI> repositories, fetch.Session session) {
             this.vendor = vendor;
+            this.staging = staging;
+            this.tree = staging.resolve("tree");
             this.repositories = repositories;
             this.session = session;
         }
 
         @Override
-        public List<String> resolve(List<String> coordinates) throws Exception {
-            return new Maven.Resolver(session, repositories)
-                    .resolve(coordinates.stream().map(Coordinate::parse).toList()).selected().stream()
-                    .map(node -> node.coordinate().text()).toList();
+        public Resolved resolve(List<String> coordinates) throws Exception {
+            resolution = new Maven.Resolver(session, repositories)
+                    .resolve(coordinates.stream().map(Coordinate::parse).toList());
+            var plan = new ArrayList<Event>();
+            for (var node : resolution.runtime()) plan.add(new Event("selected", node.coordinate().text(), 0, 0, "",
+                    "runtime via " + String.join(" -> ", node.path())));
+            for (var node : resolution.test()) {
+                if (resolution.runtime().stream().anyMatch(runtime -> runtime.coordinate().equals(node.coordinate()))) continue;
+                plan.add(new Event("selected", node.coordinate().text(), 0, 0, "",
+                        "test via " + String.join(" -> ", node.path())));
+            }
+            for (var omitted : resolution.omitted()) plan.add(new Event("omitted",
+                    omitted.node().coordinate().text(), 0, 0, "", "selected " + omitted.selected().text()
+                            + " via " + String.join(" -> ", omitted.node().path())));
+            return new Resolved(resolution.selected().stream().map(node -> node.coordinate().wire()).toList(), plan);
         }
 
         @Override
         public Download download(String coordinate, String kind, Consumer<Event> events) throws Exception {
             var artifact = Artifact.of(Coordinate.parse(coordinate), kind);
-            var target = vendor.resolve(artifact.file());
-            if (Files.isRegularFile(target)) {
-                events.accept(Event.cached(artifact.label(), target.toString()));
-                return Download.cached(target.toString());
+            var relative = artifact.coordinate().directory().resolve(artifact.file());
+            var active = vendor.resolve(relative);
+            var target = tree.resolve(relative);
+            if (Files.isRegularFile(active)) {
+                Files.createDirectories(target.getParent());
+                Files.copy(active, target, StandardCopyOption.REPLACE_EXISTING);
+                events.accept(Event.cached(artifact.label(), active.toString()));
+                return Download.cached(active.toString());
             }
 
             Files.createDirectories(target.getParent());
@@ -327,7 +366,7 @@ public final class Add {
                     if (response.status() == 404) continue;
                     response.requireSuccess();
                     write(response, artifact, target, events);
-                    return Download.downloaded(target.toString());
+                    return Download.downloaded(active.toString());
                 } catch (HttpException missingOrBroken) {
                     last = missingOrBroken;
                     if (missingOrBroken.status() != 404) break;
@@ -344,6 +383,24 @@ public final class Add {
             }
             events.accept(Event.failed(artifact.label(), reason));
             return Download.failed(reason);
+        }
+
+        private void publish() throws IOException {
+            if (resolution == null) throw new IOException("Maven resolution is missing");
+            var files = new ArrayList<Path>();
+            if (Files.isDirectory(tree)) {
+                try (var paths = Files.walk(tree)) {
+                    files.addAll(paths.filter(Files::isRegularFile).sorted().map(tree::relativize).toList());
+                }
+            }
+            var metadata = staging.resolve("resolution.json");
+            try (var writer = Files.newBufferedWriter(metadata)) {
+                resolutionJson(resolution, files).write(writer);
+            }
+            publishTree(vendor, tree, staging.resolve("backup"));
+            var state = vendor.resolve(".tuul");
+            Files.createDirectories(state);
+            move(metadata, state.resolve("resolution.json"));
         }
     }
 
@@ -416,6 +473,92 @@ public final class Add {
         }
     }
 
+    private static void publishTree(Path vendor, Path tree, Path backup) throws IOException {
+        if (!Files.isDirectory(tree)) return;
+        var directories = new LinkedHashSet<Path>();
+        try (var paths = Files.walk(tree)) {
+            for (var file : paths.filter(Files::isRegularFile).toList()) directories.add(file.getParent());
+        }
+        var published = new ArrayList<Path>();
+        var replaced = new ArrayList<Path>();
+        try {
+            for (var directory : directories) {
+                var relative = tree.relativize(directory);
+                if (relative.getNameCount() != 3) throw new IOException("invalid staged Maven directory " + relative);
+                var target = vendor.resolve(relative).normalize();
+                if (!target.startsWith(vendor.normalize())) throw new IOException("staged path escapes vendor: " + relative);
+                if (Files.exists(target)) {
+                    var saved = backup.resolve(relative);
+                    Files.createDirectories(saved.getParent());
+                    move(target, saved);
+                    replaced.add(relative);
+                }
+                Files.createDirectories(target.getParent());
+                move(directory, target);
+                published.add(relative);
+            }
+        } catch (IOException failure) {
+            for (var relative : published.reversed()) deleteWithin(vendor, vendor.resolve(relative));
+            for (var relative : replaced.reversed()) {
+                var saved = backup.resolve(relative);
+                if (Files.exists(saved)) move(saved, vendor.resolve(relative));
+            }
+            throw failure;
+        }
+        deleteWithin(stagingParent(backup), backup);
+    }
+
+    private static Json resolutionJson(Maven.Resolution resolution, List<Path> files) {
+        var runtime = resolution.runtime().stream().map(Add::nodeJson).map(value -> (Json) value).toList();
+        var test = resolution.test().stream().map(Add::nodeJson).map(value -> (Json) value).toList();
+        var omitted = resolution.omitted().stream().map(entry -> (Json) nodeJson(entry.node())
+                .with("selected", entry.selected().text()).with("reason", entry.reason())).toList();
+        return Json.Object.of()
+                .with("version", 1)
+                .with("roots", Json.Array.strings(resolution.roots().stream().map(Coordinate::text).toList()))
+                .with("runtime", Json.Array.of(runtime))
+                .with("test", Json.Array.of(test))
+                .with("omitted", Json.Array.of(omitted))
+                .with("files", Json.Array.strings(files.stream().map(Path::toString).toList()));
+    }
+
+    private static Json.Object nodeJson(Maven.Node node) {
+        var coordinate = node.coordinate();
+        return Json.Object.of().with("coordinate", coordinate.text())
+                .with("group", coordinate.group()).with("artifact", coordinate.artifact())
+                .with("version", coordinate.version()).with("type", coordinate.type())
+                .with("classifier", coordinate.classifier()).with("scope", node.scope())
+                .with("repository", node.repository().toString())
+                .with("path", Json.Array.strings(node.path()))
+                .with("relocatedFrom", node.relocatedFrom());
+    }
+
+    private static Path stagingParent(Path path) {
+        var parent = path.getParent();
+        return parent == null ? path : parent;
+    }
+
+    private static void delete(Path staging) throws IOException {
+        var name = staging.getFileName() == null ? "" : staging.getFileName().toString();
+        if (!name.startsWith("staging-") || staging.getParent() == null
+                || !staging.getParent().getFileName().toString().equals(".tuul")) {
+            throw new IOException("refusing to delete an invalid staging directory: " + staging);
+        }
+        deleteWithin(staging.getParent(), staging);
+    }
+
+    private static void deleteWithin(Path base, Path target) throws IOException {
+        var normalizedBase = base.toAbsolutePath().normalize();
+        var normalizedTarget = target.toAbsolutePath().normalize();
+        if (normalizedTarget.equals(normalizedBase) || !normalizedTarget.startsWith(normalizedBase)) {
+            throw new IOException("refusing to delete outside " + base + ": " + target);
+        }
+        if (!Files.exists(target)) return;
+        try (var paths = Files.walk(target)) {
+            for (var path : paths.sorted(Comparator.reverseOrder()).toList()) Files.deleteIfExists(path);
+        }
+    }
+
     private static Result result(Message answer) {
         var downloaded = strings(answer.list("downloaded"));
         var cached = strings(answer.list("cached"));
@@ -437,17 +580,24 @@ public final class Add {
         static Coordinate parse(String text) {
             if (text == null || text.isBlank()) throw new IllegalArgumentException("empty Maven coordinate");
             var parts = text.split(":", -1);
-            if (parts.length != 3 && parts.length != 4)
+            if (parts.length != 3 && parts.length != 4 && parts.length != 5)
                 throw new IllegalArgumentException("Maven coordinate must be group:artifact:version[:classifier]: " + text);
             for (var part : parts) {
                 if (part.isEmpty() || !part.chars().allMatch(c -> Character.isLetterOrDigit(c) || c == '.' || c == '-' || c == '_'))
                     throw new IllegalArgumentException("invalid Maven coordinate: " + text);
             }
-            return new Coordinate(parts[0], parts[1], parts[2], "jar", parts.length == 4 ? parts[3] : "");
+            return parts.length == 5
+                    ? new Coordinate(parts[0], parts[1], parts[2], parts[3], parts[4])
+                    : new Coordinate(parts[0], parts[1], parts[2], "jar", parts.length == 4 ? parts[3] : "");
         }
 
         String text() {
+            if (!type.equals("jar")) return wire();
             return group + ":" + artifact + ":" + version + (classifier.isEmpty() ? "" : ":" + classifier);
+        }
+
+        String wire() {
+            return type.equals("jar") ? text() : group + ":" + artifact + ":" + version + ":" + type + ":" + classifier;
         }
 
         String file() {
@@ -490,6 +640,10 @@ public final class Add {
 
         String conflictKey() {
             return group + ":" + artifact + ":" + type + ":" + classifier;
+        }
+
+        Path directory() {
+            return Path.of(group, artifact, version);
         }
     }
 

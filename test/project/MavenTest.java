@@ -120,7 +120,8 @@ public final class MavenTest {
 
     private static Maven.Resolution resolve(Map<String, String> poms, String... roots) throws Exception {
         return new Maven.Resolver(coordinate -> {
-            var xml = poms.get(coordinate.text());
+            var key = coordinate.group() + ":" + coordinate.artifact() + ":" + coordinate.version();
+            var xml = poms.get(key);
             if (xml == null) throw new IOException("missing fixture POM " + coordinate.text());
             return new Maven.PomDocument(xml, REPOSITORY);
         }).resolve(java.util.Arrays.stream(roots).map(Add.Coordinate::parse).toList());

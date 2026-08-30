@@ -57,10 +57,13 @@ public final class AddIntegrationTest {
             Check.that("transitive artifacts and supplements download",
                     result.ok() && result.downloaded().size() == 6);
             Check.that("all resolved files land in vendor", List.of(
-                    "one-1.0.jar", "one-1.0-sources.jar", "one-1.0-javadoc.jar",
-                    "two-2.0.jar", "two-2.0-sources.jar", "two-2.0-javadoc.jar").stream()
+                    "com.acme/one/1.0/one-1.0.jar", "com.acme/one/1.0/one-1.0-sources.jar",
+                    "com.acme/one/1.0/one-1.0-javadoc.jar", "com.acme/two/2.0/two-2.0.jar",
+                    "com.acme/two/2.0/two-2.0-sources.jar", "com.acme/two/2.0/two-2.0-javadoc.jar").stream()
                     .map(file -> Files.isRegularFile(root.resolve("vendor").resolve(file)))
                     .allMatch(Boolean.TRUE::equals));
+            Check.that("a successful add publishes the selected graph",
+                    Files.readString(root.resolve("vendor/.tuul/resolution.json")).contains("\"coordinate\":\"com.acme:two:2.0\""));
             Check.that("plain output is an event stream", output.toString().contains("add.resolve com.acme:one:1.0")
                     && output.toString().contains("add.resolved com.acme:one:1.0 2 artifacts")
                     && output.toString().contains("add.done com.acme:two:2.0:sources")
