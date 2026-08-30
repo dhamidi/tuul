@@ -1,4 +1,4 @@
-package web.controllers;
+package web.uploads;
 
 import java.util.List;
 import java.util.Optional;

@@ -1,13 +1,8 @@
-package web.controllers;
+package web;
 
 import java.io.IOException;
 import java.util.List;
 import java.util.Optional;
-import web.Request;
-import web.Response;
-import web.Responses;
-import web.Status;
-import web.ui.Html;
 
 /// Answering the same question differently depending on who asked.
 ///
@@ -62,7 +57,7 @@ public final class Negotiate {
     ///
     /// The redirect is a 303: a 302 is repeated as a POST by anything that
     /// follows the specification, Turbo included.
-    public static void stream(Request request, Response response, Html updates, String location) throws IOException {
+    public static void stream(Request request, Response response, Markup updates, String location) throws IOException {
         if (wantsStream(request)) Responses.turbo(updates, response);
         else Responses.redirect(location, Status.SEE_OTHER, response);
     }

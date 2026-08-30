@@ -33,10 +33,10 @@ public final class Middlewares {
     ///
     /// A bound is necessary, because the body is a stream of any length and
     /// reading all of it into memory is how a server is used up. This is the
-    /// same number as the default [web.controllers.Limits#fieldBytes()], which
+    /// same number as the default [web.uploads.Limits#fieldBytes()], which
     /// is what one form field is allowed to be — and `_method` is one form
     /// field, near the front of the body. The number is repeated rather than
-    /// read, because `web` does not depend on `web.controllers`.
+    /// read, because `web` does not depend on `web.uploads`.
     ///
     /// A body longer than this is not searched, and it reaches the handler
     /// whole.

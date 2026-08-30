@@ -1,10 +1,9 @@
-package web.controllers;
+package web;
 
 import java.util.ArrayList;
 import java.util.List;
 import java.util.Locale;
 import java.util.Optional;
-import web.Request;
 
 /// What a client said it would take, in the order it meant.
 ///

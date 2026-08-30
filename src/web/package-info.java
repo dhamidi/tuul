@@ -54,6 +54,18 @@
 /// `routes.path("post", Map.of("slug", "hello"))` for a link, and no handler
 /// writes a URL as a string.
 ///
+/// ## Request values and answers
+///
+/// [web.Headers] and [web.Parameters] read the values that arrive with a
+/// request. [Cookie] builds one `Set-Cookie` value. [Cookies] reads the
+/// `Cookie` header and adds or clears response cookies. These cookie helpers
+/// live in `web` because handlers use them without a session policy.
+///
+/// [Accept] reads the media ranges in an `Accept` header. [Negotiate] chooses
+/// one server offer or writes the Turbo Stream or redirect answer for a form
+/// submission. These types also live in `web` because content negotiation is
+/// part of the request path.
+///
 /// ## Features
 ///
 /// A package can bring routes, handlers, files and import-map pins with it. A
@@ -120,8 +132,10 @@
 ///     what somebody sent, and draws the form again with the errors in it.
 ///   - [web.assets] digests a file name, serves the file as immutable, and
 ///     pins ES modules in an import map. There is no bundler and no build step.
-///   - [web.controllers] holds what every request needs: content negotiation,
-///     cookies, signed sessions, CSRF tokens, and file uploads.
+///   - [web.sessions] provides signed-cookie sessions and CSRF middleware. The
+///     server trusts cookie contents only after their signature verifies.
+///   - [web.uploads] streams multipart parts to disk. It keeps the client
+///     filename as a label and chooses the stored filename.
 ///   - [web.cable] sends events to connected clients over `text/event-stream`.
 ///   - [web.serve] binds a server. `Http` is `jdk.httpserver`, and `Memory` is
 ///     the same interfaces with no socket.

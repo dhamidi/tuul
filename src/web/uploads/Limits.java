@@ -1,4 +1,4 @@
-package web.controllers;
+package web.uploads;
 
 /// What an upload is allowed to be.
 ///
@@ -18,7 +18,7 @@ public record Limits(long partBytes, long totalBytes, int parts, int headerBytes
 
     public Limits {
         if (partBytes <= 0 || totalBytes <= 0 || parts <= 0 || headerBytes <= 0 || fieldBytes <= 0) {
-            throw new ControllerException("every upload limit has to be a positive number: " + partBytes + ", "
+            throw new IllegalArgumentException("every upload limit has to be a positive number: " + partBytes + ", "
                     + totalBytes + ", " + parts + ", " + headerBytes + ", " + fieldBytes);
         }
     }
@@ -41,7 +41,7 @@ public record Limits(long partBytes, long totalBytes, int parts, int headerBytes
 
     /// The failure, in the same words wherever it is raised, with the status
     /// that says a client sent too much rather than something wrong.
-    static ControllerException exceeded(String what, long limit) {
-        return new ControllerException(what + " is larger than the " + limit + " bytes this server accepts", 413);
+    static UploadException exceeded(String what, long limit) {
+        return new UploadException(what + " is larger than the " + limit + " bytes this server accepts", 413);
     }
 }

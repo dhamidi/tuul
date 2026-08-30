@@ -1,4 +1,4 @@
-package web.controllers;
+package web.uploads;
 
 import java.io.ByteArrayInputStream;
 import java.io.Closeable;
@@ -69,10 +69,10 @@ public final class Multipart implements Closeable {
 
     public static Multipart of(Request request, Limits limits) {
         if (!is(request)) {
-            throw new ControllerException("this is a " + request.type() + " rather than a " + TYPE);
+            throw new UploadException("this is a " + request.type() + " rather than a " + TYPE);
         }
         var boundary = parameter(request.headers().first("Content-Type", ""), "boundary")
-                .orElseThrow(() -> new ControllerException("a " + TYPE + " body with no boundary to split it on"));
+                .orElseThrow(() -> new UploadException("a " + TYPE + " body with no boundary to split it on"));
         return new Multipart(request.body(), boundary, limits);
     }
 
@@ -93,12 +93,12 @@ public final class Multipart implements Closeable {
             return Optional.empty();
         }
         if (++parts > limits.parts()) {
-            throw new ControllerException("more than " + limits.parts() + " parts in one upload", 413);
+            throw new UploadException("more than " + limits.parts() + " parts in one upload", 413);
         }
         var headers = headers();
         var disposition = headers.first("Content-Disposition", "");
         var name = parameter(disposition, "name")
-                .orElseThrow(() -> new ControllerException("a part with no name in its Content-Disposition"));
+                .orElseThrow(() -> new UploadException("a part with no name in its Content-Disposition"));
         current = new Body();
         return Optional.of(new Part(name, parameter(disposition, "filename"),
                 headers.first("Content-Type", "text/plain"), headers, current, limits.fieldBytes()));
@@ -237,8 +237,8 @@ public final class Multipart implements Closeable {
         if (total > limits.totalBytes()) throw Limits.exceeded("this upload", limits.totalBytes());
     }
 
-    private ControllerException malformed(String what) {
-        return new ControllerException(what);
+    private UploadException malformed(String what) {
+        return new UploadException(what);
     }
 
     /// The stream of one part: everything up to the next delimiter, and never a

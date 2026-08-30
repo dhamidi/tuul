@@ -20,7 +20,7 @@ up to our modern JDK 27 standard:
    - `web.assets`: a library integrating with file systems for efficient serving of assets,
    - `web.dispatch`: a bidirectional router for named routes, based on URI-templates, used for constructing and recognizing urls,
    - `web.forms`: capturing an incoming request as a message, and rendering that message back to the user with what was wrong with it — the part of ActiveRecord that is about the round trip, not the part that is about a database,
-   - `web.controllers`: controllers are building blocks for request handlers and take care of HTTP protocol details like redirects, content-negotiation, etc,
+   - A `web.Handler` or a `web.Page` answers a request,
    - `web.cable`: ActionCable-inspired live dispatch of events to connected clients,
    - `web.hyperspec`: a TCL-like DSL, interpreter, and harness runner for testing hypermedia applications, testing affordances, using them (following links, filling forms, following redirects, etc) and nothing else.  Asserts are against navigation state, requests made, resource attributes and affordances.
    - backed by jdk.httpserver

@@ -1,4 +1,4 @@
-package web.controllers;
+package web.sessions;
 
 import java.io.IOException;
 import java.io.StringReader;
@@ -8,8 +8,11 @@ import java.time.Duration;
 import java.time.Instant;
 import java.util.Optional;
 import json.Json;
+import web.Cookie;
+import web.Cookies;
 import web.Handler;
 import web.Middleware;
+import web.Negotiate;
 import web.Request;
 import web.Response;
 import web.Responses;
@@ -111,7 +114,7 @@ public final class Sessions {
         try {
             payload.write(value);
         } catch (IOException impossible) {
-            throw new ControllerException("a session that cannot be written: " + impossible.getMessage());
+            throw new IllegalStateException("a session that cannot be written: " + impossible.getMessage());
         }
         var cookie = Cookie.of(name, signature.sign(value.toString()))
                 .lasting(age)

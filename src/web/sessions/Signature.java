@@ -1,4 +1,4 @@
-package web.controllers;
+package web.sessions;
 
 import java.nio.charset.StandardCharsets;
 import java.security.GeneralSecurityException;
@@ -31,7 +31,7 @@ public final class Signature {
 
     private Signature(byte[] secret) {
         if (secret.length < 16) {
-            throw new ControllerException("a signing secret needs at least 16 bytes, this one has " + secret.length);
+            throw new IllegalArgumentException("a signing secret needs at least 16 bytes, this one has " + secret.length);
         }
         this.secret = secret.clone();
     }
@@ -74,7 +74,7 @@ public final class Signature {
             mac.init(new SecretKeySpec(secret, ALGORITHM));
             return mac.doFinal(payload.getBytes(StandardCharsets.US_ASCII));
         } catch (GeneralSecurityException e) {
-            throw new ControllerException("this runtime cannot " + ALGORITHM + ": " + e.getMessage());
+            throw new IllegalStateException("this runtime cannot " + ALGORITHM + ": " + e.getMessage());
         }
     }
 

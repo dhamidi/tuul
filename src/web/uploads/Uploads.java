@@ -1,4 +1,4 @@
-package web.controllers;
+package web.uploads;
 
 import java.io.IOException;
 import java.io.OutputStream;
@@ -92,7 +92,7 @@ public final class Uploads {
         var name = HexFormat.of().formatHex(token) + extension(suggested);
         var stored = directory.resolve(name).normalize();
         if (!stored.startsWith(directory.normalize())) {
-            throw new ControllerException("an upload would have landed outside " + directory);
+            throw new UploadException("an upload would have landed outside " + directory);
         }
         return stored;
     }

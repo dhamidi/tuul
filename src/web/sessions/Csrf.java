@@ -1,4 +1,4 @@
-package web.controllers;
+package web.sessions;
 
 import java.io.ByteArrayInputStream;
 import java.io.IOException;
@@ -6,7 +6,10 @@ import java.nio.charset.StandardCharsets;
 import java.security.MessageDigest;
 import java.security.SecureRandom;
 import java.util.Base64;
+import java.util.Optional;
 import java.util.Set;
+import web.Cookie;
+import web.Cookies;
 import web.Middleware;
 import web.Parameters;
 import web.Request;
@@ -101,12 +104,13 @@ public final class Csrf {
                 next.handle(request.with(ATTRIBUTE, token), response);
                 return;
             }
-            var offered = offered(request);
-            if (!matches(token, offered.token())) {
+            var offered = offered(request, response);
+            if (offered.isEmpty()) return;
+            if (!matches(token, offered.get().token())) {
                 Responses.text("the form was not sent from a page this server issued", Status.FORBIDDEN, response);
                 return;
             }
-            next.handle(offered.request().with(ATTRIBUTE, token), response);
+            next.handle(offered.get().request().with(ATTRIBUTE, token), response);
         };
     }
 
@@ -119,18 +123,23 @@ public final class Csrf {
     /// one that still has it.
     private record Offered(Request request, String token) {}
 
-    private Offered offered(Request request) throws IOException {
+    private Optional<Offered> offered(Request request, Response response) throws IOException {
         var header = request.header(HEADER).orElse("");
-        if (!header.isEmpty()) return new Offered(request, header);
+        if (!header.isEmpty()) return Optional.of(new Offered(request, header));
 
         var query = request.query().first(FIELD, "");
-        if (!query.isEmpty()) return new Offered(request, query);
+        if (!query.isEmpty()) return Optional.of(new Offered(request, query));
 
-        if (!request.type().equals(FORM)) return new Offered(request, "");
+        if (!request.type().equals(FORM)) return Optional.of(new Offered(request, ""));
         var body = read(request);
+        if (body.length > bodyBytes) {
+            Responses.text("a form of more than " + bodyBytes + " bytes will not be read to find a "
+                    + FIELD + " — send it in the " + HEADER + " header", 413, response);
+            return Optional.empty();
+        }
         var restored = request.body(new ByteArrayInputStream(body));
         var form = Parameters.parse(new String(body, StandardCharsets.UTF_8));
-        return new Offered(restored, form.first(FIELD, ""));
+        return Optional.of(new Offered(restored, form.first(FIELD, "")));
     }
 
     /// Reads the body, and refuses one larger than it agreed to read. Reading
@@ -138,10 +147,6 @@ public final class Csrf {
     /// fits and one that claims to.
     private byte[] read(Request request) throws IOException {
         var body = request.body().readNBytes((int) Math.min(bodyBytes + 1, Integer.MAX_VALUE));
-        if (body.length > bodyBytes) {
-            throw new ControllerException("a form of more than " + bodyBytes + " bytes will not be read to find a "
-                    + FIELD + " — send it in the " + HEADER + " header", 413);
-        }
         return body;
     }
 

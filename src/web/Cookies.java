@@ -1,19 +1,17 @@
-package web.controllers;
+package web;
 
 import java.time.Duration;
 import java.util.LinkedHashMap;
 import java.util.Map;
 import java.util.Optional;
-import web.Request;
-import web.Response;
 
 /// Reading what a client sent back, and saying what to keep.
 ///
 /// A request carries every cookie in one header, separated by semicolons; a
 /// response sets them one header each, which is why [web.Headers] keeps values
 /// that repeat. Nothing here decodes a value: what goes in comes out, and a
-/// caller that wants to store something a cookie cannot hold encodes it — see
-/// [Signature], which is what both users of this package do.
+/// caller that wants to store something a cookie cannot hold encodes it. See
+/// [web.sessions.Signature], which sessions and CSRF use for cookie values.
 public final class Cookies {
 
     private Cookies() {}

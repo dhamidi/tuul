@@ -153,8 +153,8 @@ public record Feature(String name, String mount, List<Path> assets, Map<String, 
     /// A session that is read for some requests and not others is not a
     /// session, and a check that some paths skip is not a check, so what is
     /// declared here runs for every request the application answers —
-    /// including the ones that match no route. [web.controllers.Sessions#middleware()]
-    /// and [web.controllers.Csrf#middleware()] are the two this exists for.
+    /// including the ones that match no route. [web.sessions.Sessions#middleware()]
+    /// and [web.sessions.Csrf#middleware()] are the two this exists for.
     ///
     /// **A guard on one route is not this.** A wrapper that protects a single
     /// handler is spelled where that handler is named, and needs nothing from

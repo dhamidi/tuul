@@ -1,4 +1,4 @@
-package web.controllers;
+package web;
 
 import java.time.Duration;
 import java.util.Optional;
@@ -72,7 +72,7 @@ public record Cookie(
     private static void refuse(String text, String what) {
         for (var character : text.toCharArray()) {
             if (character < 0x21 || character > 0x7e || character == ';' || character == ',' || character == '"') {
-                throw new ControllerException("a cookie " + what + " cannot contain " + describe(character)
+                throw new IllegalArgumentException("a cookie " + what + " cannot contain " + describe(character)
                         + " — encode it first");
             }
         }

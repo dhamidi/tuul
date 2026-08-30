@@ -1,4 +1,4 @@
-package web.controllers;
+package web.uploads;
 
 import java.io.IOException;
 import java.io.InputStream;

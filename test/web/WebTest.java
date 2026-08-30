@@ -14,6 +14,7 @@ import java.net.http.HttpClient;
 import java.net.http.HttpRequest;
 import java.net.http.HttpResponse;
 import java.nio.file.Files;
+import java.time.Duration;
 import java.util.List;
 import java.util.Map;
 import java.util.concurrent.CopyOnWriteArrayList;
@@ -24,6 +25,7 @@ import web.dispatch.Router;
 import web.serve.Http;
 import web.serve.Memory;
 import web.ui.Tags;
+import web.ui.Turbo;
 
 public final class WebTest {
 
@@ -32,6 +34,9 @@ public final class WebTest {
     public static void run() throws Exception {
         headers();
         parameters();
+        cookies();
+        accept();
+        negotiate();
         requests();
         boundary();
         recording();
@@ -74,6 +79,82 @@ public final class WebTest {
                 "b", Parameters.parse("x=a").and(Parameters.parse("x=b")).first("x", ""));
         Check.equal("and it survives being written back out",
                 "a b", Parameters.parse(Parameters.parse("q=a+b").encoded()).first("q", ""));
+    }
+
+    private static void accept() {
+        var accept = Accept.parse("text/html, application/xml;q=0.9, */*;q=0.8");
+        Check.equal("what was named outright is preferred", 1.0, accept.quality("text/html"));
+        Check.equal("what was named with a quality has it", 0.9, accept.quality("application/xml"));
+        Check.equal("anything else falls to the wildcard", 0.8, accept.quality("image/png"));
+        Check.equal("and the best on offer is the one it likes most",
+                "text/html", accept.best("application/xml", "text/html").orElse(""));
+
+        Check.equal("the most specific range decides, not the last one",
+                1.0, Accept.parse("text/*;q=0.2, text/html").quality("text/html"));
+        Check.equal("and a type range still covers its subtypes",
+                0.2, Accept.parse("text/*;q=0.2, text/html").quality("text/plain"));
+
+        Check.equal("a tie goes to what the server offered first",
+                "text/html", Accept.parse("*/*").best("text/html", "application/json").orElse(""));
+        Check.equal("and the server's order is the only thing that breaks it",
+                "application/json", Accept.parse("*/*").best("application/json", "text/html").orElse(""));
+
+        Check.that("a quality of zero is a refusal, not a preference",
+                !Accept.parse("*/*, image/gif;q=0").accepts("image/gif"));
+        Check.that("something refused is never the best",
+                Accept.parse("image/gif;q=0").best("image/gif").isEmpty());
+
+        Check.equal("no Accept header means anything will do", 1.0, Accept.parse("").quality("text/html"));
+        Check.equal("and so does a header nobody can read", 1.0, Accept.parse("text/html;q=banana").quality("text/html"));
+        Check.equal("a quoted comma is not a separator",
+                1, Accept.parse("text/html;label=\"a,b\"").ranges().size());
+    }
+
+    /// The decision this package exists to make.
+    private static void negotiate() throws Exception {
+        Handler handler = (request, response) ->
+                Negotiate.stream(request, response, Turbo.replace("notes", Tags.div(Tags.text("saved"))), "/notes");
+
+        var turbo = Memory.handle(handler, request("POST", "/notes",
+                "Accept", "text/vnd.turbo-stream.html, text/html, application/xhtml+xml"));
+        Check.equal("Turbo asked for a stream and gets one", Status.OK, turbo.status());
+        Check.equal("with the content type that makes it a stream",
+                Responses.TURBO_STREAM + "; charset=utf-8", turbo.header("Content-Type").orElse(""));
+        Check.that("carrying the update", turbo.text().contains("<turbo-stream action=\"replace\""));
+
+        var browser = Memory.handle(handler, request("POST", "/notes",
+                "Accept", "text/html,application/xhtml+xml,application/xml;q=0.9,*/*;q=0.8"));
+        Check.equal("a browser without Turbo is redirected instead", Status.SEE_OTHER, browser.status());
+        Check.equal("to somewhere it can see what happened", "/notes", browser.header("Location").orElse(""));
+        Check.equal("and a 303, or the form is submitted again", 303, browser.status());
+
+        Check.that("a page request accepts */* but does not want a stream",
+                !Negotiate.wantsStream(request("GET", "/notes", "Accept", "text/html,*/*;q=0.8")));
+    }
+
+    private static void cookies() {
+        var request = request("GET", "/", "Cookie", "session=abc; csrf=def");
+        Check.equal("cookies arrive in one header", "abc", Cookies.first(request, "session").orElse(""));
+        Check.equal("all of them", "def", Cookies.first(request, "csrf").orElse(""));
+        Check.that("and one nobody sent is absent", Cookies.first(request, "other").isEmpty());
+
+        var cookie = Cookie.of("session", "value");
+        Check.equal("a cookie defaults to the safe answers",
+                "session=value; Path=/; HttpOnly; SameSite=Lax", cookie.header());
+        Check.equal("an age is in seconds, as the header wants it",
+                "session=value; Path=/; Max-Age=3600; HttpOnly; SameSite=Lax",
+                cookie.lasting(Duration.ofHours(1)).header());
+
+        Check.throwing("a value that would end the header is refused",
+                () -> Cookie.of("session", "a\r\nSet-Cookie: admin=1"));
+        Check.throwing("and so is a name that would",
+                () -> Cookie.of("a\nb", "value"));
+        Check.throwing("and a value with a semicolon in it, which would be two cookies",
+                () -> Cookie.of("session", "a;b"));
+    }
+
+    private static Request request(String method, String path, String name, String value) {
+        return Request.of(method, path, Headers.of(name, value), Request.body(""));
     }
 
     private static void requests() throws IOException {

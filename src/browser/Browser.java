@@ -27,7 +27,7 @@ import web.assets.Assets;
 import web.assets.Bundled;
 import web.cable.Cable;
 import web.cable.Topics;
-import web.controllers.Negotiate;
+import web.Negotiate;
 import web.dispatch.Router;
 import web.forms.Submission;
 import web.ui.Html;

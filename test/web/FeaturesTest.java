@@ -233,18 +233,18 @@ public final class FeaturesTest {
 
     /// The two scopes, and the fact that only one of them needed building.
     ///
-    /// `web.controllers` already produces both kinds: [web.controllers.Sessions#middleware()]
-    /// belongs around the whole application, and [web.controllers.Sessions#required(String)]
+    /// `web.sessions` already produces both kinds: [web.sessions.Sessions#middleware()]
+    /// belongs around the whole application, and [web.sessions.Sessions#required(String)]
     /// guards one route. The second needs nothing from [Feature] — it is spelled
     /// on the handler where the route is named — so there is one way to say each
     /// and they do not overlap.
     private static void guarding() throws Exception {
-        var sessions = web.controllers.Sessions.of(web.controllers.Signature.of("a-test-secret-that-is-long-enough"));
+        var sessions = web.sessions.Sessions.of(web.sessions.Signature.of("a-test-secret-that-is-long-enough"));
 
         var feature = Feature.named("app")
                 .wrappedBy(sessions.middleware())
                 .get("open", "/open", (request, response) ->
-                        Responses.text("session=" + web.controllers.Sessions.of(request).present(), response))
+                        Responses.text("session=" + web.sessions.Sessions.of(request).present(), response))
                 .get("shut", "/shut",
                         ((Handler) (request, response) -> Responses.text("secret", response))
                                 .wrappedBy(sessions.required("/sign-in")));

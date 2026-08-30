@@ -35,11 +35,12 @@ module tuul {
     exports web;
     exports web.assets;
     exports web.cable;
-    exports web.controllers;
     exports web.dispatch;
     exports web.forms;
     exports web.hyperspec;
     exports web.serve;
+    exports web.sessions;
     exports web.text;
     exports web.ui;
+    exports web.uploads;
 }
