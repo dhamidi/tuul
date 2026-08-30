@@ -10,7 +10,6 @@ import application.Effect;
 import application.Message;
 import application.Step;
 import fetch.Fetch;
-import fetch.HttpException;
 import fetch.Redirects;
 import fetch.Response;
 import java.io.IOException;
@@ -19,6 +18,8 @@ import java.net.URI;
 import java.nio.file.Files;
 import java.nio.file.Path;
 import java.nio.file.StandardCopyOption;
+import java.security.MessageDigest;
+import java.security.NoSuchAlgorithmException;
 import java.time.Duration;
 import java.util.ArrayList;
 import java.util.Comparator;
@@ -27,7 +28,10 @@ import java.util.LinkedHashSet;
 import java.util.List;
 import java.util.Map;
 import java.util.UUID;
+import java.util.concurrent.ConcurrentHashMap;
 import java.util.function.Consumer;
+import java.util.jar.JarFile;
+import java.util.Properties;
 import json.Json;
 
 /// Resolves and downloads Maven artifacts into a project's `vendor/`.
@@ -110,7 +114,8 @@ public final class Add {
     /// A live change in one download. Subscribers must treat it as immutable.
     ///
     /// `type` is `resolve`, `resolved`, `resolve-failed`, `selected`, `omitted`,
-    /// `start`, `progress`, `done`, `cached`, `optional-missing`, `failed`, or `complete`.
+    /// `limits`, `warning`, `start`, `progress`, `done`, `cached`,
+    /// `optional-missing`, `failed`, or `complete`.
     /// `bytes` and `total` apply to `start` and `progress`. A negative `total`
     /// means that the response did not provide a content length. `target`
     /// applies to `done` and `cached`. `reason` explains plan and failure
@@ -183,7 +188,7 @@ public final class Add {
     private static final String RESULT = "add.result";
     private static final Duration ASK_DEADLINE = Duration.ofDays(1);
     private static final Duration ACTOR_EFFECT_DEADLINE = Duration.ofDays(1);
-    private static final int MAX_DOWNLOADS = 20;
+    private static final int MAX_DOWNLOADS = MavenTransport.GLOBAL_LIMIT;
     private static final long PROGRESS_BYTES = 64 * 1024;
     private static final long PROGRESS_NANOS = Duration.ofMillis(100).toNanos();
 
@@ -303,9 +308,9 @@ public final class Add {
     }
 
     private static URI repository(URI uri) {
-        if (uri == null || uri.getScheme() == null
+        if (uri == null || uri.getScheme() == null || uri.getUserInfo() != null
                 || !(uri.getScheme().equalsIgnoreCase("http") || uri.getScheme().equalsIgnoreCase("https"))) {
-            throw new IllegalArgumentException("repository must be an HTTP or HTTPS URI: " + uri);
+            throw new IllegalArgumentException("repository must be an HTTP or HTTPS URI without credentials: " + uri);
         }
         return URI.create(uri.toString().endsWith("/") ? uri.toString() : uri + "/");
     }
@@ -315,7 +320,9 @@ public final class Add {
         private final Path staging;
         private final Path tree;
         private final List<URI> repositories;
-        private final fetch.Session session;
+        private final MavenTransport transport;
+        private final Map<String, FileRecord> installed = new ConcurrentHashMap<>();
+        private final Map<String, String> optionalMissing = new ConcurrentHashMap<>();
         private Maven.Resolution resolution;
 
         private MavenServices(Path vendor, Path staging, List<URI> repositories, fetch.Session session) {
@@ -323,14 +330,16 @@ public final class Add {
             this.staging = staging;
             this.tree = staging.resolve("tree");
             this.repositories = repositories;
-            this.session = session;
+            this.transport = new MavenTransport(session);
         }
 
         @Override
         public Resolved resolve(List<String> coordinates) throws Exception {
-            resolution = new Maven.Resolver(session, repositories)
+            resolution = new Maven.Resolver(this::pom)
                     .resolve(coordinates.stream().map(Coordinate::parse).toList());
             var plan = new ArrayList<Event>();
+            plan.add(new Event("limits", "all", MavenTransport.GLOBAL_LIMIT, MavenTransport.ORIGIN_LIMIT,
+                    "", MavenTransport.GLOBAL_LIMIT + " global, " + MavenTransport.ORIGIN_LIMIT + " per origin"));
             for (var node : resolution.runtime()) plan.add(new Event("selected", node.coordinate().text(), 0, 0, "",
                     "runtime via " + String.join(" -> ", node.path())));
             for (var node : resolution.test()) {
@@ -353,6 +362,10 @@ public final class Add {
             if (Files.isRegularFile(active)) {
                 Files.createDirectories(target.getParent());
                 Files.copy(active, target, StandardCopyOption.REPLACE_EXISTING);
+                validateArchive(target, artifact);
+                var checksum = checksum(artifact, target, events);
+                installed.put(relative.toString(), new FileRecord(relative.toString(), artifact.label(), kind,
+                        checksum.algorithm(), checksum.value(), checksum.status(), checksum.repository()));
                 events.accept(Event.cached(artifact.label(), active.toString()));
                 return Download.cached(active.toString());
             }
@@ -361,16 +374,24 @@ public final class Add {
             events.accept(Event.start(artifact.label(), -1));
             Exception last = null;
             for (var repository : repositories) {
-                var uri = artifact.coordinate().uri(repository);
-                try (var response = session.get(uri).timeout(Duration.ofMinutes(2)).send()) {
-                    if (response.status() == 404) continue;
-                    response.requireSuccess();
-                    write(response, artifact, target, events);
+                var uri = artifact.uri(repository);
+                try {
+                    var bytes = transport.get(uri, artifact.label(), kind,
+                            response -> write(response, artifact, target, events));
+                    validateArchive(target, artifact);
+                    var checksum = checksum(artifact, target, events);
+                    installed.put(relative.toString(), new FileRecord(relative.toString(), artifact.label(), kind,
+                            checksum.algorithm(), checksum.value(), checksum.status(), checksum.repository()));
+                    events.accept(Event.done(artifact.label(), bytes, active.toString()));
                     return Download.downloaded(active.toString());
-                } catch (HttpException missingOrBroken) {
-                    last = missingOrBroken;
-                    if (missingOrBroken.status() != 404) break;
+                } catch (MavenTransport.Missing missing) {
+                    last = missing;
+                    continue;
+                } catch (MavenTransport.Permanent broken) {
+                    last = broken;
+                    break;
                 } catch (Exception failure) {
+                    if (Thread.currentThread().isInterrupted()) throw failure;
                     last = failure;
                     break;
                 }
@@ -378,6 +399,7 @@ public final class Add {
             var reason = last == null ? "artifact was not found in the configured repositories"
                     : last.getMessage() == null ? last.toString() : last.getMessage();
             if (artifact.optional()) {
+                optionalMissing.put(artifact.label(), reason);
                 events.accept(Event.optionalMissing(artifact.label(), reason));
                 return Download.optionalMissing(reason);
             }
@@ -387,20 +409,51 @@ public final class Add {
 
         private void publish() throws IOException {
             if (resolution == null) throw new IOException("Maven resolution is missing");
-            var files = new ArrayList<Path>();
-            if (Files.isDirectory(tree)) {
-                try (var paths = Files.walk(tree)) {
-                    files.addAll(paths.filter(Files::isRegularFile).sorted().map(tree::relativize).toList());
-                }
-            }
             var metadata = staging.resolve("resolution.json");
             try (var writer = Files.newBufferedWriter(metadata)) {
-                resolutionJson(resolution, files).write(writer);
+                resolutionJson(resolution, installed.values().stream()
+                        .sorted(java.util.Comparator.comparing(FileRecord::path)).toList(), optionalMissing).write(writer);
             }
             publishTree(vendor, tree, staging.resolve("backup"));
             var state = vendor.resolve(".tuul");
             Files.createDirectories(state);
             move(metadata, state.resolve("resolution.json"));
+        }
+
+        private Maven.PomDocument pom(Coordinate coordinate) throws IOException {
+            MavenTransport.Missing last = null;
+            for (var repository : repositories) {
+                try {
+                    var uri = coordinate.pomUri(repository);
+                    var xml = transport.get(uri, coordinate.text(), "pom", response -> response.text());
+                    return new Maven.PomDocument(xml, publicRepository(repository));
+                } catch (MavenTransport.Missing missing) {
+                    last = missing;
+                }
+            }
+            throw last == null ? new IOException("POM was not found for " + coordinate.text()) : last;
+        }
+
+        private Checksum checksum(Artifact artifact, Path target, Consumer<Event> events) throws IOException {
+            for (var algorithm : List.of("SHA-256", "SHA-1")) {
+                var suffix = algorithm.equals("SHA-256") ? ".sha256" : ".sha1";
+                for (var repository : repositories) {
+                    try {
+                        var uri = URI.create(artifact.uri(repository) + suffix);
+                        var expected = transport.get(uri, artifact.label(), "checksum " + algorithm,
+                                response -> response.text()).trim().split("\\s+", 2)[0].toLowerCase();
+                        var actual = digest(target, algorithm);
+                        if (!expected.equals(actual)) throw new MavenTransport.Permanent(artifact.label()
+                                + " checksum mismatch: expected " + expected + " but got " + actual);
+                        return new Checksum(algorithm, actual, "verified", publicRepository(repository).toString());
+                    } catch (MavenTransport.Missing missing) {
+                        continue;
+                    }
+                }
+            }
+            events.accept(new Event("warning", artifact.label(), 0, 0, "",
+                    "repository checksum metadata is unavailable"));
+            return new Checksum("", digest(target, "SHA-256"), "unavailable", "");
         }
     }
 
@@ -420,13 +473,14 @@ public final class Add {
                         .with("reason", result.reason()));
             }
         } catch (Exception failure) {
+            if (Thread.currentThread().isInterrupted()) throw new RuntimeException(failure);
             var reason = failure.getMessage() == null ? failure.toString() : failure.getMessage();
             progress.publish(Event.failed(artifact.label(), reason));
             emit.emit(Message.of(FAILED).with("coordinate", artifact.label()).with("reason", reason));
         }
     }
 
-    private static void write(Response response, Artifact artifact, Path target,
+    private static long write(Response response, Artifact artifact, Path target,
             Consumer<Event> events) throws IOException {
         var total = length(response);
         events.accept(Event.progress(artifact.label(), 0, total));
@@ -450,9 +504,58 @@ public final class Add {
                 }
             }
             move(temporary, target);
-            events.accept(Event.done(artifact.label(), bytes, target.toString()));
+            return bytes;
         } finally {
             Files.deleteIfExists(temporary);
+        }
+    }
+
+    private static void validateArchive(Path file, Artifact artifact) throws IOException {
+        try (var jar = new JarFile(file.toFile(), false)) {
+            var entries = jar.entries();
+            if (!entries.hasMoreElements()) throw new MavenTransport.Permanent(
+                    artifact.label() + " is an empty jar");
+            var metadata = "META-INF/maven/" + artifact.coordinate().group() + "/"
+                    + artifact.coordinate().artifact() + "/pom.properties";
+            var entry = jar.getJarEntry(metadata);
+            if (entry == null) return;
+            var properties = new Properties();
+            try (var input = jar.getInputStream(entry)) {
+                properties.load(input);
+            }
+            var coordinate = artifact.coordinate();
+            if (!coordinate.group().equals(properties.getProperty("groupId"))
+                    || !coordinate.artifact().equals(properties.getProperty("artifactId"))
+                    || !coordinate.version().equals(properties.getProperty("version"))) {
+                throw new MavenTransport.Permanent(artifact.label()
+                        + " jar metadata does not match the requested coordinate");
+            }
+        } catch (MavenTransport.Permanent mismatch) {
+            throw mismatch;
+        } catch (IOException | RuntimeException unreadable) {
+            throw new MavenTransport.Permanent(artifact.label() + " is not a readable jar", unreadable);
+        }
+    }
+
+    private static String digest(Path file, String algorithm) throws IOException {
+        try {
+            var digest = MessageDigest.getInstance(algorithm);
+            try (var input = Files.newInputStream(file)) {
+                var buffer = new byte[16 * 1024];
+                for (int count; (count = input.read(buffer)) >= 0;) if (count > 0) digest.update(buffer, 0, count);
+            }
+            return java.util.HexFormat.of().formatHex(digest.digest());
+        } catch (NoSuchAlgorithmException impossible) {
+            throw new AssertionError(impossible);
+        }
+    }
+
+    private static URI publicRepository(URI repository) {
+        try {
+            return new URI(repository.getScheme(), null, repository.getHost(), repository.getPort(),
+                    repository.getPath(), repository.getQuery(), repository.getFragment());
+        } catch (java.net.URISyntaxException impossible) {
+            throw new IllegalArgumentException(impossible);
         }
     }
 
@@ -508,7 +611,8 @@ public final class Add {
         deleteWithin(stagingParent(backup), backup);
     }
 
-    private static Json resolutionJson(Maven.Resolution resolution, List<Path> files) {
+    private static Json resolutionJson(Maven.Resolution resolution, List<FileRecord> files,
+            Map<String, String> optionalMissing) {
         var runtime = resolution.runtime().stream().map(Add::nodeJson).map(value -> (Json) value).toList();
         var test = resolution.test().stream().map(Add::nodeJson).map(value -> (Json) value).toList();
         var omitted = resolution.omitted().stream().map(entry -> (Json) nodeJson(entry.node())
@@ -519,7 +623,15 @@ public final class Add {
                 .with("runtime", Json.Array.of(runtime))
                 .with("test", Json.Array.of(test))
                 .with("omitted", Json.Array.of(omitted))
-                .with("files", Json.Array.strings(files.stream().map(Path::toString).toList()));
+                .with("files", Json.Array.of(files.stream().map(file -> (Json) Json.Object.of()
+                        .with("path", file.path()).with("coordinate", file.coordinate()).with("kind", file.kind())
+                        .with("checksumAlgorithm", file.checksumAlgorithm()).with("checksum", file.checksum())
+                        .with("checksumStatus", file.checksumStatus()).with("repository", file.repository())).toList()))
+                .with("optionalMissing", Json.Array.of(optionalMissing.entrySet().stream().sorted(Map.Entry.comparingByKey())
+                        .map(entry -> (Json) Json.Object.of().with("coordinate", entry.getKey())
+                                .with("reason", entry.getValue())).toList()))
+                .with("downloadLimits", Json.Object.of().with("global", MavenTransport.GLOBAL_LIMIT)
+                        .with("perOrigin", MavenTransport.ORIGIN_LIMIT));
     }
 
     private static Json.Object nodeJson(Maven.Node node) {
@@ -532,6 +644,11 @@ public final class Add {
                 .with("path", Json.Array.strings(node.path()))
                 .with("relocatedFrom", node.relocatedFrom());
     }
+
+    private record FileRecord(String path, String coordinate, String kind, String checksumAlgorithm,
+            String checksum, String checksumStatus, String repository) {}
+
+    private record Checksum(String algorithm, String value, String status, String repository) {}
 
     private static Path stagingParent(Path path) {
         var parent = path.getParent();
@@ -669,6 +786,12 @@ public final class Add {
                     + (kind.equals("binary") && !coordinate.classifier().isEmpty()
                             ? "-" + coordinate.classifier() : "")
                     + (kind.equals("binary") ? "" : "-" + kind) + ".jar";
+        }
+
+        URI uri(URI repository) {
+            var base = coordinate.withoutClassifier();
+            return repository.resolve(base.group().replace('.', '/') + "/" + base.artifact() + "/"
+                    + base.version() + "/" + file());
         }
     }
 

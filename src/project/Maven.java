@@ -1,11 +1,8 @@
 package project;
 
-import fetch.HttpException;
-import fetch.Session;
 import java.io.IOException;
 import java.io.StringReader;
 import java.net.URI;
-import java.time.Duration;
 import java.util.ArrayDeque;
 import java.util.ArrayList;
 import java.util.HashMap;
@@ -76,10 +73,6 @@ final class Maven {
     static final class Resolver {
         private final PomSource source;
         private final Map<Add.Coordinate, Pom> poms = new HashMap<>();
-
-        Resolver(Session session, List<URI> repositories) {
-            this(coordinate -> document(session, repositories, coordinate));
-        }
 
         Resolver(PomSource source) {
             this.source = source;
@@ -247,34 +240,6 @@ final class Maven {
                     resolved(text(relocation, "artifactId"), properties, coordinate.artifact(), "relocation artifact", coordinate),
                     resolved(text(relocation, "version"), properties, coordinate.version(), "relocation version", coordinate),
                     coordinate.type(), coordinate.classifier());
-        }
-
-        private static PomDocument document(Session session, List<URI> repositories, Add.Coordinate coordinate)
-                throws IOException {
-            Exception last = null;
-            for (var repository : repositories) {
-                var uri = coordinate.pomUri(repository);
-                try (var response = session.get(uri).timeout(Duration.ofMinutes(2)).send()) {
-                    if (response.status() == 404) {
-                        last = new HttpException(404, uri, response.headers());
-                        continue;
-                    }
-                    response.requireSuccess();
-                    return new PomDocument(response.text(), repository);
-                } catch (HttpException failure) {
-                    last = failure;
-                    if (failure.status() != 404) break;
-                } catch (InterruptedException interrupted) {
-                    Thread.currentThread().interrupt();
-                    throw new IOException("interrupted while resolving " + coordinate.text(), interrupted);
-                } catch (Exception failure) {
-                    last = failure;
-                    break;
-                }
-            }
-            var detail = last == null ? "POM was not found in the configured repositories"
-                    : last.getMessage() == null ? last.toString() : last.getMessage();
-            throw new IOException("could not resolve " + coordinate.text() + ": " + detail, last);
         }
 
         private static Document parse(String xml, URI uri) throws IOException {

@@ -4,13 +4,17 @@ import com.sun.net.httpserver.HttpServer;
 import harness.Check;
 import java.io.IOException;
 import java.io.StringWriter;
+import java.io.ByteArrayOutputStream;
 import java.net.InetSocketAddress;
 import java.net.URI;
 import java.nio.charset.StandardCharsets;
 import java.nio.file.Files;
 import java.nio.file.Path;
+import java.security.MessageDigest;
 import java.util.List;
 import java.util.concurrent.atomic.AtomicInteger;
+import java.util.jar.JarEntry;
+import java.util.jar.JarOutputStream;
 
 public final class AddIntegrationTest {
     private AddIntegrationTest() {}
@@ -47,6 +51,36 @@ public final class AddIntegrationTest {
         supplement(server, artifactRequests, "com.acme", "one", "1.0", "javadoc");
         supplement(server, artifactRequests, "com.acme", "two", "2.0", "sources");
         supplement(server, artifactRequests, "com.acme", "two", "2.0", "javadoc");
+        var retryPomRequests = new AtomicInteger();
+        var retryArtifactRequests = new AtomicInteger();
+        var missingSourcesRequests = new AtomicInteger();
+        var retryJar = jar("retry");
+        server.createContext("/com/acme/retry/1.0/retry-1.0.pom", exchange -> {
+            if (retryPomRequests.incrementAndGet() == 1) {
+                exchange.getResponseHeaders().add("Retry-After", "0");
+                status(exchange, 429);
+            }
+            else serve(exchange, pom("com.acme", "retry", "1.0"));
+        });
+        server.createContext("/com/acme/retry/1.0/retry-1.0.jar", exchange -> {
+            if (retryArtifactRequests.incrementAndGet() == 1) {
+                exchange.sendResponseHeaders(200, retryJar.length + 20L);
+                try (var output = exchange.getResponseBody()) {
+                    output.write(retryJar, 0, retryJar.length / 2);
+                }
+            } else serve(exchange, retryJar);
+        });
+        server.createContext("/com/acme/retry/1.0/retry-1.0.jar.sha256",
+                exchange -> serve(exchange, sha256(retryJar)));
+        server.createContext("/com/acme/retry/1.0/retry-1.0-sources.jar", exchange -> {
+            missingSourcesRequests.incrementAndGet();
+            status(exchange, 404);
+        });
+        server.createContext("/com/acme/bad/1.0/bad-1.0.pom",
+                exchange -> serve(exchange, pom("com.acme", "bad", "1.0")));
+        server.createContext("/com/acme/bad/1.0/bad-1.0.jar", exchange -> serve(exchange, jar("bad")));
+        server.createContext("/com/acme/bad/1.0/bad-1.0.jar.sha256",
+                exchange -> serve(exchange, "0000000000000000000000000000000000000000000000000000000000000000"));
         server.start();
         var root = Files.createTempDirectory("tuul-add");
         try (var client = Add.client()) {
@@ -76,6 +110,24 @@ public final class AddIntegrationTest {
             Check.equal("a cache hit does not make an artifact request", 6, artifactRequests.get());
             Check.that("cache output is still an event", cachedOutput.toString().contains(
                     "add.cached com.acme:one:1.0:sources"));
+
+            var retried = client.into(new Layout(root), List.of("com.acme:retry:1.0"),
+                    List.of(repository), new StringWriter(), Add.Mode.EVENTS);
+            Check.equal("retryable POM and body failures recover", List.of(), retried.failed());
+            Check.equal("the POM retry count is bounded", 2, retryPomRequests.get());
+            Check.equal("the response-body retry count is bounded", 2, retryArtifactRequests.get());
+            Check.equal("a definitive supplement 404 is not retried", 1, missingSourcesRequests.get());
+            var retryResolution = Files.readString(root.resolve("vendor/.tuul/resolution.json"));
+            Check.that("checksums and optional misses enter the resolution record",
+                    retryResolution.contains("\"checksumStatus\":\"verified\"")
+                            && retryResolution.contains("com.acme:retry:1.0:sources"));
+
+            var beforeFailure = retryResolution;
+            var failed = client.into(new Layout(root), List.of("com.acme:bad:1.0"),
+                    List.of(repository), new StringWriter(), Add.Mode.EVENTS);
+            Check.that("a checksum mismatch fails the required binary", !failed.ok());
+            Check.equal("a failed staged add keeps the active resolution", beforeFailure,
+                    Files.readString(root.resolve("vendor/.tuul/resolution.json")));
         } finally {
             server.stop(0);
             delete(root);
@@ -91,7 +143,7 @@ public final class AddIntegrationTest {
         server.createContext(path(group, artifact, version, artifact + "-" + version + ".jar"),
                 exchange -> {
                     requests.incrementAndGet();
-                    serve(exchange, body);
+                    serve(exchange, jar(body));
                 });
     }
 
@@ -100,7 +152,7 @@ public final class AddIntegrationTest {
         server.createContext(path(group, artifact, version, artifact + "-" + version + "-" + kind + ".jar"),
                 exchange -> {
                     requests.incrementAndGet();
-                    serve(exchange, kind);
+                    serve(exchange, jar(kind));
                 });
     }
 
@@ -109,12 +161,43 @@ public final class AddIntegrationTest {
     }
 
     private static void serve(com.sun.net.httpserver.HttpExchange exchange, String body) throws IOException {
-        var bytes = body.getBytes(StandardCharsets.UTF_8);
+        serve(exchange, body.getBytes(StandardCharsets.UTF_8));
+    }
+
+    private static void serve(com.sun.net.httpserver.HttpExchange exchange, byte[] bytes) throws IOException {
         exchange.getResponseHeaders().add("Content-Length", String.valueOf(bytes.length));
         exchange.sendResponseHeaders(200, bytes.length);
         try (var output = exchange.getResponseBody()) {
             output.write(bytes);
         }
+    }
+
+    private static void status(com.sun.net.httpserver.HttpExchange exchange, int status) throws IOException {
+        exchange.sendResponseHeaders(status, -1);
+        exchange.close();
+    }
+
+    private static String pom(String group, String artifact, String version) {
+        return "<project><modelVersion>4.0.0</modelVersion><groupId>" + group + "</groupId><artifactId>"
+                + artifact + "</artifactId><version>" + version + "</version></project>";
+    }
+
+    private static String sha256(byte[] bytes) {
+        try {
+            return java.util.HexFormat.of().formatHex(MessageDigest.getInstance("SHA-256").digest(bytes));
+        } catch (java.security.NoSuchAlgorithmException impossible) {
+            throw new AssertionError(impossible);
+        }
+    }
+
+    private static byte[] jar(String body) throws IOException {
+        var bytes = new ByteArrayOutputStream();
+        try (var jar = new JarOutputStream(bytes)) {
+            jar.putNextEntry(new JarEntry("fixture.txt"));
+            jar.write(body.getBytes(StandardCharsets.UTF_8));
+            jar.closeEntry();
+        }
+        return bytes.toByteArray();
     }
 
     private static void delete(Path root) throws IOException {
