@@ -24,6 +24,10 @@ import java.nio.CharBuffer;
 /// nodes, walked with a [Cursor] that allocates nothing, or with
 /// [Document#walk] as a lazy stream.
 ///
+/// A pipe table becomes [Kind#TABLE] nodes. Rendering writes table, row, and
+/// cell roles on `div` elements with flex styles. Rendering does not write an
+/// HTML `table` element for a Markdown table.
+///
 /// **What streams, and what the source is kept for.** A [Reader] is parsed as
 /// it arrives: a line is turned into nodes as soon as its newline has been
 /// seen, and nothing waits for the end of the input. A reference to a

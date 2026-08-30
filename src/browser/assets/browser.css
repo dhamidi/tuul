@@ -82,6 +82,7 @@ main { max-width: var(--page); margin: 0; padding: var(--ui-space-6); }
   .bar > .ui-group { flex-wrap: wrap; }
   .search { order: 3; flex-basis: 100%; }
   .search .field { max-width: none; }
+  main { width: 100%; max-width: 100%; }
 }
 .search .field { flex: 1; max-width: 32rem; display: flex; gap: var(--ui-space-2); align-items: center; }
 /* The label and the hint are said to a screen reader and not to the eye. They
@@ -167,7 +168,13 @@ turbo-frame { display: block; }
  * extents — prose, the rule under a heading, and the code — and three edges
  * read as a mistake rather than as an intention, whatever the reason for each
  * of them. A sample that does not fit scrolls inside itself instead. */
-.ui-doc { max-width: var(--ui-measure); color: var(--ui-ink); line-height: 1.65; }
+.ui-doc {
+  width: 100%;
+  min-width: 0;
+  max-width: var(--ui-measure);
+  color: var(--ui-ink);
+  line-height: 1.65;
+}
 .ui-doc > :first-child { margin-top: 0; }
 .ui-doc > :last-child { margin-bottom: 0; }
 .ui-doc p { margin: var(--ui-space-3) 0; overflow-wrap: anywhere; }
@@ -237,6 +244,37 @@ turbo-frame { display: block; }
   border-left: 2px solid var(--ui-rule);
 }
 .ui-doc table { display: block; overflow-x: auto; max-width: 100%; }
+
+/* Markdown tables use flex rows instead of HTML table layout. A row can wrap
+ * its cells when the reading column is narrow. Boundaries and padding keep
+ * that change of shape readable without forcing the whole page to scroll. */
+.ui-doc .markdown-table {
+  width: 100%;
+  min-width: 0;
+  max-width: 100%;
+  margin: var(--ui-space-4) 0;
+  overflow: hidden;
+  border: 1px solid var(--ui-rule);
+  border-radius: var(--ui-radius);
+}
+.ui-doc .markdown-table-row { width: 100%; min-width: 0; max-width: 100%; }
+.ui-doc .markdown-table-row + .markdown-table-row { border-top: 1px solid var(--ui-rule); }
+.ui-doc .markdown-table-cell { padding: var(--ui-space-2) var(--ui-space-3); overflow-wrap: anywhere; }
+.ui-doc .markdown-table-cell + .markdown-table-cell { border-left: 1px solid var(--ui-rule); }
+.ui-doc .markdown-table-header { background: var(--ui-wash); font-weight: 600; }
+
+@media (max-width: 38rem) {
+  .ui-doc .markdown-table-cell {
+    flex: 0 0 100% !important;
+    width: 100%;
+    max-width: 100%;
+    text-align: left !important;
+  }
+  .ui-doc .markdown-table-cell + .markdown-table-cell {
+    border-top: 1px solid var(--ui-rule);
+    border-left: 0;
+  }
+}
 
 /* Package documents ------------------------------------------------------ */
 

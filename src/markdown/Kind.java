@@ -46,6 +46,17 @@ public enum Kind {
 
     ITEM(true),
 
+    /// A pipe-delimited table. Its children are [#TABLE_ROW] nodes.
+    TABLE(true),
+
+    /// One table row. Its number is one for the header row and zero for a data
+    /// row.
+    TABLE_ROW(true),
+
+    /// One table cell. Its number is the alignment: zero for the default, one
+    /// for left, two for center, and three for right.
+    TABLE_CELL(true),
+
     // Inlines.
 
     /// A run of literal characters. Its text is exactly the source span, so

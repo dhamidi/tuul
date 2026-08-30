@@ -15,6 +15,11 @@ import java.util.Map;
 /// A reference link asks the document for its definition at the moment it is
 /// written, which is the point of leaving that question open: by the time
 /// anything renders, every definition has been read.
+///
+/// A Markdown table renders as a `div` with table, row, and cell roles. The
+/// table, rows, and cells use flex styles, so the cells can wrap on narrow
+/// screens. The renderer does not emit an HTML `table` element for Markdown
+/// tables.
 public final class Html {
 
     private final Document document;
@@ -146,6 +151,26 @@ public final class Html {
                 line();
                 write("<blockquote>\n");
             }
+            case TABLE -> {
+                line();
+                write("<div class=\"markdown-table\" role=\"table\" style=\"display:flex;flex-direction:column\">\n");
+            }
+            case TABLE_ROW -> write("<div class=\"markdown-table-row\" role=\"row\" style=\"display:flex;flex-wrap:wrap\">");
+            case TABLE_CELL -> {
+                var alignment = switch (cursor.number()) {
+                    case 1 -> "left";
+                    case 2 -> "center";
+                    case 3 -> "right";
+                    default -> "start";
+                };
+                var row = cursor.copy();
+                row.parent();
+                var header = row.number() == 1;
+                var role = header ? "columnheader" : "cell";
+                var className = header ? "markdown-table-cell markdown-table-header" : "markdown-table-cell";
+                write("<div class=\"" + className + "\" role=\"" + role
+                        + "\" style=\"flex:1 1 10rem;min-width:0;text-align:" + alignment + "\">");
+            }
             case LIST -> {
                 line();
                 list(cursor);
@@ -174,6 +199,9 @@ public final class Html {
             }
             case HEADING -> write("</h" + cursor.number() + ">\n");
             case QUOTE -> write("</blockquote>\n");
+            case TABLE_CELL -> write("</div>");
+            case TABLE_ROW -> write("</div>\n");
+            case TABLE -> write("</div>\n");
             case LIST -> write(cursor.number() < 0 ? "</ul>\n" : "</ol>\n");
             case ITEM -> write("</li>\n");
             case EMPHASIS -> write("</em>");

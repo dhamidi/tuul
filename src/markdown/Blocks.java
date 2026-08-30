@@ -18,11 +18,13 @@ import java.util.Set;
 ///
 /// What is implemented: ATX and setext headings, thematic breaks, indented and
 /// fenced code, HTML blocks of all seven kinds, block quotes with lazy
-/// continuation, bullet and ordered lists with tightness, paragraphs, and link
-/// reference definitions. Tabs advance to the next four-column stop when they
-/// are being counted as indentation, and are otherwise left alone; a tab that
-/// would be split in half by a list marker is consumed whole, which is the one
-/// place this knowingly parts company with the specification.
+/// continuation, bullet and ordered lists with tightness, pipe tables,
+/// paragraphs, and link reference definitions.
+///
+/// Tabs advance to the next four-column stop when they are being counted as
+/// indentation. Tabs are otherwise left alone. The parser consumes a tab that
+/// a list marker would split. This is the one place it differs from the
+/// specification.
 final class Blocks {
 
     private static final Set<String> HTML_BLOCKS = Set.of(
@@ -61,6 +63,8 @@ final class Blocks {
         boolean fenced;
         int html;
         boolean lastLineBlank;
+        int tableColumns;
+        int[] tableAlignment;
 
         Open(int node, Kind kind) {
             this.node = node;
@@ -163,6 +167,10 @@ final class Blocks {
             if (deepest().kind == Kind.HTML_BLOCK && ends(deepest(), pos, end)) close(stack.size() - 1);
             return;
         }
+        if (deepest().kind == Kind.TABLE) {
+            tableRow(deepest(), pos, end, false);
+            return;
+        }
 
         pos = starts(pos, end);
         if (consumed) return;
@@ -223,6 +231,7 @@ final class Blocks {
             case CODE -> code(open, pos, end);
             case HTML_BLOCK -> pos;
             case PARAGRAPH -> blank(pos, end) ? -1 : pos;
+            case TABLE -> tableContinuation(pos, end);
             default -> -1;
         };
     }
@@ -301,6 +310,7 @@ final class Blocks {
             if (next < 0) next = atx(text, end);
             if (next < 0) next = fence(text, end, indent);
             if (next < 0) next = html(text, end);
+            if (next < 0) next = table(text, end);
             if (next < 0) next = setext(text, end);
             if (next < 0) next = rule(text, end);
             if (next < 0) next = listItem(text, end, indent);
@@ -421,6 +431,150 @@ final class Blocks {
         consumed = true;
         return end;
     }
+
+    /// Turns a one-line paragraph followed by a delimiter row into a table.
+    /// The delimiter row is consumed and does not become a data row.
+    private int table(int pos, int end) {
+        if (deepest().kind != Kind.PARAGRAPH || deepest().content == null) return -1;
+        var content = deepest().content;
+        if (content.lines() != 1) return -1;
+
+        var header = row(content.lineStart(0), content.lineEnd(0));
+        var delimiter = row(pos, end);
+        if (!header.piped || !delimiter.piped || header.cells.isEmpty() || delimiter.cells.isEmpty()) return -1;
+        if (delimiter.cells.size() < header.cells.size()) return -1;
+
+        var alignment = new int[delimiter.cells.size()];
+        for (var column = 0; column < delimiter.cells.size(); column++) {
+            alignment[column] = alignment(delimiter.cells.get(column));
+            if (alignment[column] < 0) return -1;
+        }
+
+        var paragraph = stack.removeLast();
+        nodes.kind(paragraph.node, Kind.TABLE);
+        nodes.start(paragraph.node, content.lineStart(0));
+        nodes.end(paragraph.node, end);
+        var table = new Open(paragraph.node, Kind.TABLE);
+        table.tableColumns = delimiter.cells.size();
+        table.tableAlignment = alignment;
+        stack.add(table);
+        tableRow(table, content.lineStart(0), content.lineEnd(0), true, header);
+        consumed = true;
+        return end;
+    }
+
+    /// A table continues only while the next non-blank line has a pipe outside
+    /// escaped text and code spans. A block line without a pipe closes it.
+    private int tableContinuation(int pos, int end) {
+        if (blank(pos, end)) return -1;
+        return row(pos, end).piped ? pos : -1;
+    }
+
+    /// Adds one data row to an open table. Missing cells become empty cells.
+    private void tableRow(Open table, int start, int end, boolean header) {
+        tableRow(table, start, end, header, row(start, end));
+    }
+
+    private void tableRow(Open table, int start, int end, boolean header, Row row) {
+        var rowNode = nodes.open(Kind.TABLE_ROW, table.node, start);
+        nodes.number(rowNode, header ? 1 : 0);
+        nodes.end(rowNode, end);
+        var cells = row.cells;
+        for (var column = 0; column < table.tableColumns; column++) {
+            var cell = cell(cells, column, table.tableColumns, end);
+            var cellNode = nodes.open(Kind.TABLE_CELL, rowNode, cell.start);
+            nodes.number(cellNode, table.tableAlignment[column]);
+            nodes.end(cellNode, cell.end);
+            if (cell.end <= cell.start) continue;
+            var content = new Segments(source);
+            content.add(cell.start, cell.end);
+            new Inlines(source, nodes, references, cellNode, content).parse();
+        }
+        nodes.end(table.node, end);
+    }
+
+    /// Selects a row cell and folds excess cells into the final column so that
+    /// the renderer never loses source text when a data row has extra pipes.
+    private Cell cell(List<Cell> cells, int column, int columns, int emptyAt) {
+        if (cells.isEmpty() || column >= cells.size()) return new Cell(emptyAt, emptyAt);
+        var selected = cells.get(column);
+        if (column == columns - 1 && cells.size() > columns) {
+            selected = new Cell(selected.start, cells.getLast().end);
+        }
+        return selected;
+    }
+
+    /// Splits one source line on unescaped pipes outside backtick code spans.
+    /// Leading and trailing pipes are delimiters, not empty cells.
+    private Row row(int start, int end) {
+        var cells = new ArrayList<Cell>();
+        var first = skipSpaces(start, end, Integer.MAX_VALUE);
+        var from = first;
+        var piped = false;
+        if (from < end && source.charAt(from) == '|') {
+            piped = true;
+            from++;
+        }
+        var ticks = 0;
+        for (var at = from; at < end; at++) {
+            var character = source.charAt(at);
+            if (character == '\\' && at + 1 < end) {
+                at++;
+                continue;
+            }
+            if (character == '`') {
+                var run = run(at, end, '`');
+                if (ticks == 0) ticks = run;
+                else if (run == ticks) ticks = 0;
+                at += run - 1;
+                continue;
+            }
+            if (character == '<' && ticks == 0) {
+                var html = Tags.scan(source, at);
+                if (html > at && html <= end) {
+                    at = html - 1;
+                    continue;
+                }
+            }
+            if (character != '|' || ticks != 0) continue;
+            piped = true;
+            cells.add(trimCell(from, at));
+            from = at + 1;
+        }
+        var finish = end;
+        while (finish > from && Characters.space(source.charAt(finish - 1))) finish--;
+        cells.add(trimCell(from, finish));
+        if (piped && !cells.isEmpty() && cells.getLast().empty()) cells.removeLast();
+        return new Row(cells, piped);
+    }
+
+    private Cell trimCell(int start, int end) {
+        while (start < end && Characters.space(source.charAt(start))) start++;
+        while (end > start && Characters.space(source.charAt(end - 1))) end--;
+        return new Cell(start, end);
+    }
+
+    private int alignment(Cell cell) {
+        var start = cell.start;
+        var end = cell.end;
+        var left = start < end && source.charAt(start) == ':';
+        var right = end > start && source.charAt(end - 1) == ':';
+        if (left) start++;
+        if (right) end--;
+        if (end - start < 3) return -1;
+        for (var at = start; at < end; at++) {
+            if (source.charAt(at) != '-') return -1;
+        }
+        return left && right ? 2 : right ? 3 : left ? 1 : 0;
+    }
+
+    private record Cell(int start, int end) {
+        boolean empty() {
+            return start == end;
+        }
+    }
+
+    private record Row(List<Cell> cells, boolean piped) {}
 
     private int rule(int pos, int end) {
         var character = source.charAt(pos);

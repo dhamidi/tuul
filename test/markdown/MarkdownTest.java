@@ -20,6 +20,7 @@ public final class MarkdownTest {
         code();
         quotes();
         lists();
+        tables();
         after();
         paragraphs();
         emphasis();
@@ -78,6 +79,41 @@ public final class MarkdownTest {
         equal("so are three stars", "<hr />\n", "***\n");
         equal("spaces between them do not matter", "<hr />\n", " - - - \n");
         equal("two are not enough", "<p>--</p>\n", "--\n");
+    }
+
+    private static void tables() {
+        var source = "| Name | Meaning |\n| :--- | ---: |\n| Tcl | *Language* |\n| code | `a|b` |\n";
+        var rendered = Markdown.html(source);
+        Check.that("a table uses divs instead of an HTML table",
+                rendered.contains("<div class=\"markdown-table\"")
+                        && List.of("<table", "<thead", "<tbody", "<tr", "<th", "<td").stream()
+                                .noneMatch(rendered::contains));
+        Check.that("the table and rows use flex layout",
+                rendered.contains("role=\"table\" style=\"display:flex")
+                        && rendered.contains("role=\"row\" style=\"display:flex"));
+        Check.that("header and data cells keep their semantic roles",
+                rendered.contains("role=\"columnheader\"") && rendered.contains("role=\"cell\""));
+        Check.that("cell alignment and inline markup survive rendering",
+                rendered.contains("text-align:left") && rendered.contains("text-align:right")
+                        && rendered.contains("<em>Language</em>") && rendered.contains("<code>a|b</code>"));
+
+        var document = Markdown.parse(source);
+        Check.equal("a table is a distinct block node", Kind.TABLE, document.at(1).kind());
+        Check.equal("its rows and cells are represented in the tree",
+                List.of(Kind.DOCUMENT, Kind.TABLE, Kind.TABLE_ROW, Kind.TABLE_CELL, Kind.TEXT,
+                        Kind.TABLE_CELL, Kind.TEXT, Kind.TABLE_ROW, Kind.TABLE_CELL, Kind.TEXT,
+                        Kind.TABLE_CELL, Kind.EMPHASIS, Kind.TEXT, Kind.TABLE_ROW, Kind.TABLE_CELL,
+                        Kind.TEXT, Kind.TABLE_CELL, Kind.CODE_SPAN),
+                kinds(document));
+
+        equal("a dashed setext underline remains a heading", "<h2>a</h2>\n", "a\n---\n");
+        equal("a malformed delimiter remains ordinary markdown", "<p>a | b\n--- | x</p>\n", "a | b\n--- | x\n");
+
+        var uneven = Markdown.html("A | B\n--- | ---\none |\na | b | c\nafter\n");
+        Check.that("a row with missing cells keeps an empty flex cell",
+                uneven.contains("role=\"cell\" style=\"flex:1 1 10rem;min-width:0;text-align:start\"></div>"));
+        Check.that("a row with extra cells keeps its source text in the last cell", uneven.contains("b | c"));
+        Check.that("a line without a pipe ends the table", uneven.endsWith("</div>\n<p>after</p>\n"));
     }
 
     private static void code() {
