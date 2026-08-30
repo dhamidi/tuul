@@ -56,6 +56,11 @@ public final class SessionsTest {
         Check.equal("and comes back as what was put in it", "ada", sessions.read(carried).text("user", ""));
         Check.that("a session that is there says so", sessions.read(carried).present());
 
+        var jdk = request("GET", "/", "Cookie",
+                "$Version=\"1\"; session=\"" + value(cookie).substring("session=".length())
+                        + "\";$Path=\"/\";$Domain=\"localhost.local\"");
+        Check.equal("a JDK cookie manager keeps the signed session", "ada", sessions.read(jdk).text("user", ""));
+
         var tampered = request("GET", "/", "Cookie", "session=" + value(cookie).substring(8, 40) + "x");
         Check.that("one that was edited is no session at all", !sessions.read(tampered).present());
 

@@ -9,8 +9,9 @@ import java.util.Optional;
 ///
 /// A request carries every cookie in one header, separated by semicolons; a
 /// response sets them one header each, which is why [web.Headers] keeps values
-/// that repeat. Nothing here decodes a value: what goes in comes out, and a
-/// caller that wants to store something a cookie cannot hold encodes it. See
+/// that repeat. It does not decode an application value: it only removes the
+/// optional HTTP quotes around one and ignores legacy `$` parameters. A caller
+/// that wants to store something a cookie cannot hold encodes it. See
 /// [web.sessions.Signature], which sessions and CSRF use for cookie values.
 public final class Cookies {
 
@@ -23,7 +24,12 @@ public final class Cookies {
                 var split = pair.indexOf('=');
                 if (split < 0) continue;
                 var name = pair.substring(0, split).strip();
-                if (!name.isEmpty()) cookies.putIfAbsent(name, pair.substring(split + 1).strip());
+                if (name.isEmpty() || name.startsWith("$")) continue;
+                var value = pair.substring(split + 1).strip();
+                if (value.length() >= 2 && value.startsWith("\"") && value.endsWith("\"")) {
+                    value = value.substring(1, value.length() - 1);
+                }
+                cookies.putIfAbsent(name, value);
             }
         }
         return Map.copyOf(cookies);

@@ -108,8 +108,9 @@ are public. `and` gives later parameters precedence.
 `Secure`, and no max age. `lasting`, `at`, `secured`, `sameSite`, and
 `readableByScript` return changed cookies. `Cookie.header()` returns one
 `Set-Cookie` value. `Cookies` reads request cookies and sets, adds, or clears
-response cookies. A cookie name or value that contains a space, control byte,
-non-ASCII byte, semicolon, comma, or double quote causes
+response cookies. Request values may have optional surrounding quotes; legacy
+`$` parameters are ignored. A cookie name or value that contains a space,
+control byte, non-ASCII byte, semicolon, comma, or double quote causes
 `IllegalArgumentException`.
 
 `Accept.parse` returns `Accept.ANYTHING` for a null, blank, or wholly empty

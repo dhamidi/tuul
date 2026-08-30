@@ -138,6 +138,12 @@ public final class WebTest {
         Check.equal("all of them", "def", Cookies.first(request, "csrf").orElse(""));
         Check.that("and one nobody sent is absent", Cookies.first(request, "other").isEmpty());
 
+        var jdk = request("GET", "/", "Cookie",
+                "$Version=\"1\"; session=\"abc\";$Path=\"/\";$Domain=\"localhost.local\"");
+        Check.equal("JDK legacy quoting does not change a cookie value",
+                "abc", Cookies.first(jdk, "session").orElse(""));
+        Check.equal("JDK legacy attributes are not cookies", Map.of("session", "abc"), Cookies.of(jdk));
+
         var cookie = Cookie.of("session", "value");
         Check.equal("a cookie defaults to the safe answers",
                 "session=value; Path=/; HttpOnly; SameSite=Lax", cookie.header());
