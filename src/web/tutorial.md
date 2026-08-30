@@ -1,13 +1,22 @@
 # Tutorial: a small notes application
 
-This tutorial builds a small hypermedia application. It serves a list of
-notes, accepts a form, and runs the same handlers in memory tests and in an
-HTTP server. You add routing, a page, a form, and a session guard in that
-order.
+This tutorial builds a small hypermedia application. It serves notes, accepts
+a form, starts durable background work, and runs the same handlers in memory
+tests and in an HTTP server.
 
-You need JDK 27. The types named `Note`, `Notes`, `NotesStore`, `Login`, and
-`Views` below are application-owned placeholders. Replace them with your own
-types. All other types come from Tuul.
+The tutorial also teaches Tuul's execution model. You first build an
+`application.Application` from messages, updates, steps, and effects. You then
+use that model in two different runtimes:
+
+- `Page` creates one application for one HTTP request;
+- `ActorSystem` gives an application an address, a mailbox, and a durable log.
+
+Learn these parts in order. `Page` and actors are small once the application
+loop is clear.
+
+You need JDK 27. The types named `Note`, `Notes`, `NotesStore`, `Summaries`,
+`Login`, and `Views` below are application-owned placeholders. Replace them
+with your own types. All other types come from Tuul.
 
 For tasks, read [howto.md](howto.md). For the design, read
 [explanation.md](explanation.md). For exact API facts, read
@@ -41,6 +50,8 @@ var routes = Router.of()
         .get("notes", "/notes")
         .get("note", "/notes/{id}")
         .post("create-note", "/notes")
+        .post("summarize-note", "/notes/{id}/summary")
+        .get("summary-job", "/summary-jobs/{id}")
         .post("login", "/login")
         .post("logout", "/logout");
 
@@ -102,23 +113,102 @@ var app = Routing.of(routes)
 returns the matched route name. A handler can use either value without parsing
 the path itself.
 
-## 4. Render a page
+## 4. Learn the application loop
 
-`Page` gives each request fresh state. It turns the request into an
-`application.Message`, applies registered `Update` functions, runs effects,
-and renders the resulting state. `NoteState` and `Views.notePage` are
+Tuul uses the architecture commonly called TEA, after The Elm Architecture.
+The name is less important than the four values in the loop:
+
+- **State** is what the application knows now.
+- A **Message** is something that happened.
+- An **Update** maps the current state and one message to a `Step`.
+- A **Step** contains the next state and zero or more `Effect` values.
+
+An effect is data that describes work. It is not a lambda that does the work.
+An effect handler owns the file, database, clock, or network call. When the
+handler learns something, it emits another message.
+
+```text
+Message -> Update(state, message) -> Step(next state, effects)
+   ^                                      |
+   |                                      v
+   +----------- emitted Message <- effect handler
+```
+
+This separation keeps an update deterministic. You can give it a state and a
+message in a test and compare the returned `Step` without opening a resource.
+
+Build the loop directly before you use the web convenience type. This example
+loads one title from application-owned storage:
+
+```java
+import application.Application;
+import application.Effect;
+import application.Message;
+import application.Step;
+
+record NoteState(String latestTitle, boolean loading, String error) {}
+
+var notesApplication = Application.of(new NoteState("", false, ""))
+        .on("notes", (state, message) -> Step.of(
+                new NoteState(state.latestTitle(), true, ""),
+                Effect.of("notes.read")))
+        .on("notes.loaded", (state, message) -> Step.of(
+                new NoteState(message.body().string("title", ""), false, "")))
+        .on("error", (state, message) -> Step.of(
+                new NoteState(state.latestTitle(), false,
+                        message.body().string("reason", "error"))))
+        .effect("notes.read", (effect, emit) -> emit.emit(
+                Message.of("notes.loaded")
+                        .with("title", NotesStore.latestTitle()))); // app-owned I/O
+
+var state = notesApplication.dispatch(Message.of("notes"));
+```
+
+Follow this dispatch one turn at a time:
+
+1. The `notes` message reaches its registered update.
+2. The update marks the state as loading and returns a `notes.read` effect.
+3. The registered effect handler reads storage.
+4. The handler emits `notes.loaded` with what it learned.
+5. That message reaches the next update and produces the final state.
+6. `dispatch` returns when no message or effect remains.
+
+`Message.with` and `Effect.with` add JSON payload fields. The message type and
+payload are separate. An update selects on the type and reads the payload from
+`message.body()`.
+
+`Application.dispatch` combines two lower-level operations. `advance(message)`
+commits the returned state but does not run its effects. `perform(effects)`
+runs effect handlers and returns the messages that they emit. A normal
+application uses both until it settles. An actor logs a message, advances it,
+and then performs its effects. During replay, it advances recorded messages
+without performing their old effects.
+
+A plain `Application` has one state and one dispatching thread. Do not share
+one mutable instance between concurrent HTTP requests. Use `Page` for
+request-local state. Use an actor when state must outlive a request and needs a
+mailbox or a log.
+
+## 5. Render a page with the same loop
+
+`Page` is an HTTP adapter for the application loop. It gives each request fresh
+state, turns the request into an `application.Message`, dispatches that
+message, and renders the settled state. `NoteState` and `Views.notePage` are
 application-owned placeholders.
 
 ```java
-record NoteState(java.util.List<String> notes, String error) {}
-
-var notesPage = Page.of(() -> new NoteState(java.util.List.of(), ""))
-        .on("notes", (state, message) ->
-                application.Step.of(state, application.Effect.of("notes.read")))
-        .effect("notes.read", NotesStore::read)       // application-owned I/O
-        .on("notes.loaded", NotesStore::loaded)      // application-owned update
+var notesPage = Page.of(() -> new NoteState("", false, ""))
+        .on("notes", (state, message) -> application.Step.of(
+                new NoteState(state.latestTitle(), true, ""),
+                application.Effect.of("notes.read")))
+        .effect("notes.read", (effect, emit) -> emit.emit(
+                application.Message.of("notes.loaded")
+                        .with("title", NotesStore.latestTitle())))
+        .on("notes.loaded", (state, message) -> application.Step.of(
+                new NoteState(message.body().string("title", ""), false, "")))
         .on("error", (state, message) ->
-                application.Step.of(new NoteState(state.notes(), message.body().string("reason", "error"))))
+                application.Step.of(new NoteState(state.latestTitle(), false,
+                        message.body().string("reason", "error"))))
         .render((state, request, response) ->
                 Responses.html(Views.notePage(state), response)); // app-owned
 ```
@@ -134,15 +224,16 @@ var app = Routing.of(routes)
         .on("logout", Login::logout);
 ```
 
-`NotesStore.read` handles the `notes.read` effect and emits `notes.loaded`.
-`NotesStore.loaded` applies that message to the state. Both methods are
-application-owned placeholders. The update does not read storage.
+`Requests.message(request)` uses the matched route name as the message type.
+For `GET /notes`, the type is therefore `notes`. Route variables, query values,
+and normal form values are merged into the message payload's `params` object.
 
-An update must return a `Step`. `Step.state()` is request-local. Long-lived
-state belongs in an application or actor and is reached by an effect. An
-update failure leaves the state unchanged and becomes an `error` message.
+`Page.handle` creates the `Application`, registers these updates and effect
+handlers, dispatches one request message, and renders once. `Step.state()` is
+request-local. The update does not read storage. An update or effect-handler
+failure becomes an `error` message instead of escaping from the loop.
 
-## 5. Define and show a form
+## 6. Define and show a form
 
 Define fields once. The definition draws the form and validates a submission.
 
@@ -179,7 +270,176 @@ Responses.redirect(routes.path("notes"), response); // 303
 to replace the form with its errors. A successful form redirect uses `303 See
 Other`, which makes the next request a `GET`.
 
-## 6. Add authentication and CSRF checks
+## 7. Give an application an actor runtime
+
+`Page` discards its application after it writes the response. That is correct
+for page state. A background summary job is different: it must keep its state
+after the POST request ends, process one message at a time, and recover its
+state after a restart.
+
+An actor is not a second application model. It is the same `Application` with
+three runtime services:
+
+- an `Address` names one instance;
+- a mailbox serializes messages for that address;
+- a command log lets the system rebuild state.
+
+A `Definition<S>` tells the actor system how to build a fresh application for
+one actor address. It registers updates, but it does not open resources or
+register external effect handlers.
+
+```java
+import actors.Address;
+import actors.Definition;
+import application.Application;
+import application.Effect;
+import application.Message;
+import application.Step;
+import json.Json;
+
+record SummaryState(String status, String summary, String error) {}
+
+final class SummaryJobs implements Definition<SummaryState> {
+    public String type() {
+        return "note-summary";
+    }
+
+    public Application<SummaryState> instantiate(Address self) {
+        return Application.of(new SummaryState("queued", "", ""))
+                .on("run", (state, message) -> Step.of(
+                        new SummaryState("running", "", ""),
+                        Effect.of("summary.generate")
+                                .with("jobId", self.id())
+                                .with("noteId", message.body().string("noteId", ""))))
+                .on("summary.generated", (state, message) -> Step.of(
+                        new SummaryState("done",
+                                message.body().string("summary", ""), "")))
+                .on("error", (state, message) -> Step.of(
+                        new SummaryState("failed", "",
+                                message.body().string("reason", "error"))));
+    }
+
+    public Json inspect(SummaryState state) {
+        return Json.Object.of()
+                .with("status", state.status())
+                .with("summary", state.summary())
+                .with("error", state.error());
+    }
+}
+```
+
+The definition is a pure fold of state and recorded messages. It does not read
+a clock, create a random value, call a database, or call an HTTP service. An
+actor stamps each delivered message with a recorded time; use `message.at()`
+when an update needs that time.
+
+`self` identifies this actor instance. It is safe to put `self.id()` in an
+effect as a stable idempotency key. `inspect` chooses the JSON that operators
+and HTTP status handlers can read. The actor's Java state type does not leave
+the actor system.
+
+## 8. Make the actor durable and connect its effect
+
+Create one actor system for the process. `rooted` stores durable logs below a
+directory. Register the definition and the external effect handler at startup:
+
+```java
+import actors.ActorSystem;
+import actors.Spawn;
+import java.nio.file.Path;
+
+var summaryJobs = new SummaryJobs();
+var actorSystem = ActorSystem.named("notes")
+        .rooted(Path.of("var/actors"))
+        .define(summaryJobs, Spawn.durable().redelivers(true))
+        .effect("summary.generate", (effect, emit) -> {
+            var summary = Summaries.generateOnce( // app-owned, idempotent I/O
+                    effect.string("jobId", ""),
+                    effect.string("noteId", ""));
+            emit.emit(application.Message.of("summary.generated")
+                    .with("summary", summary));
+        });
+```
+
+The effect handler belongs to the system because it owns long-lived resources.
+It emits `summary.generated`, which enters the actor mailbox as another
+message. The log therefore records both the command and what the outside world
+returned.
+
+Durable state and effect delivery are separate choices:
+
+1. The actor appends a command before it advances the application.
+2. It records the next state by recording the command, not by serializing the
+   state.
+3. It runs the returned effects after the advance.
+4. On summon or restart, it builds a fresh application and advances recorded
+   messages to rebuild the state.
+5. It suppresses effects for applied history, so replay does not repeat old
+   work.
+
+`Spawn.durable()` uses at-most-once effects by default. A crash after the
+command append but before an effect finishes can lose that effect.
+`redelivers(true)` instead repeats the complete effect list for an unapplied
+tail. This gives at-least-once effects, so the effect can happen twice.
+`Summaries.generateOnce` must deduplicate the stable `jobId`. Do not enable
+redelivery for a non-idempotent payment, email, or other irreversible action.
+
+## 9. Hand work from HTTP to the actor
+
+Create a new address for each job. `Definition.at(id)` makes an address with
+the definition's type, so callers do not repeat the `note-summary` string.
+
+```java
+import actors.DeliveryStatus;
+import java.util.Map;
+import java.util.UUID;
+import web.Handler;
+
+Handler startSummary = (request, response) -> {
+    var noteId = web.Routing.variables(request).first("id", "");
+    var jobId = UUID.randomUUID().toString();
+    var job = summaryJobs.at(jobId);
+    var delivery = actorSystem.tell(job,
+            application.Message.of("run").with("noteId", noteId));
+    if (delivery != DeliveryStatus.accepted) {
+        web.Responses.empty(503, response);
+        return;
+    }
+    web.Responses.redirect(
+            routes.path("summary-job", Map.of("id", jobId)), response);
+};
+
+Handler summaryStatus = (request, response) -> {
+    var jobId = web.Routing.variables(request).first("id", "");
+    web.Responses.json(actorSystem.inspect(summaryJobs.at(jobId)), response);
+};
+```
+
+The handler does not wait for the summary. It returns a `303` status URL after
+the runtime accepts the message. `tell` returning `accepted` means immediate
+mailbox admission. It does not mean that the command is processed, appended to
+the log, or complete. A process failure can occur before the append. Use a
+bounded application protocol with a reply or a separate durable ingress when
+the HTTP response must certify durable admission.
+
+`inspect(address)` returns the JSON from `Definition.inspect`. It does not add
+a query command to the actor log. Use `ask` only when the actor protocol needs
+a bounded reply; an ask is a message and is logged.
+
+This is the complete relationship:
+
+```text
+HTTP request -> tell(address, Message) -> mailbox -> command log
+                                                    |
+                                                    v
+                                  Application.advance -> Step -> effects
+                                          ^                       |
+                                          +---- emitted Message <-+
+
+Replay: command log -> Application.advance, with old effects suppressed
+```
+
+## 10. Add authentication and CSRF checks
 
 This is session handling, not a user model. `Sessions` signs a small JSON
 object in a cookie. It does not verify passwords and it does not provide a
@@ -227,10 +487,14 @@ Guard only the routes that need a signed-in session:
 ```java
 var signedInOnly = sessions.required(routes.path("login"));
 web.Handler guardedCreate = notes::create;
+web.Handler guardedSummary = startSummary.wrappedBy(signedInOnly);
+web.Handler guardedStatus = summaryStatus.wrappedBy(signedInOnly);
 var securedRoutes = Routing.of(routes)
         .on("notes", notesPage)
         .on("note", notes::show)
         .on("create-note", guardedCreate.wrappedBy(signedInOnly))
+        .on("summarize-note", guardedSummary)
+        .on("summary-job", guardedStatus)
         .on("login", Login::handle)
         .on("logout", Login::logout);
 
@@ -270,18 +534,37 @@ The middleware reads and verifies the cookie on every request. A missing,
 expired, malformed, or wrongly signed cookie is `Session.NONE`. The cookie is
 signed, not encrypted. Do not put passwords or other secrets in it.
 
-## 7. Run and test the application
+## 11. Run and test the application
 
 The server is a resource. Close it with the cable, assets, and other resources
 that your application owns.
 
 ```java
-try (var server = web.serve.Http.start(protectedApp, 8080)) {
+try (actorSystem;
+        var server = web.serve.Http.start(protectedApp, 8080)) {
     Thread.currentThread().join();
 }
 ```
 
-Run the same handler without a socket:
+The actor system owns mailboxes, effect threads, timers, and log resources.
+Close it during application shutdown. The server owns the HTTP binding and
+must also close.
+
+Test an actor definition as an ordinary application. `advance` proves the
+state transition and the requested effect without running the effect:
+
+```java
+var job = summaryJobs.instantiate(summaryJobs.at("test-job"));
+var step = job.advance(
+        application.Message.of("run").with("noteId", "42"));
+assert step.state().status().equals("running");
+assert step.effects().size() == 1;
+assert step.effects().getFirst().type().equals("summary.generate");
+```
+
+This test is why definitions contain updates and effect data, but no I/O.
+Test `Summaries.generateOnce` separately against its owned resource. Then test
+the same web handler without a socket:
 
 ```java
 var result = web.serve.Memory.handle(
