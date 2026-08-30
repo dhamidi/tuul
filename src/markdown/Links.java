@@ -34,4 +34,10 @@ public interface Links {
     /// any other link's is. Answering `null` is not a failure and costs the
     /// reader nothing: the reference renders exactly as it does today.
     String destination(String label);
+
+    /// Rewrites a destination that the document defined. The default preserves
+    /// it. A document browser can map a source filename to its page URL.
+    default String defined(String destination) {
+        return destination;
+    }
 }

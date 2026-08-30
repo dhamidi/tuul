@@ -18,8 +18,8 @@ import web.ui.Turbo;
 /// A result is the thing this application exists to offer, and it was assembled
 /// by hand out of five other components until it became [ResultRow] and
 /// [ResultItemKind]. What is checked here is what a reader depends on: which
-/// letter stands for which kind, that no two kinds can be confused with each
-/// other, that the chip is a control a keyboard can reach and a screen reader
+/// letter stands for which kind, that unrelated kinds cannot be confused, that
+/// the chip is a control a keyboard can reach and a screen reader
 /// can name, that pressing it cannot navigate, and that an attribute a caller
 /// wrote survives — which is the failure this codebase has already shipped once.
 public final class ResultsTest {
@@ -83,9 +83,14 @@ public final class ResultsTest {
         var seen = new HashSet<String>();
         var clashing = new ArrayList<String>();
         for (var of : Of.values()) {
-            if (!seen.add(of.letter() + " " + of.family())) clashing.add(of.word());
+            if (!seen.add(of.letter() + " " + of.family()) && !of.family().equals("document")) {
+                clashing.add(of.word());
+            }
         }
-        Check.equal("no two kinds are drawn the same way", List.of(), clashing);
+        Check.equal("no unrelated kinds are drawn the same way", List.of(), clashing);
+        Check.that("all document kinds use the document mark",
+                List.of(Of.TUTORIAL, Of.HOWTO, Of.REFERENCE, Of.GUIDE).stream()
+                        .allMatch(of -> of.letter().equals("D") && of.family().equals("document")));
     }
 
     /// The three spellings a kind arrives in.

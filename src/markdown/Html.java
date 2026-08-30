@@ -245,7 +245,7 @@ public final class Html {
 
     private void link(Cursor link) throws IOException {
         var target = target(link);
-        write("<a href=\"" + url(target.destination()) + "\"");
+        write("<a href=\"" + url(links.defined(target.destination())) + "\"");
         if (!target.title().isEmpty()) write(" title=\"" + attribute(target.title()) + "\"");
         write(">");
     }

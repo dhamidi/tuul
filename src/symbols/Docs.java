@@ -42,6 +42,19 @@ public final class Docs {
                 .with("fields", fields(type, all));
     }
 
+    /// Describes one symbol and lists its package documents. The list contains
+    /// identity and title only. Call [Catalog#document] to read a body.
+    public static Json.Object describe(TypeInfo type, boolean all, List<Document> documents) {
+        var description = describe(type, all);
+        if (type.kind() != TypeInfo.Kind.PACKAGE || documents.isEmpty()) return description;
+        return description.with("documents", Json.Array.of(documents.stream()
+                .map(document -> (Json) Json.Object.of()
+                        .with("kind", document.kind())
+                        .with("slug", document.slug())
+                        .with("title", document.title()))
+                .toList()));
+    }
+
     /// Keeps only the named sections — `--methods`, `--implements` — or
     /// everything when none are named. Asking for the doc includes its block
     /// tags: `@param` and `@return` are part of the comment, not a section of
@@ -71,7 +84,10 @@ public final class Docs {
         line(description, "implements", "  implements ", out);
         line(description, "permits", "  permits ", out);
         where(description, out);
-        if (grouping(description)) contents(description, out);
+        if (grouping(description)) {
+            documents(description, out);
+            contents(description, out);
+        }
         else line(description, "nested", "  declares ", out);
         members(description, "methods", out);
         members(description, "fields", out);
@@ -97,6 +113,18 @@ public final class Docs {
         if (held.isEmpty()) return;
         out.write("\n");
         for (var name : held) out.write("  " + name + "\n");
+    }
+
+    private static void documents(Json.Object description, Writer out) throws IOException {
+        var documents = description.list("documents");
+        if (documents.isEmpty()) return;
+        out.write("\n");
+        for (var value : documents) {
+            if (!(value instanceof Json.Object document)) continue;
+            var slug = document.string("slug", "");
+            out.write("  " + document.string("kind", "") + "  " + document.string("title", "")
+                    + (slug.isEmpty() ? "" : "  " + slug) + "\n");
+        }
     }
 
     /// Where the declaration is written, when it is known. A project's source

@@ -22,12 +22,12 @@ final class Schema {
     /// Bumped when the shape below changes in a way that would make an older
     /// file answer differently — version 2 stopped indexing private members,
     /// version 4 added where a symbol is written and made packages and modules
-    /// symbols in their own right, and version 5 carries a symbol's modifiers
-    /// into search, so a result can say `static` without the page being opened.
-    static final int VERSION = 5;
+    /// symbols in their own right. Version 5 carries a symbol's modifiers into
+    /// search. Version 6 adds package documents and their search rows.
+    static final int VERSION = 6;
 
-    /// The whole format. Types, the members they declare, the parameters those
-    /// take, the tags on either, and the origin each type was learned from.
+    /// The whole format. It stores types, members, parameters, tags, package
+    /// documents, and the origin of each stored item.
     private static final String TABLES = """
             create table origin (
                 id       integer primary key,
@@ -113,6 +113,20 @@ final class Schema {
 
             create index tag_of_type on tag (type, position);
             create index tag_of_member on tag (member, position);
+
+            create table document (
+                id      integer primary key,
+                origin  integer not null references origin (id) on delete cascade,
+                package text    not null,
+                kind    text    not null check (kind in ('tutorial', 'howto', 'reference', 'guide')),
+                slug    text    not null,
+                title   text    not null,
+                body    text    not null,
+                source  text    not null,
+                unique (origin, package, kind, slug)
+            );
+
+            create index document_of_package on document (origin, package, source);
             """;
 
     /// Full text search over every symbol and every doc comment. Porter
@@ -147,19 +161,34 @@ final class Schema {
                 modifiers unindexed,
                 owner     unindexed,
                 member    unindexed,
+                document  unindexed,
                 tokenize = 'porter unicode61'
             );
 
             create trigger type_indexed after insert on type begin
-                insert into search (symbol, doc, kind, modifiers, owner, member)
-                values (new.name, new.doc, new.kind, new.modifiers, new.id, null);
+                insert into search (symbol, doc, kind, modifiers, owner, member, document)
+                values (new.name, new.doc, new.kind, new.modifiers, new.id, null, null);
             end;
 
             create trigger member_indexed after insert on member
             when new.modifiers like '%public%' or new.modifiers like '%protected%' begin
-                insert into search (symbol, doc, kind, modifiers, owner, member)
-                select type.name || '#' || new.name, new.doc, new.kind, new.modifiers, new.type, new.id
+                insert into search (symbol, doc, kind, modifiers, owner, member, document)
+                select type.name || '#' || new.name, new.doc, new.kind, new.modifiers, new.type, new.id, null
                 from type where type.id = new.type;
+            end;
+
+            create trigger document_indexed after insert on document begin
+                insert into search (symbol, doc, kind, modifiers, owner, member, document)
+                values (
+                    new.package || '/' || new.kind ||
+                        case when new.slug = '' then '' else '/' || new.slug end,
+                    new.title || ' ' || new.body,
+                    new.kind,
+                    '',
+                    null,
+                    null,
+                    new.id
+                );
             end;
 
             create trigger tag_indexed after insert on tag begin
@@ -169,7 +198,11 @@ final class Schema {
             end;
 
             create trigger type_forgotten after delete on type begin
-                delete from search where owner = old.id;
+                delete from search where owner = old.id and document is null;
+            end;
+
+            create trigger document_forgotten after delete on document begin
+                delete from search where document = old.id;
             end;
             """;
 

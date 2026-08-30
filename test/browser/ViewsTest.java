@@ -23,6 +23,7 @@ public final class ViewsTest {
         results(routes);
         links(routes);
         symbol(routes);
+        documents(routes);
         members(routes);
         problems(routes);
         form(routes);
@@ -81,6 +82,31 @@ public final class ViewsTest {
         var junk = markup(Views.results(routes, Found.nothing().asking("j").matching(List.of(Json.of("not a match")))));
         Check.that("something that is not a match is left out rather than rendered as one",
                 !junk.contains("<li"));
+
+        var document = markup(Views.results(routes, Found.nothing().asking("first").matching(
+                List.of(match("tcl/tutorial/first-script", "tutorial")))));
+        Check.that("a document result links to its document route",
+                document.contains("href=\"/symbols/tcl/tutorial/first-script\""));
+    }
+
+    private static void documents(Router routes) {
+        var listed = Json.Array.of(List.of(Json.Object.of()
+                .with("kind", "tutorial").with("slug", "").with("title", "A first script")));
+        var package_ = Json.Object.of()
+                .with("class", "tcl").with("kind", "package")
+                .with("documents", listed)
+                .with("nested", Json.Array.of(List.of()));
+        var hub = markup(Views.symbol(routes, Symbol.nothing().asking("tcl").describing(package_)));
+        Check.that("a package links to each document", hub.contains("href=\"/symbols/tcl/tutorial\""));
+
+        var description = Json.Object.of()
+                .with("package", "tcl").with("kind", "tutorial").with("slug", "")
+                .with("title", "A first script").with("doc", "# A first script\n\nRun Tcl.\n")
+                .with("documents", listed);
+        var page = markup(Views.packageDocument(routes, markdown.Links.NONE, description));
+        Check.that("a document page describes a document", page.contains("itemtype=\"/Document\""));
+        Check.that("the document names its package", page.contains("itemprop=\"package\" content=\"tcl\""));
+        Check.equal("the source title does not add a second first-level heading", 1, count(page, "<h1"));
     }
 
     /// A symbol page: what it says it is describing, and what it links to.

@@ -24,7 +24,10 @@ javac --release "$release" -nowarn -d build/bootstrap/classes $(find src -name '
 javac --release "$release" -nowarn -cp build/bootstrap/classes -d build/bootstrap/cli src/cli/main.java
 # javac -d writes class files and nothing else, so anything beside the code
 # that is not code has to be put on the classpath by hand.
-(cd src && find . -type f ! -name '*.java' -exec cp --parents {} ../build/bootstrap/classes/ \;)
+(cd src && find . -type f ! -name '*.java' | while IFS= read -r file; do
+    mkdir -p "../build/bootstrap/classes/$(dirname "$file")"
+    cp "$file" "../build/bootstrap/classes/$file"
+done)
 printf '%s\n' "$release" > "$stamp"
 '''
 
@@ -46,7 +49,7 @@ run = 'java --enable-native-access=ALL-UNNAMED -cp build/classes:build/entry/cli
 [tasks.spec]
 description = "Run the hyperspecs in spec/ against a live application"
 depends = ["test"]
-run = 'java --enable-native-access=ALL-UNNAMED -cp build/classes:build/entry/cli:build/test spec'
+run = 'java --enable-native-access=ALL-UNNAMED -cp build/classes:build/entry/cli:build/test:. spec'
 
 [tasks.natives]
 description = "Cross-build the native modules for every platform tuul ships"

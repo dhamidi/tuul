@@ -10,6 +10,8 @@ import java.util.List;
 import java.util.Map;
 import java.util.concurrent.ExecutorService;
 import java.util.concurrent.Executors;
+import markdown.Links;
+import symbols.Document;
 import symbols.Index;
 import symbols.Catalog;
 import symbols.References;
@@ -162,6 +164,8 @@ public final class Browser implements AutoCloseable {
                 .on(Routes.HOME, searching())
                 .on(Routes.SEARCH, searching())
                 .on(Routes.SYMBOL, showing())
+                .on(Routes.DOCUMENT_KIND, documents())
+                .on(Routes.DOCUMENT, documents())
                 .on(Routes.TREE, this::browsing)
                 .on(Routes.FAVICON, this::favicon)
                 .otherwise(this::missing);
@@ -206,6 +210,70 @@ public final class Browser implements AutoCloseable {
                 .on("error", Symbols::failed)
                 .effect(Symbols.LOOK, Symbols.looking(index))
                 .render(this::symbol);
+    }
+
+    private Page<Documents.State> documents() {
+        return Page.of(Documents.State::nothing)
+                .on(Routes.DOCUMENT_KIND, Documents::asked)
+                .on(Routes.DOCUMENT, Documents::asked)
+                .on(Documents.FOUND, Documents::found)
+                .on(Documents.MISSING, Documents::missing)
+                .on("error", Documents::failed)
+                .effect(Documents.LOOK, Documents.looking(index))
+                .render(this::document);
+    }
+
+    private void document(Documents.State state, Request request, Response response) throws IOException {
+        var status = state.found() ? Status.OK : Status.NOT_FOUND;
+        if (state.found()
+                && Negotiate.best(request, Negotiate.HTML, Negotiate.JSON).orElse(Negotiate.HTML).equals(Negotiate.JSON)) {
+            response.status(status).header("Content-Type", "application/json");
+            var description = state.description();
+            (description.get("doc") instanceof json.Json.Str ? description.without("documents") : description)
+                    .write(response.writer());
+            return;
+        }
+        var content = state.found()
+                ? Views.packageDocument(routes(), documentLinks(state.description()), state.description())
+                : Views.searching(routes(), Found.nothing().failed(state.problem()));
+        render(shell(request, state.found() ? state.description().string("title", "Document") : "Not found",
+                Search.blank(routes()), content), status, response);
+    }
+
+    private Links documentLinks(json.Json.Object description) {
+        var packageName = description.string("package", "");
+        var symbols = referencing(packageName);
+        var documents = index.documents(packageName);
+        return new Links() {
+            @Override
+            public String destination(String label) {
+                return symbols.destination(label);
+            }
+
+            @Override
+            public String defined(String destination) {
+                var hash = destination.indexOf('#');
+                var path = hash < 0 ? destination : destination.substring(0, hash);
+                var fragment = hash < 0 ? "" : destination.substring(hash);
+                if (path.contains(":") || path.contains("/") || Document.name(Path.of(path)).isEmpty()) {
+                    return destination;
+                }
+                return documents.stream()
+                        .filter(document -> Path.of(document.source()).getFileName().toString().equals(path))
+                        .findFirst()
+                        .map(document -> documentPath(document) + fragment)
+                        .orElse(destination);
+            }
+        };
+    }
+
+    private String documentPath(Document document) {
+        var variables = new java.util.LinkedHashMap<String, Object>();
+        variables.put("name", document.packageName());
+        variables.put("kind", document.kind());
+        if (document.slug().isEmpty()) return routes().path(Routes.DOCUMENT_KIND, variables);
+        variables.put("slug", document.slug());
+        return routes().path(Routes.DOCUMENT, variables);
     }
 
     /// A symbol answers as a page or as the same JSON `tuul docs --json`

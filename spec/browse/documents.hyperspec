@@ -1,0 +1,32 @@
+# Package documents are part of the package page.
+
+visit /symbols/tcl
+expect status 200
+expect attribute symbol name tcl
+expect link "Tutorial: a first script"
+expect link "How-to"
+expect link "Reference"
+expect link "Explanation"
+
+# A document has its own resource and URL.
+follow "Tutorial: a first script"
+expect status 200
+expect at /symbols/tcl/tutorial
+expect item document
+expect attribute document package tcl
+expect attribute document kind tutorial
+expect attribute document title "Tutorial: a first script"
+
+# The page keeps the document inside the content frame.
+expect frame content
+
+# A Markdown link to a sibling file uses that document's browser URL.
+expect link howto.md
+follow howto.md
+expect at /symbols/tcl/howto
+expect attribute document kind howto
+
+# A document path that does not exist is not a symbol page.
+visit /symbols/tcl/tutorial/not-there
+expect status 404
+expect no item document

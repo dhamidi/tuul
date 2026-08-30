@@ -77,9 +77,9 @@ public record ResultItemKind(Props props, Node[] content) implements Component {
     /// The families group kinds that answer the same question — a class and a
     /// record are both a type you can hold, an interface and an annotation are
     /// both a contract, a package and a module are both a container, a method
-    /// and a field are both a member of something else. Two kinds in one family
-    /// always have different letters, so the colour never has to carry the
-    /// difference on its own.
+    /// and a field are both a member of something else. These kinds use
+    /// different letters. All document kinds use `D`. The expanded word gives
+    /// the document kind.
     public enum Of {
         CLASS("class", "C", "type"),
         RECORD("record", "R", "type"),
@@ -90,6 +90,10 @@ public record ResultItemKind(Props props, Node[] content) implements Component {
         MODULE("module", "M", "container"),
         METHOD("method", "m", "member"),
         FIELD("field", "f", "member"),
+        TUTORIAL("tutorial", "D", "document"),
+        HOWTO("howto", "D", "document"),
+        REFERENCE("reference", "D", "document"),
+        GUIDE("guide", "D", "document"),
         OTHER("symbol", "?", "plain");
 
         private final String word;
@@ -140,6 +144,10 @@ public record ResultItemKind(Props props, Node[] content) implements Component {
                 case "module" -> MODULE;
                 case "method" -> METHOD;
                 case "field" -> FIELD;
+                case "tutorial" -> TUTORIAL;
+                case "howto" -> HOWTO;
+                case "reference" -> REFERENCE;
+                case "guide" -> GUIDE;
                 default -> OTHER;
             };
         }

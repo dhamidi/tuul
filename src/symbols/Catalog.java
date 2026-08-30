@@ -20,6 +20,22 @@ public interface Catalog extends AutoCloseable {
     /// with dots instead of its binary name with `$`.
     Optional<TypeInfo> lookup(String name);
 
+    /// Returns one project package document. An unknown package, kind, or slug
+    /// returns empty.
+    default Optional<Document> document(String packageName, String kind, String slug) {
+        return Optional.empty();
+    }
+
+    /// Returns all documents for one project package in filename order.
+    default List<Document> documents(String packageName) {
+        return List.of();
+    }
+
+    /// Returns the documents of one kind in filename order.
+    default List<Document> documents(String packageName, String kind) {
+        return documents(packageName).stream().filter(document -> document.kind().equals(kind)).toList();
+    }
+
     /// Returns all project type names. Dependency and platform names are read
     /// on demand and are not in this list.
     List<String> names();

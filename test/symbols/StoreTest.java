@@ -16,6 +16,7 @@ public final class StoreTest {
     public static void run() throws IOException {
         format();
         roundTrip();
+        documents();
         staleness();
         searching();
         constraints();
@@ -34,7 +35,35 @@ public final class StoreTest {
             Check.equal("the journal is write-ahead, so a reader never waits for a writer",
                     "wal", text(database, "pragma journal_mode"));
             Check.that("and the tables are the ones the schema declares",
-                    tables(database).containsAll(List.of("origin", "type", "member", "parameter", "tag", "search")));
+                    tables(database).containsAll(List.of(
+                            "origin", "type", "member", "parameter", "tag", "document", "search")));
+        }
+    }
+
+    private static void documents() throws IOException {
+        try (var store = Store.open(index("documents")).orElseThrow()) {
+            var origin = store.origin("project", "sources", "one");
+            var tutorial = new Document("invoicing", "tutorial", "first", "First invoice",
+                    "# First invoice\n\nCreate a fixed amount.\n", "src/invoicing/tutorial-01-first.md");
+            store.write(origin.id(), Map.of("invoicing.Invoice", invoice()), List.of(tutorial), true);
+
+            Check.equal("a document comes back as it went in", tutorial,
+                    store.document(origin.id(), "invoicing", "tutorial", "first").orElseThrow());
+            Check.equal("documents keep filename order", List.of(tutorial),
+                    store.documents(origin.id(), "invoicing", ""));
+            Check.equal("a document body is indexed for search", "invoicing/tutorial/first",
+                    store.search("fixed amount", 10).stream()
+                            .filter(match -> match.kind().equals("tutorial"))
+                            .findFirst().orElseThrow().symbol());
+            store.write(origin.id(), Map.of("invoicing", invoicing()), false);
+            Check.that("an incremental symbol write keeps package documents",
+                    store.document(origin.id(), "invoicing", "tutorial", "first").isPresent());
+
+            store.origin("project", "sources", "two");
+            Check.that("a changed stamp forgets package documents",
+                    store.documents(origin.id(), "invoicing", "").isEmpty());
+            Check.that("and forgets their search rows",
+                    store.search("First invoice", 10).stream().noneMatch(match -> match.kind().equals("tutorial")));
         }
     }
 

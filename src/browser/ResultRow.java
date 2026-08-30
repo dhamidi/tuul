@@ -93,6 +93,13 @@ public record ResultRow(Router routes, Props props, Json.Object match, Node[] co
     }
 
     private String path(String symbol) {
+        if (List.of("tutorial", "howto", "reference", "guide").contains(match.string("kind", ""))) {
+            var parts = symbol.split("/", -1);
+            if (parts.length == 2) return routes.path(Routes.DOCUMENT_KIND,
+                    Map.of("name", parts[0], "kind", parts[1]));
+            if (parts.length == 3) return routes.path(Routes.DOCUMENT,
+                    Map.of("name", parts[0], "kind", parts[1], "slug", parts[2]));
+        }
         return routes.path(Routes.SYMBOL, Map.of("name", symbol));
     }
 

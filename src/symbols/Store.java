@@ -70,6 +70,7 @@ final class Store implements IndexStore {
     private void forget(long origin, String stamp) {
         database.transaction(() -> {
             database.execute("delete from type where origin = ?", origin);
+            database.execute("delete from document where origin = ?", origin);
             database.execute("update origin set stamp = ?, complete = 0 where id = ?", stamp, origin);
         });
     }
@@ -100,6 +101,34 @@ final class Store implements IndexStore {
                     rows.text(5),
                     (int) rows.integer(6)));
         }
+    }
+
+    @Override
+    public Optional<Document> document(long origin, String packageName, String kind, String slug) {
+        try (var rows = database.query("""
+                select title, body, source from document
+                where origin = ? and package = ? and kind = ? and slug = ?
+                """, origin, packageName, kind, slug)) {
+            if (!rows.next()) return Optional.empty();
+            return Optional.of(new Document(packageName, kind, slug, rows.text(0), rows.text(1), rows.text(2)));
+        }
+    }
+
+    @Override
+    public List<Document> documents(long origin, String packageName, String kind) {
+        var found = new ArrayList<Document>();
+        var sql = "select kind, slug, title, body, source from document where origin = ? and package = ?"
+                + (kind.isEmpty() ? "" : " and kind = ?") + " order by source";
+        var parameters = kind.isEmpty()
+                ? new Object[] {origin, packageName}
+                : new Object[] {origin, packageName, kind};
+        try (var rows = database.query(sql, parameters)) {
+            while (rows.next()) {
+                found.add(new Document(
+                        packageName, rows.text(0), rows.text(1), rows.text(2), rows.text(3), rows.text(4)));
+            }
+        }
+        return List.copyOf(found);
     }
 
     private List<String> related(long type, String relation) {
@@ -169,7 +198,13 @@ final class Store implements IndexStore {
 
         var found = new ArrayList<Catalog.Match>();
         try (var rows = database.query("""
-                select symbol, kind, modifiers, doc from search
+                select symbol, kind, modifiers,
+                    case when search.document is null then doc else coalesce((
+                        select case when instr(body, char(10)) = 0 then ''
+                            else substr(body, instr(body, char(10)) + 1) end
+                        from document where document.id = search.document
+                    ), '') end
+                from search
                 where search match ?
                 order by case
                     when lower(replace(symbol, '$', '.')) = lower(?) then 0
@@ -195,10 +230,21 @@ final class Store implements IndexStore {
     /// `a.b.C.D` could as easily be a class `D` in a package `a.b.C`, which is
     /// why looking one up tries both.
     @Override
-    public void write(long origin, Map<String, TypeInfo> types, boolean complete) {
+    public void write(long origin, Map<String, TypeInfo> types, List<Document> documents, boolean complete) {
         database.transaction(() -> {
             try (var sink = new Sink()) {
                 types.forEach((name, type) -> sink.put(origin, name, type));
+            }
+            if (complete || !documents.isEmpty()) {
+                database.execute("delete from document where origin = ?", origin);
+                try (var sink = Statement.of(database,
+                        "insert into document (origin, package, kind, slug, title, body, source)"
+                                + " values (?, ?, ?, ?, ?, ?, ?)")) {
+                    for (var document : documents) {
+                        sink.run(origin, document.packageName(), document.kind(), document.slug(), document.title(),
+                                document.body(), document.source());
+                    }
+                }
             }
             if (complete) database.execute("update origin set complete = 1 where id = ?", origin);
         });

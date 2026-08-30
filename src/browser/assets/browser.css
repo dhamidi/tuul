@@ -271,6 +271,7 @@ turbo-frame { display: block; }
 .kind--value     { --kind-ink: #194c2b; --kind-fill: #c6e6d1; }
 .kind--container { --kind-ink: #5f3a05; --kind-fill: #f0dcbc; }
 .kind--member    { --kind-ink: #0f474b; --kind-fill: #c2e3e5; }
+.kind--document  { --kind-ink: #6a2b18; --kind-fill: #f3d2c5; }
 /* A kind this tuul has never heard of. An index is a file on disk and another
  * tuul may have written it, so an unknown kind is drawn rather than dropped. */
 .kind--plain     { --kind-ink: #4a4a45; --kind-fill: #e8e8e3; }
@@ -281,6 +282,7 @@ turbo-frame { display: block; }
   .kind--value     { --kind-ink: #aee3bf; --kind-fill: #1f3a29; }
   .kind--container { --kind-ink: #f0c88f; --kind-fill: #3d3018; }
   .kind--member    { --kind-ink: #a6e0e4; --kind-fill: #1d383a; }
+  .kind--document  { --kind-ink: #f4c1ad; --kind-fill: #482c25; }
   .kind--plain     { --kind-ink: #cfcfc9; --kind-fill: #33333a; }
 }
 

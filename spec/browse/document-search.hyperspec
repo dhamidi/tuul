@@ -1,0 +1,27 @@
+# Search returns a document as a document result.
+
+visit /
+fill q "TCL BUSY"
+submit
+expect status 200
+
+within results {
+    expect item symbol
+    expect link tcl/reference
+}
+
+follow tcl/reference
+expect status 200
+expect at /symbols/tcl/reference
+expect item document
+expect attribute document package tcl
+expect attribute document kind reference
+expect attribute document title Reference
+
+# The result uses the document kind, not a generic document kind.
+visit /
+fill q tcl/reference
+submit
+within results {
+    expect attribute symbol kind reference
+}

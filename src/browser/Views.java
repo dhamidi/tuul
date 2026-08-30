@@ -352,7 +352,85 @@ public final class Views {
                                 Ui.badge(Microdata.of("kind"), text(description.string("kind", "package")))),
                         documentation(links, description.string("doc", ""))),
                 contents(routes, "Packages", qualified, packages),
+                documents(routes, description),
                 contents(routes, "Types", qualified, types));
+    }
+
+    private static Html documents(Router routes, Json.Object description) {
+        var written = new ArrayList<Html>();
+        for (var kind : List.of("tutorial", "howto", "reference", "guide")) {
+            var documents = objects(description, "documents").stream()
+                    .filter(document -> document.string("kind", "").equals(kind))
+                    .toList();
+            if (documents.isEmpty()) continue;
+            written.add(Ui.stack(Props.of("gap", "sm"),
+                    Ui.heading(Props.of("level", "2"), text(section(kind))),
+                    Ui.items(Props.of().on("columns"), Html.each(documents, document -> Ui.item(
+                            Ui.anchor(Props.of("href", documentPath(routes, description.string("class", ""), kind,
+                                            document.string("slug", "")), "frame", Turbo.TOP),
+                                    text(document.string("title", ""))))))));
+        }
+        return Html.fragment(written);
+    }
+
+    /// Renders one document or a list for a kind that has no intro document.
+    public static Html packageDocument(Router routes, Links links, Json.Object description) {
+        var packageName = description.string("package", "");
+        var kind = description.string("kind", "");
+        var title = description.string("title", section(kind));
+        var body = description.string("doc", "");
+        var others = objects(description, "documents").stream()
+                .filter(document -> !document.string("slug", "").equals(description.string("slug", "")))
+                .toList();
+        return Ui.stack(Props.of("gap", "lg"), Microdata.scope(), Microdata.type("/Document"),
+                documentTrail(routes, packageName, kind, title),
+                Ui.stack(Props.of("gap", "sm"),
+                        Ui.group(Props.of("gap", "sm", "align", "baseline"),
+                                Ui.heading(Props.of("level", "1"), Microdata.of("title"), text(title)),
+                                Ui.badge(Microdata.of("kind"), text(kind))),
+                        Html.element("meta", Microdata.of("package"), content(packageName)),
+                        body.isBlank() ? Html.nothing() : documentation(links, withoutTitle(body))),
+                documentLinks(routes, packageName, kind, others));
+    }
+
+    private static Html documentLinks(Router routes, String packageName, String kind, List<Json.Object> documents) {
+        if (documents.isEmpty()) return Html.nothing();
+        return Ui.stack(Props.of("gap", "sm"),
+                Ui.heading(Props.of("level", "2"), text("More " + section(kind).toLowerCase())),
+                Ui.items(Html.each(documents, document -> Ui.item(
+                        Ui.anchor(Props.of("href", documentPath(routes, packageName, kind,
+                                        document.string("slug", "")), "frame", Turbo.TOP),
+                                text(document.string("title", "")))))));
+    }
+
+    private static Html documentTrail(Router routes, String packageName, String kind, String title) {
+        return Ui.breadcrumbs(
+                Ui.crumb(Props.of("href", routes.path(Routes.HOME), "frame", Turbo.TOP), text("tuul")),
+                Ui.crumb(Props.of("href", symbolPath(routes, packageName), "frame", Turbo.TOP), text(packageName)),
+                Ui.crumb(Props.of("href", documentPath(routes, packageName, kind, ""), "frame", Turbo.TOP), text(kind)),
+                Ui.crumb(Props.of(), text(title)));
+    }
+
+    private static String withoutTitle(String body) {
+        if (!body.startsWith("# ")) return body;
+        var end = body.indexOf('\n');
+        return end < 0 ? "" : body.substring(end + 1);
+    }
+
+    private static String section(String kind) {
+        return switch (kind) {
+            case "tutorial" -> "Tutorials";
+            case "howto" -> "How-tos";
+            case "reference" -> "Reference";
+            case "guide" -> "Guides";
+            default -> "Documents";
+        };
+    }
+
+    private static String documentPath(Router routes, String packageName, String kind, String slug) {
+        return slug.isEmpty()
+                ? routes.path(Routes.DOCUMENT_KIND, Map.of("name", packageName, "kind", kind))
+                : routes.path(Routes.DOCUMENT, Map.of("name", packageName, "kind", kind, "slug", slug));
     }
 
     /// A name held by a package is a type when its last segment is capitalised,

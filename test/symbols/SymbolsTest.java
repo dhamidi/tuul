@@ -19,7 +19,22 @@ public final class SymbolsTest {
     private SymbolsTest() {}
 
     public static void run() throws IOException {
+        documentNames();
         controlledCompilation();
+    }
+
+    private static void documentNames() {
+        Check.equal("an explanation filename names a guide",
+                new Document.Name("guide", "", "explanation.md"),
+                Document.name(Path.of("explanation.md")).orElseThrow());
+        Check.equal("an order prefix is not part of a document slug", "first-script",
+                Document.name(Path.of("tutorial-01-first-script.md")).orElseThrow().slug());
+        Check.that("an unrelated or uppercase Markdown file is not a package document",
+                Document.name(Path.of("README.md")).isEmpty() && Document.name(Path.of("Tutorial.md")).isEmpty());
+        Check.equal("line 1 supplies a document title", "First script",
+                Document.title("# First script\n\nStart here.\n", "tutorial", "first-script"));
+        Check.equal("a slug supplies a missing title", "first script",
+                Document.title("Start here.\n", "tutorial", "first-script"));
     }
 
     public static void integration() throws IOException {
@@ -29,6 +44,7 @@ public final class SymbolsTest {
             javadoc(index);
             platformJavadoc(index);
             packages(index);
+            documents(index);
             located(index);
             references(index);
         roots(index);
@@ -36,6 +52,8 @@ public final class SymbolsTest {
         }
         vendored();
         remembers();
+        documentCollisions();
+        documentStamp();
         entrypoints();
     }
 
@@ -45,6 +63,8 @@ public final class SymbolsTest {
         var root = Files.createTempDirectory("tuul-controlled-symbols");
         var source = Files.createDirectories(root.resolve("symbols"));
         Files.writeString(source.resolve("Fixture.java"), "package symbols; final class Fixture {}");
+        Files.writeString(source.resolve("tutorial-01-first.md"), "# First document\n\nStart with one.\n");
+        Files.writeString(source.resolve("README.md"), "# Not a package document\n");
         Files.writeString(root.resolve("main.java"), "void main() {}");
         var calls = new AtomicInteger();
         Compiler compiler = (request, classes) -> {
@@ -62,6 +82,8 @@ public final class SymbolsTest {
                     index.lookup("symbols.SymbolsTest.Fixture").isPresent());
             Check.that("the catalog compiles its project once", index.names().contains("symbols.SymbolsTest$Fixture"));
             Check.equal("the injected compiler ran once", 1, calls.get());
+            Check.equal("the index discovers only package documents", List.of("first"),
+                    index.documents("symbols").stream().map(Document::slug).toList());
         }
     }
 
@@ -147,6 +169,52 @@ public final class SymbolsTest {
                 state.permits().stream().sorted().toList());
         Check.that("and does not name them a second time as nested types", state.nested().isEmpty());
         Check.that("everything compiled is indexed", index.names().contains("invoicing.Invoice"));
+    }
+
+    private static void documents(Index index) {
+        Check.equal("a package keeps its documents in filename order",
+                List.of("guide", "tutorial"),
+                index.documents("invoicing").stream().map(Document::kind).toList());
+        Check.equal("an ordered filename loses its order prefix", "reasons",
+                index.document("invoicing", "guide", "reasons").orElseThrow().slug());
+        Check.equal("a document keeps its Markdown body", "# First invoice\n\nCreate a fixed invoice.\n",
+                index.document("invoicing", "tutorial", "").orElseThrow().body());
+        Check.that("document text participates in full-text search",
+                index.search("design reasons", 10).stream()
+                        .anyMatch(match -> match.symbol().equals("invoicing/guide/reasons")));
+    }
+
+    private static void documentCollisions() throws IOException {
+        var root = Files.createTempDirectory("tuul-document-collision");
+        var source = Files.createDirectories(root.resolve("collision"));
+        Files.writeString(source.resolve("One.java"), "package collision; public final class One {}");
+        Files.writeString(source.resolve("guide.md"), "# Guide\n");
+        Files.writeString(source.resolve("explanation.md"), "# Explanation\n");
+        try (var index = Index.of(List.of(root), List.of(), kept())) {
+            index.documents("collision");
+            Check.that("two document files cannot normalize to one identity", false);
+        } catch (IllegalStateException collision) {
+            Check.that("a document collision names both source files",
+                    collision.getMessage().contains("guide.md") && collision.getMessage().contains("explanation.md"));
+        }
+    }
+
+    private static void documentStamp() throws IOException {
+        var root = Files.createTempDirectory("tuul-document-stamp");
+        var source = Files.createDirectories(root.resolve("stamped"));
+        Files.writeString(source.resolve("One.java"), "package stamped; public final class One {}");
+        var tutorial = source.resolve("tutorial.md");
+        Files.writeString(tutorial, "# First\n\nOne.\n");
+        var store = kept();
+        try (var index = Index.of(List.of(root), List.of(), store)) {
+            Check.that("the first document body is indexed",
+                    index.document("stamped", "tutorial", "").orElseThrow().body().contains("One."));
+        }
+        Files.writeString(tutorial, "# First\n\nA different body.\n");
+        try (var index = Index.of(List.of(root), List.of(), store)) {
+            Check.that("a Markdown edit invalidates the project origin",
+                    index.document("stamped", "tutorial", "").orElseThrow().body().contains("different body"));
+        }
     }
 
     /// The JDK is part of the index — no source needed, the class files are
@@ -626,6 +694,9 @@ public final class SymbolsTest {
                  */
                 package invoicing;
                 """);
+        Files.writeString(invoicing.resolve("tutorial.md"), "# First invoice\n\nCreate a fixed invoice.\n");
+        Files.writeString(invoicing.resolve("guide-01-reasons.md"), "# Design reasons\n\nKeep amounts exact.\n");
+        Files.writeString(invoicing.resolve("README.md"), "# Checkout map\n");
         Files.writeString(invoicing.resolve("Invoice.java"), """
                 package invoicing;
 
@@ -688,6 +759,7 @@ public final class SymbolsTest {
     private static final class MemoryStore implements IndexStore {
 
         private final Map<String, TypeInfo> types = new LinkedHashMap<>();
+        private final List<symbols.Document> documents = new java.util.ArrayList<>();
         private String stamp = "";
         private boolean complete;
 
@@ -697,6 +769,7 @@ public final class SymbolsTest {
             if (!fresh) {
                 stamp = current;
                 types.clear();
+                documents.clear();
                 complete = false;
             }
             return new Snapshot(1, fresh, complete);
@@ -705,6 +778,24 @@ public final class SymbolsTest {
         @Override
         public java.util.Optional<TypeInfo> type(long origin, String name) {
             return java.util.Optional.ofNullable(types.get(name));
+        }
+
+        @Override
+        public java.util.Optional<symbols.Document> document(
+                long origin, String packageName, String kind, String slug) {
+            return documents.stream()
+                    .filter(document -> document.packageName().equals(packageName))
+                    .filter(document -> document.kind().equals(kind))
+                    .filter(document -> document.slug().equals(slug))
+                    .findFirst();
+        }
+
+        @Override
+        public List<symbols.Document> documents(long origin, String packageName, String kind) {
+            return documents.stream()
+                    .filter(document -> document.packageName().equals(packageName))
+                    .filter(document -> kind.isEmpty() || document.kind().equals(kind))
+                    .toList();
         }
 
         @Override
@@ -723,8 +814,10 @@ public final class SymbolsTest {
         }
 
         @Override
-        public void write(long origin, Map<String, TypeInfo> written, boolean complete) {
+        public void write(long origin, Map<String, TypeInfo> written, List<symbols.Document> found, boolean complete) {
             types.putAll(written);
+            documents.clear();
+            documents.addAll(found);
             this.complete = this.complete || complete;
         }
 

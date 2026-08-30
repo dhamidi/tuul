@@ -65,6 +65,8 @@ public final class Index implements Catalog {
     private final Compiler compiler;
     private Map<String, byte[]> classes;
 
+    private List<Document> projectDocuments;
+
     /// Worked out once: the roots do not change while a server is running, and
     /// walking the JDK's modules for every page would be a walk per page.
     private List<Catalog.Root> groups;
@@ -116,6 +118,33 @@ public final class Index implements Catalog {
     /// a package is not.
     public Optional<TypeInfo> lookup(String name) {
         return project(name).or(() -> vendored(name)).or(() -> platform(name)).or(() -> grouping(name));
+    }
+
+    @Override
+    public Optional<Document> document(String packageName, String kind, String slug) {
+        return documents(packageName, kind).stream().filter(document -> document.slug().equals(slug)).findFirst();
+    }
+
+    @Override
+    public List<Document> documents(String packageName) {
+        return documents(packageName, "");
+    }
+
+    @Override
+    public List<Document> documents(String packageName, String kind) {
+        var origin = origin("project", "sources", stamp);
+        if (origin.isPresent()) {
+            if (!origin.get().fresh() || !origin.get().complete()) indexProject();
+            try {
+                return store.orElseThrow().documents(origin.get().id(), packageName, kind);
+            } catch (SqliteException unavailable) {
+                // Read the project sources below.
+            }
+        }
+        return discoveredDocuments().stream()
+                .filter(document -> document.packageName().equals(packageName))
+                .filter(document -> kind.isEmpty() || document.kind().equals(kind))
+                .toList();
     }
 
     /// A module, or a package, wherever it is: the project's, a dependency's, or
@@ -544,8 +573,12 @@ public final class Index implements Catalog {
 
     /// Writing what was learned is worth doing and not worth failing over.
     private void remember(long origin, Map<String, TypeInfo> types, boolean complete) {
+        remember(origin, types, List.of(), complete);
+    }
+
+    private void remember(long origin, Map<String, TypeInfo> types, List<Document> documents, boolean complete) {
         try {
-            store.orElseThrow().write(origin, types, complete);
+            store.orElseThrow().write(origin, types, documents, complete);
         } catch (SqliteException unavailable) {
             // the next run will learn it again
         }
@@ -563,8 +596,46 @@ public final class Index implements Catalog {
         var types = new LinkedHashMap<String, TypeInfo>();
         compile().forEach((name, bytes) -> types.put(name, documented(Classes.inspect(bytes), name, comments)));
         types.putAll(packagesOf(types));
-        remember(origin.get().id(), types, true);
+        remember(origin.get().id(), types, discoveredDocuments(), true);
     }
+
+    /// Reads each package document as source text. The normalized identity must
+    /// be unique across all source roots.
+    private List<Document> discoveredDocuments() {
+        if (projectDocuments != null) return projectDocuments;
+
+        var found = new LinkedHashMap<DocumentKey, Document>();
+        for (var root : roots) {
+            if (!Files.isDirectory(root)) continue;
+            try (var tree = Files.walk(root)) {
+                for (var path : tree.filter(Files::isRegularFile)
+                        .filter(file -> Document.name(file).isPresent())
+                        .sorted((left, right) -> {
+                            var names = left.getFileName().toString().compareTo(right.getFileName().toString());
+                            return names != 0 ? names : left.toString().compareTo(right.toString());
+                        }).toList()) {
+                    var name = Document.name(path).orElseThrow();
+                    var parent = root.relativize(path.getParent());
+                    var packageName = parent.toString().replace(parent.getFileSystem().getSeparator(), ".");
+                    var body = text(path);
+                    var document = new Document(packageName, name.kind(), name.slug(),
+                            Document.title(body, name.kind(), name.slug()), body, path.toString());
+                    var key = new DocumentKey(packageName, name.kind(), name.slug());
+                    var previous = found.putIfAbsent(key, document);
+                    if (previous != null) {
+                        throw new IllegalStateException("document collision: " + previous.source() + " and "
+                                + document.source() + " both define " + document.symbol());
+                    }
+                }
+            } catch (IOException unreadable) {
+                throw new UncheckedIOException(unreadable);
+            }
+        }
+        projectDocuments = List.copyOf(found.values());
+        return projectDocuments;
+    }
+
+    private record DocumentKey(String packageName, String kind, String slug) {}
 
     /// One source file holds a type and everything nested in it, so its
     /// comments are read once and shared between them.
@@ -643,7 +714,9 @@ public final class Index implements Catalog {
         for (var root : roots) {
             if (!Files.isDirectory(root)) continue;
             try (var tree = Files.walk(root)) {
-                for (var path : tree.filter(file -> file.toString().endsWith(".java")).sorted().toList()) {
+                for (var path : tree.filter(Files::isRegularFile)
+                        .filter(file -> file.toString().endsWith(".java") || Document.name(file).isPresent())
+                        .sorted().toList()) {
                     digest.append(path).append(':').append(Files.size(path)).append(':')
                             .append(Files.getLastModifiedTime(path).toMillis()).append('\n');
                 }

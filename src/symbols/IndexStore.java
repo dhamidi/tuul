@@ -27,6 +27,13 @@ public interface IndexStore extends AutoCloseable {
     /// Returns one stored symbol from an origin.
     Optional<TypeInfo> type(long origin, String name);
 
+    /// Returns one stored package document.
+    Optional<Document> document(long origin, String packageName, String kind, String slug);
+
+    /// Returns stored package documents in source filename order. An empty kind
+    /// returns all kinds.
+    List<Document> documents(long origin, String packageName, String kind);
+
     /// Returns every stored name from an origin in insertion order.
     List<String> names(long origin);
 
@@ -38,7 +45,12 @@ public interface IndexStore extends AutoCloseable {
 
     /// Replaces the given types in one transaction. `complete` records that the
     /// map contains every symbol from the origin.
-    void write(long origin, Map<String, TypeInfo> types, boolean complete);
+    void write(long origin, Map<String, TypeInfo> types, List<Document> documents, boolean complete);
+
+    /// Writes symbols for an origin that cannot contain project documents.
+    default void write(long origin, Map<String, TypeInfo> types, boolean complete) {
+        write(origin, types, List.of(), complete);
+    }
 
     /// Releases resources held by the store.
     @Override

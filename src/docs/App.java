@@ -149,6 +149,27 @@ public final class App {
             return;
         }
         try (var index = catalog(effect, catalogs)) {
+            var requested = document(symbol);
+            if (requested.isPresent()) {
+                var name = requested.get();
+                var exact = index.document(name.packageName(), name.kind(), name.slug());
+                if (exact.isPresent()) {
+                    emit.emit(Message.of("docs.result", exact.get().describe()));
+                    return;
+                }
+                var documents = name.slug().isEmpty()
+                        ? index.documents(name.packageName(), name.kind()) : List.<symbols.Document>of();
+                if (!documents.isEmpty()) {
+                    emit.emit(Message.of("docs.result", Json.Object.of()
+                            .with("package", name.packageName()).with("kind", name.kind())
+                            .with("documents", Json.Array.of(documents.stream()
+                                    .map(document -> (Json) document.describe().without("doc").without("source"))
+                                    .toList()))));
+                    return;
+                }
+                emit.emit(Message.of("docs.missing").with("symbol", symbol));
+                return;
+            }
             emit.emit(index.lookup(symbol)
                     .map(type -> Message.of("docs.result", described(index, type, effect)))
                     .orElseGet(() -> Message.of("docs.missing").with("symbol", symbol)));
@@ -157,7 +178,9 @@ public final class App {
 
     /// One symbol, and what it holds when the caller asked for that.
     private static Json.Object described(Catalog index, symbols.TypeInfo type, Effect effect) {
-        var description = Docs.describe(type, effect.flag("all"));
+        var documents = type.kind() == symbols.TypeInfo.Kind.PACKAGE
+                ? index.documents(type.name()) : List.<symbols.Document>of();
+        var description = Docs.describe(type, effect.flag("all"), documents);
         if (!effect.flag("members")) return description;
         return description.with("members", Json.Array.of(
                 members(index, description, effect.flag("all"), effect.flag("recursive"), new LinkedHashSet<>())));
@@ -210,6 +233,31 @@ public final class App {
             return;
         }
         if (!(effect.get("symbol") instanceof Json.Object description)) return;
+        if (description.get("package") instanceof Json.Str && description.get("documents") instanceof Json.Array
+                && description.get("doc") == null) {
+            if (effect.flag("json")) {
+                description.write(out);
+                out.write("\n");
+            } else {
+                for (var value : description.list("documents")) {
+                    if (!(value instanceof Json.Object document)) continue;
+                    out.write(document.string("title", "") + "\t" + document.string("slug", "") + "\n");
+                }
+            }
+            out.flush();
+            return;
+        }
+        if (description.get("package") instanceof Json.Str && description.get("title") instanceof Json.Str) {
+            if (effect.flag("json")) {
+                description.write(out);
+                out.write("\n");
+            } else {
+                out.write(description.string("doc", ""));
+                if (!description.string("doc", "").endsWith("\n")) out.write("\n");
+            }
+            out.flush();
+            return;
+        }
         var sections = sections(effect.list("sections"));
         var members = description.list("members");
         var one = description.without("members");
@@ -230,6 +278,18 @@ public final class App {
             out.write("\n");
         }
         out.flush();
+    }
+
+    private record DocumentName(String packageName, String kind, String slug) {}
+
+    private static java.util.Optional<DocumentName> document(String symbol) {
+        var parts = symbol.split("/", -1);
+        if (parts.length < 2 || parts.length > 3 || parts[0].isBlank()) return java.util.Optional.empty();
+        var kind = parts[1];
+        if (!List.of("tutorial", "howto", "reference", "guide").contains(kind)) {
+            return java.util.Optional.empty();
+        }
+        return java.util.Optional.of(new DocumentName(parts[0], kind, parts.length == 3 ? parts[2] : ""));
     }
 
     private static void report(Effect effect, Writer err) throws IOException {

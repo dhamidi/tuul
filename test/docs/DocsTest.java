@@ -11,6 +11,7 @@ import java.util.Map;
 import java.util.Optional;
 import json.Json;
 import symbols.Catalog;
+import symbols.Document;
 import symbols.TypeInfo;
 
 /// `tuul docs` as the application behind it, driven by the messages the command
@@ -25,6 +26,7 @@ public final class DocsTest {
         members(root);
         recursive(root);
         asJson(root);
+        documents(root);
     }
 
     /// An entrypoint is not part of the symbol catalog. A platform symbol is.
@@ -81,6 +83,22 @@ public final class DocsTest {
                 Json.parse(answer.out()) instanceof Json.Object described ? described.list("members").size() : 0);
     }
 
+    private static void documents(Path root) throws IOException {
+        var package_ = ask(root, Message.of("docs.query").with("symbol", "greeting"));
+        Check.that("a package lists its documents", package_.out().contains("tutorial  Write a greeting"));
+
+        var document = ask(root, Message.of("docs.query").with("symbol", "greeting/tutorial"));
+        Check.equal("a document request answers", 0, document.exit());
+        Check.equal("a document request prints Markdown", "# Write a greeting\n\nCreate one greeting.\n", document.out());
+
+        var json = ask(root, Message.of("docs.query")
+                .with("symbol", "greeting/tutorial").with("json", true));
+        Check.that("a document JSON object carries its package and body",
+                Json.parse(json.out()) instanceof Json.Object description
+                        && description.string("package", "").equals("greeting")
+                        && description.string("doc", "").contains("Create one greeting"));
+    }
+
     /// What one invocation printed and what it exited with.
     private record Answer(int exit, String out, String err) {}
 
@@ -124,9 +142,24 @@ public final class DocsTest {
 
     private record MemoryCatalog(Map<String, TypeInfo> symbols) implements Catalog {
 
+        private static final Document TUTORIAL = new Document(
+                "greeting", "tutorial", "", "Write a greeting",
+                "# Write a greeting\n\nCreate one greeting.\n", "fixture/greeting/tutorial.md");
+
         @Override
         public Optional<TypeInfo> lookup(String name) {
             return Optional.ofNullable(symbols.get(name));
+        }
+
+        @Override
+        public Optional<Document> document(String packageName, String kind, String slug) {
+            return packageName.equals("greeting") && kind.equals("tutorial") && slug.isEmpty()
+                    ? Optional.of(TUTORIAL) : Optional.empty();
+        }
+
+        @Override
+        public List<Document> documents(String packageName) {
+            return packageName.equals("greeting") ? List.of(TUTORIAL) : List.of();
         }
 
         @Override

@@ -22,6 +22,10 @@ public final class Routes {
 
     public static final String SYMBOL = "symbol";
 
+    public static final String DOCUMENT_KIND = "document-kind";
+
+    public static final String DOCUMENT = "document";
+
     /// What there is, as a page. The sidebar shows the same thing, and this is
     /// where its opener goes for a reader whose scripts never arrived — which
     /// is why it exists as a URL and not only as a panel.
@@ -39,6 +43,8 @@ public final class Routes {
                 .get(HOME, "/")
                 .get(SEARCH, "/search")
                 .get(SYMBOL, "/symbols/{name}")
+                .get(DOCUMENT_KIND, "/symbols/{name}/{kind}")
+                .get(DOCUMENT, "/symbols/{name}/{kind}/{slug}")
                 .get(TREE, "/tree")
                 .get(FAVICON, "/favicon.ico");
     }

@@ -130,7 +130,8 @@ public final class Symbols {
         return (effect, emit) -> {
             var name = effect.string("symbol", "");
             emit.emit(index.lookup(name)
-                    .map(type -> Message.of(FOUND, Docs.describe(type, false)))
+                    .map(type -> Message.of(FOUND, Docs.describe(type, false,
+                            type.kind() == symbols.TypeInfo.Kind.PACKAGE ? index.documents(type.name()) : List.of())))
                     .orElseGet(() -> Message.of(MISSING).with("symbol", name)));
         };
     }
