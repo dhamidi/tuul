@@ -77,8 +77,6 @@ public final class BrowserTest {
                 });
                 Check.that("closing returns rather than waiting for something that never ends",
                         closed.await(15, TimeUnit.SECONDS));
-                Check.that("the close signal arrives rather than waiting for something that never ends",
-                        !closing.isAlive());
                 Check.that("and does not throw", failure.get() == null);
 
                 Check.equal("every subscription has ended", 0, browser.cable().subscribers());

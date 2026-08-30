@@ -1,6 +1,8 @@
 import harness.Check;
 import java.time.Duration;
 import java.util.List;
+import java.util.Set;
+import java.util.concurrent.Executors;
 
 /// Runs all test suites, or one suite selected by `--suite`.
 ///
@@ -42,13 +44,41 @@ void main(String[] arguments) {
             new Named("sqlite3.ApiTest", sqlite3.ApiTest::run));
 
     var options = options(arguments, suites);
-    for (var suite : suites) {
-        if (options.name().isEmpty() || options.name().equals(suite.name())) {
-            Check.suite(suite.name(), suite.body(), options.timeout());
+    try (var parallel = Executors.newVirtualThreadPerTaskExecutor()) {
+        var running = suites.stream()
+                .filter(suite -> selected(options, suite))
+                .filter(suite -> PURE.contains(suite.name()))
+                .map(suite -> parallel.submit(() -> Check.suite(suite.name(), suite.body(), options.timeout())))
+                .toList();
+        for (var suite : suites) {
+            if (selected(options, suite) && !PURE.contains(suite.name())) {
+                Check.suite(suite.name(), suite.body(), options.timeout());
+            }
         }
+        for (var result : running) result.get();
+    } catch (InterruptedException interrupted) {
+        Thread.currentThread().interrupt();
+        throw new IllegalStateException("test runner interrupted", interrupted);
+    } catch (java.util.concurrent.ExecutionException failed) {
+        throw new IllegalStateException("parallel test runner failed", failed.getCause());
     }
     System.exit(Check.report());
 }
+
+private static boolean selected(Options options, Named suite) {
+    return options.name().isEmpty() || options.name().equals(suite.name());
+}
+
+private static final Set<String> PURE = Set.of(
+        "json.JsonTest",
+        "jsonschema.JsonschemaTest",
+        "markdown.MarkdownTest",
+        "application.ApplicationTest",
+        "peg.PegTest",
+        "argparse.ArgparseTest",
+        "uritemplates.TemplatesTest",
+        "web.ui.UiTest",
+        "symbols.SymbolsTest");
 
 private static Options options(String[] arguments, List<Named> suites) {
     var name = "";
