@@ -9,6 +9,7 @@ import java.io.StringWriter;
 import java.lang.foreign.FunctionDescriptor;
 import java.lang.foreign.ValueLayout;
 import java.lang.invoke.MethodHandle;
+import java.lang.module.ModuleFinder;
 import symbols.Sources;
 import tuul.Version;
 import java.nio.file.Files;
@@ -18,7 +19,6 @@ import java.util.List;
 import java.util.Map;
 import java.util.jar.JarEntry;
 import java.util.jar.JarFile;
-import java.util.jar.JarOutputStream;
 import java.util.jar.JarOutputStream;
 
 public final class ProjectTest {
@@ -197,9 +197,9 @@ public final class ProjectTest {
     private static void installs(Layout layout) throws IOException, InterruptedException {
         var installed = Install.into(layout, false, new StringWriter());
         var jar = installed.directory().resolve(Version.artifact() + ".jar");
+        var sources = installed.directory().resolve(Version.artifact() + "-sources.jar");
         Check.that("it writes a jar named for the version", Files.isRegularFile(jar));
-        Check.that("and a sources jar beside it",
-                Files.isRegularFile(installed.directory().resolve(Version.artifact() + "-sources.jar")));
+        Check.that("and a sources jar beside it", Files.isRegularFile(sources));
         Check.equal("it vendors a library for every platform tuul ships, because vendor/ is committed",
                 Platform.SHIPPED.stream().map(Platform::directory).toList(),
                 installed.platforms());
@@ -212,10 +212,19 @@ public final class ProjectTest {
 
         var entries = entries(jar);
         Check.that("the libraries are in it", entries.contains("json/Json.class"));
+        Check.that("the named module declaration is in it", entries.contains("module-info.class"));
+        Check.that("the sources carry the same module declaration", entries(sources).contains("module-info.java"));
         Check.that("no entrypoint is: a default-package class would take a name it does not own",
-                entries.stream().noneMatch(entry -> entry.endsWith(".class") && !entry.contains("/")));
+                entries.stream().noneMatch(entry -> entry.endsWith(".class")
+                        && !entry.contains("/") && !entry.equals("module-info.class")));
+        var module = ModuleFinder.of(jar).find("tuul").orElseThrow().descriptor();
+        Check.that("the installed jar is the explicit module tuul", !module.isAutomatic());
+        Check.that("one module exports the libraries", module.exports().stream()
+                .anyMatch(exported -> exported.source().equals("application")));
         Check.that("and the manifest says which tuul this is",
                 new String(read(jar, "META-INF/MANIFEST.MF")).contains("Implementation-Version: " + Version.NUMBER));
+        Check.that("the dependency manifest does not name the separate CLI",
+                !new String(read(jar, "META-INF/MANIFEST.MF")).contains("Main-Class:"));
 
         Install.into(layout, false, new StringWriter());
         try (var again = Files.list(installed.directory())) {

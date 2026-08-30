@@ -108,9 +108,9 @@ the classpath. The vendored jar is `tuul`. If the application has no native
 code of its own, native access is `--enable-native-access=tuul`.
 
 A custom runtime from `jlink` needs a named module. `tuul deploy` builds
-that runtime from `module tuul`. The source tree has no `module-info.java`
-yet. Until it does, the jar is an automatic module with the name `tuul`.
-An automatic module still works on the classpath as unnamed code.
+that runtime from `module tuul`. The source tree has one `module-info.java`.
+The build compiles the library as that module. It compiles the CLI separately
+and keeps the CLI on the classpath.
 
 ## Reload and module layers
 

@@ -21,12 +21,12 @@ import tuul.Version;
 
 /// Puts tuul into a project, as an ordinary dependency.
 ///
-/// What lands in `vendor/tuul/` is a jar, a sources jar and a compiled SQLite
-/// for every platform tuul ships — nothing tuul-shaped, nothing the build has to
-/// be told about. The jar is on the classpath because it is in `vendor/`, the
-/// sources jar is what makes `tuul docs application.Application` answer inside
-/// the project, and the libraries are what let `sqlite3` work on a machine with
-/// no compiler on it at all.
+/// What lands in `vendor/tuul/` is a jar, a sources jar, and a compiled SQLite
+/// for each supported platform. The jar is the named module `tuul`.
+///
+/// A modular project reads the jar from its module path. An unnamed project
+/// reads the same jar from its classpath. The sources jar supplies comments to
+/// `tuul docs`. The native libraries let `sqlite3` run without a C compiler.
 ///
 /// Every platform, not just this one, because `vendor/` is committed: the
 /// person who clones this next is on a different machine, and a dependency that
@@ -62,7 +62,7 @@ public final class Install {
         var written = 0;
         if (home.packaged()) {
             classes = repack(home.classes(), jar);
-            Files.copy(home.sources(), sources);
+            written = repackSources(home.sources(), sources);
         } else {
             classes = pack(home.classes(), jar, path -> true);
             written = pack(home.sources(), sources, java(".java"));
@@ -150,11 +150,21 @@ public final class Install {
     /// under `web/`, so they come across with the classes and a project reads
     /// them out of the jar it already has.
     private static int repack(Path distribution, Path jar) throws IOException {
+        return repack(distribution, jar, entry -> !shipped(entry) && library(entry));
+    }
+
+    /// Keeps the module declaration and the library sources. The distribution
+    /// also carries the CLI source, which is not part of the `tuul` module.
+    private static int repackSources(Path distribution, Path jar) throws IOException {
+        return repack(distribution, jar, entry -> entry.endsWith(".java") && library(entry));
+    }
+
+    private static int repack(Path distribution, Path jar, Predicate<String> wanted) throws IOException {
         var written = 0;
         try (var from = new JarFile(distribution.toFile());
-                var out = new JarOutputStream(Files.newOutputStream(jar), from.getManifest())) {
+                var out = new JarOutputStream(Files.newOutputStream(jar), manifest())) {
             for (var entry : Collections.list(from.entries())) {
-                if (entry.isDirectory() || shipped(entry.getName())) continue;
+                if (entry.isDirectory() || !wanted.test(entry.getName())) continue;
                 if (entry.getName().startsWith("META-INF/")) continue;
                 out.putNextEntry(new JarEntry(entry.getName()));
                 try (var bytes = from.getInputStream(entry)) {
@@ -172,12 +182,16 @@ public final class Install {
         return entry.startsWith(Home.NATIVE + "/");
     }
 
+    /// A module declaration lives at the archive root. All other library
+    /// entries live in a package. This excludes each default-package CLI class
+    /// and the `cli/main.java` source.
+    private static boolean library(String entry) {
+        if (entry.equals("module-info.class") || entry.equals("module-info.java")) return true;
+        return entry.contains("/") && !entry.startsWith("cli/");
+    }
+
     private static int pack(Path root, Path jar, Predicate<Path> wanted) throws IOException {
-        var manifest = new Manifest();
-        var attributes = manifest.getMainAttributes();
-        attributes.put(Attributes.Name.MANIFEST_VERSION, "1.0");
-        attributes.put(Attributes.Name.IMPLEMENTATION_TITLE, Version.NAME);
-        attributes.put(Attributes.Name.IMPLEMENTATION_VERSION, Version.NUMBER);
+        var manifest = manifest();
 
         var written = 0;
         try (var out = new JarOutputStream(Files.newOutputStream(jar), manifest)) {
@@ -189,6 +203,15 @@ public final class Install {
             }
         }
         return written;
+    }
+
+    private static Manifest manifest() {
+        var manifest = new Manifest();
+        var attributes = manifest.getMainAttributes();
+        attributes.put(Attributes.Name.MANIFEST_VERSION, "1.0");
+        attributes.put(Attributes.Name.IMPLEMENTATION_TITLE, Version.NAME);
+        attributes.put(Attributes.Name.IMPLEMENTATION_VERSION, Version.NUMBER);
+        return manifest;
     }
 
     /// The library half of tuul: everything in a package, which leaves out the
@@ -204,12 +227,17 @@ public final class Install {
         try (var tree = Files.walk(root)) {
             tree.filter(Files::isRegularFile)
                     .filter(wanted)
-                    .filter(path -> root.relativize(path).getNameCount() > 1)
+                    .filter(path -> root.relativize(path).getNameCount() > 1 || moduleInfo(path))
                     .filter(path -> !entrypoint(path))
                     .sorted()
                     .forEach(found::add);
         }
         return found;
+    }
+
+    private static boolean moduleInfo(Path path) {
+        var name = path.getFileName().toString();
+        return name.equals("module-info.java") || name.equals("module-info.class");
     }
 
     private static Predicate<Path> java(String extension) {

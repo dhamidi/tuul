@@ -149,7 +149,7 @@ public final class App {
                 ? "\n  " + directory + "/native — C, compiled by this project's tuul build"
                 : "\n  " + directory + "/native — SQLite for " + platforms + " platforms, no compiler needed";
         return Step.of(state, report("installed " + message.string("version", "") + " into " + directory + native_
-                + "\n  its libraries are now on this project's classpath"));
+                + "\n  module tuul is now available to this project's Java compiler"));
     }
 
     private static Step<State> bind(State state, Message message) {

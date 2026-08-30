@@ -7,16 +7,18 @@
 java = "latest"
 
 [tasks.build]
-description = "Compile src/ into build/classes"
+description = "Compile module tuul into build/classes and the CLI into build/cli"
 run = '''
 set -euo pipefail
 release=$(javac --version | cut -d' ' -f2 | cut -d. -f1)
-mkdir -p build/classes
-javac --release "$release" -nowarn -d build/classes $(find src -name '*.java')
+rm -rf build/classes build/cli
+mkdir -p build/classes build/cli
+javac --release "$release" -nowarn -d build/classes $(find src -name '*.java' ! -path 'src/cli/main.java')
+javac --release "$release" -nowarn -cp build/classes -d build/cli src/cli/main.java
 # javac -d writes class files and nothing else, so anything beside the code
 # that is not code has to be put on the classpath by hand.
 (cd src && find . -type f ! -name '*.java' -exec sh -c 'mkdir -p "../build/classes/$(dirname "$1")" && cp "$1" "../build/classes/$1"' _ {} \;)
-java --enable-native-access=ALL-UNNAMED -cp build/classes main build --native
+java --enable-native-access=ALL-UNNAMED -cp build/classes:build/cli main build --native
 '''
 
 [tasks.test]
@@ -32,38 +34,38 @@ javac --release "$release" -nowarn -cp build/classes -d build/test $(find test -
 # by, so editing one and re-running is all it takes.
 mkdir -p build/test/spec
 (cd spec && find . -type f -exec sh -c 'mkdir -p "../build/test/spec/$(dirname "$1")" && cp "$1" "../build/test/spec/$1"' _ {} \;)
-java --enable-native-access=ALL-UNNAMED -cp build/classes:build/test run
+java --enable-native-access=ALL-UNNAMED -cp build/classes:build/cli:build/test run
 '''
 
 [tasks.spec]
 description = "Run the hyperspecs in spec/ against a live application"
 depends = ["test"]
-run = 'java --enable-native-access=ALL-UNNAMED -cp build/classes:build/test spec'
+run = 'java --enable-native-access=ALL-UNNAMED -cp build/classes:build/cli:build/test spec'
 
 [tasks.natives]
 description = "Cross-build the native modules for every platform tuul ships"
 depends = ["build"]
 run = '''
 set -euo pipefail
-echo '{"type":"project.natives"}' | java --enable-native-access=ALL-UNNAMED -cp build/classes main message
+echo '{"type":"project.natives"}' | java --enable-native-access=ALL-UNNAMED -cp build/classes:build/cli main message
 '''
 
 [tasks.self-test]
 description = "Scaffold a project in a temporary directory and exercise tuul on it"
-depends = ["build"]
-run = 'java --enable-native-access=ALL-UNNAMED -cp build/classes main self-test'
+depends = ["dist"]
+run = 'java -jar build/dist/tuul.jar self-test'
 
 [tasks.tuul]
 description = "Run the cli, e.g. mise run tuul -- docs json.Json"
 depends = ["build"]
-run = 'java --enable-native-access=ALL-UNNAMED -cp build/classes main'
+run = 'java --enable-native-access=ALL-UNNAMED -cp build/classes:build/cli main'
 
 [tasks.dist]
 description = "Assemble the distribution: build/dist/tuul.jar and its sources"
 depends = ["natives"]
 run = '''
 set -euo pipefail
-version=$(java --enable-native-access=ALL-UNNAMED -cp build/classes main --version | cut -d' ' -f2)
+version=$(java --enable-native-access=ALL-UNNAMED -cp build/classes:build/cli main --version | cut -d' ' -f2)
 mkdir -p build/dist
 # The jar carries the prebuilt libraries, because an installed tuul has no
 # source tree to take them from and `tuul install` has to hand them to a
@@ -72,7 +74,7 @@ mkdir -p build/dist
 # the manifest is what lets `java -jar` run without a flag.
 printf 'Main-Class: main\nEnable-Native-Access: ALL-UNNAMED\nImplementation-Title: tuul\nImplementation-Version: %s\n' "$version" > build/dist/manifest.txt
 jar --create --file build/dist/tuul.jar --manifest build/dist/manifest.txt \
-    -C build/classes . -C build/dist native
+    -C build/classes . -C build/cli . -C build/dist native
 # Beside it, because `tuul install` vendors sources so `tuul docs` can answer
 # about tuul's own libraries with their comments.
 jar --create --file "build/dist/tuul-$version-sources.jar" -C src .
@@ -84,7 +86,7 @@ description = "Install this tuul into ~/.local/bin, the way a release would"
 depends = ["dist"]
 run = '''
 set -euo pipefail
-version=$(java --enable-native-access=ALL-UNNAMED -cp build/classes main --version | cut -d' ' -f2)
+version=$(java --enable-native-access=ALL-UNNAMED -cp build/classes:build/cli main --version | cut -d' ' -f2)
 home="${TUUL_HOME:-$HOME/.local/share/tuul}"
 bin="${TUUL_BIN:-$HOME/.local/bin}"
 

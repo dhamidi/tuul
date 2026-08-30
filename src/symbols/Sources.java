@@ -39,8 +39,10 @@ public final class Sources {
         return compile(roots, List.of());
     }
 
-    /// Compiles against `classpath` — the vendored jars a project is built on.
-    public static Map<String, byte[]> compile(List<Path> roots, List<Path> classpath) throws IOException {
+    /// Compiles against the vendored jars. Javac reads them from the module path
+    /// when the source tree has `module-info.java`. Otherwise, javac reads them
+    /// from the classpath.
+    public static Map<String, byte[]> compile(List<Path> roots, List<Path> dependencies) throws IOException {
         var compiler = ToolProvider.getSystemJavaCompiler();
         if (compiler == null) throw new IOException("no javac in this runtime — run tuul on a JDK, not a JRE");
 
@@ -50,16 +52,18 @@ public final class Sources {
         var problems = new DiagnosticCollector<JavaFileObject>();
         var files = compiler.getStandardFileManager(problems, null, StandardCharsets.UTF_8);
         var memory = new Memory(files);
-        var task = compiler.getTask(null, memory, problems, options(classpath), null, files.getJavaFileObjectsFromPaths(sources));
+        var module = sources.stream().anyMatch(path -> path.getFileName().toString().equals("module-info.java"));
+        var task = compiler.getTask(null, memory, problems, options(dependencies, module), null,
+                files.getJavaFileObjectsFromPaths(sources));
         if (!task.call()) throw new IOException("javac failed:\n" + report(problems));
         return memory.classes();
     }
 
-    private static List<String> options(List<Path> classpath) {
+    private static List<String> options(List<Path> classpath, boolean module) {
         var options = new ArrayList<>(List.of("-proc:none", "-parameters", "-g:none", "-nowarn",
                 "--release", String.valueOf(Runtime.version().feature())));
         if (classpath.isEmpty()) return options;
-        options.add("-classpath");
+        options.add(module ? "--module-path" : "-classpath");
         options.add(classpath.stream().map(Path::toString).collect(Collectors.joining(File.pathSeparator)));
         return options;
     }

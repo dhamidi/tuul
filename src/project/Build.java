@@ -18,8 +18,10 @@ import symbols.Vendor;
 /// Compiles a project onto disk: the libraries together, then each entrypoint
 /// on top of them, one output directory apart.
 ///
-/// A project is compiled against the jars in `vendor/` and nothing else. No
-/// preview features: tuul itself needs them, a project should not have to.
+/// A project compiles against the jars in `vendor/` and nothing else. If
+/// `src/module-info.java` exists, javac reads those jars from the module path.
+/// Otherwise, javac reads them from the classpath. Entrypoints and tests stay
+/// unnamed. Tuul does not enable preview features.
 public final class Build {
 
     /// What a compile did, or what stopped it. Problems are javac's own words.
@@ -34,16 +36,20 @@ public final class Build {
 
     public static Result compile(Layout layout) throws IOException {
         if (!layout.exists()) return new Result(0, List.of("no src/ in " + layout.root().toAbsolutePath()));
-        var classpath = Vendor.of(List.of(layout.vendor())).classpath();
+        var dependencies = Vendor.of(List.of(layout.vendor())).classpath();
+        var descriptor = layout.src().resolve("module-info.java");
+        var librarySources = sources(layout.libraries());
+        if (Files.isRegularFile(descriptor)) librarySources.addFirst(descriptor);
 
-        var libraries = javac(sources(layout.libraries()), layout.classes(), classpath);
+        var libraries = javac(librarySources, layout.classes(), dependencies, Files.isRegularFile(descriptor));
         if (!libraries.ok()) return libraries;
         resources(layout.libraries(), layout.src(), layout.classes());
 
         var classes = libraries.classes();
         for (var entrypoint : layout.entrypoints()) {
             var directory = layout.src().resolve(entrypoint);
-            var built = javac(sources(List.of(directory)), layout.entry(entrypoint), with(classpath, layout.classes()));
+            var built = javac(sources(List.of(directory)), layout.entry(entrypoint),
+                    with(dependencies, layout.classes()), false);
             if (!built.ok()) return built;
             resources(List.of(directory), directory, layout.entry(entrypoint));
             classes += built.classes();
@@ -56,12 +62,12 @@ public final class Build {
     public static Result compileTests(Layout layout) throws IOException {
         if (!Files.isDirectory(layout.test())) return new Result(0, List.of("no test/ in " + layout.root().toAbsolutePath()));
         var classpath = with(Vendor.of(List.of(layout.vendor())).classpath(), layout.classes());
-        var built = javac(sources(List.of(layout.test())), layout.tests(), classpath);
+        var built = javac(sources(List.of(layout.test())), layout.tests(), classpath, false);
         if (built.ok()) resources(List.of(layout.test()), layout.test(), layout.tests());
         return built;
     }
 
-    private static Result javac(List<Path> sources, Path out, List<Path> classpath) throws IOException {
+    private static Result javac(List<Path> sources, Path out, List<Path> classpath, boolean module) throws IOException {
         if (sources.isEmpty()) return new Result(0, List.of());
         var compiler = ToolProvider.getSystemJavaCompiler();
         if (compiler == null) throw new IOException("no javac in this runtime — run tuul on a JDK, not a JRE");
@@ -74,7 +80,7 @@ public final class Build {
                 "-d", out.toString(),
                 "--release", String.valueOf(Runtime.version().feature())));
         if (!classpath.isEmpty()) {
-            options.add("-classpath");
+            options.add(module ? "--module-path" : "-classpath");
             options.add(classpath.stream().map(Path::toString).collect(Collectors.joining(File.pathSeparator)));
         }
         var task = compiler.getTask(null, files, problems, options, null, files.getJavaFileObjectsFromPaths(sources));

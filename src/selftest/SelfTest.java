@@ -4,6 +4,7 @@ import java.io.File;
 import java.io.IOException;
 import java.io.StringWriter;
 import java.io.UncheckedIOException;
+import java.lang.module.ModuleFinder;
 import java.nio.file.Files;
 import java.nio.file.Path;
 import java.util.ArrayList;
@@ -143,13 +144,18 @@ public final class SelfTest {
         check(checks, "carried inside the jar rather than copied beside it",
                 !Files.exists(project.resolve("vendor/tuul/assets")),
                 listing(project.resolve("vendor/tuul")));
+        check(checks, "the installed jar is the named module tuul",
+                named(project), listing(project.resolve("vendor/tuul")));
+        check(checks, "the installed sources carry the module declaration",
+                sourced(project, "module-info.java"), listing(project.resolve("vendor/tuul")));
 
+        Files.writeString(project.resolve("src/module-info.java"), MODULE);
         Files.writeString(project.resolve("src/demo/Notes.java"), NOTES);
         Files.writeString(project.resolve("src/cli/main.java"), ENTRYPOINT);
         Files.writeString(project.resolve("test/run.java"), RUNNER);
 
         var built = without(project, "build");
-        check(checks, "a project using tuul's libraries builds with no compiler on the PATH",
+        check(checks, "a project that requires tuul builds with no compiler on the PATH",
                 built.status() == 0, built.output());
         check(checks, "without compiling SQLite, which arrived compiled",
                 !built.output().contains("compiling native module sqlite3")
@@ -237,6 +243,15 @@ public final class SelfTest {
                                 }
                             });
                 }
+            }
+            """;
+
+    private static final String MODULE = """
+            module demo {
+                requires tuul;
+
+                exports demo;
+                exports greet;
             }
             """;
 
@@ -338,12 +353,25 @@ import java.util.Map;
     /// now, beside the classes of the package that ships them, so this is where
     /// a project's copy of Turbo is.
     private static boolean jarred(Path project, String entry) {
+        return archived(project, Version.artifact() + ".jar", entry);
+    }
+
+    private static boolean sourced(Path project, String entry) {
+        return archived(project, Version.artifact() + "-sources.jar", entry);
+    }
+
+    private static boolean archived(Path project, String artifact, String entry) {
         try (var jar = new java.util.jar.JarFile(
-                project.resolve("vendor/tuul/" + tuul.Version.artifact() + ".jar").toFile())) {
+                project.resolve("vendor/tuul/" + artifact).toFile())) {
             return jar.getEntry(entry) != null;
         } catch (IOException missing) {
             return false;
         }
+    }
+
+    private static boolean named(Path project) {
+        var jar = project.resolve("vendor/tuul/" + Version.artifact() + ".jar");
+        return ModuleFinder.of(jar).find("tuul").filter(reference -> !reference.descriptor().isAutomatic()).isPresent();
     }
 
     /// What is actually there, for a check that expected something else.
