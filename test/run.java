@@ -40,6 +40,7 @@ void main(String[] arguments) {
             new Named("web.dispatch.DispatchTest", web.dispatch.DispatchTest::run),
             new Named("browser.BrowserTest", browser.BrowserTest::run),
             new Named("project.ProjectTest", project.ProjectTest::run),
+            new Named("project.ProjectIntegrationTest", project.ProjectTest::integration),
             new Named("project.SpecsTest", project.SpecsTest::run),
             new Named("sqlite3.SqliteTest", sqlite3.SqliteTest::run),
             new Named("sqlite3.ApiTest", sqlite3.ApiTest::run));
@@ -87,7 +88,7 @@ private static final Set<String> INTEGRATION = Set.of(
         "web.cable.CableTest",
         "web.hyperspec.HyperspecTest",
         "browser.BrowserTest",
-        "project.ProjectTest",
+        "project.ProjectIntegrationTest",
         "project.SpecsTest",
         "sqlite3.SqliteTest",
         "sqlite3.ApiTest");

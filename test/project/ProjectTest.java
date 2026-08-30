@@ -39,8 +39,22 @@ public final class ProjectTest {
         launches(layout);
         refuses(layout, project);
         vendored(layout, project);
-        installs(layout);
         carries(project);
+    }
+
+    /// Runs the native compiler and installation checks in one focused fixture.
+    ///
+    /// The fixture is temporary and contains the scaffolded project required by
+    /// both operations. The fast project suite does not call either operation.
+    public static void integration() throws IOException, InterruptedException {
+        var root = Files.createTempDirectory("tuul-project-integration");
+        root.toFile().deleteOnExit();
+        var project = root.resolve("hello-world");
+        scaffolds(project);
+        var layout = new Layout(project);
+        Build.compile(layout);
+        compiles(layout, project);
+        installs(layout);
     }
 
     private static void scaffolds(Path project) throws IOException {
