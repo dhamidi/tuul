@@ -29,7 +29,7 @@ public final class AddTest {
         var releaseFirstBatch = new CountDownLatch(1);
         var services = new Add.Services() {
             @Override
-            public List<String> resolve(String coordinate) {
+            public List<String> resolve(List<String> coordinate) {
                 return coordinates;
             }
 
@@ -62,7 +62,7 @@ public final class AddTest {
         var cachedCalls = new CopyOnWriteArrayList<String>();
         var cachedServices = new Add.Services() {
             @Override
-            public List<String> resolve(String coordinate) {
+            public List<String> resolve(List<String> coordinate) {
                 return List.of("com.acme.cached:library:1.0");
             }
 

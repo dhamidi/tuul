@@ -70,7 +70,7 @@ public final class Add {
     public record Failure(String coordinate, String reason) {}
 
     interface Services {
-        List<String> resolve(String coordinate) throws Exception;
+        List<String> resolve(List<String> coordinates) throws Exception;
 
         Download download(String coordinate, String kind, Consumer<Event> events) throws Exception;
     }
@@ -245,16 +245,30 @@ public final class Add {
         if (roots.isEmpty()) throw new IOException("tuul add needs at least one dependency");
 
         var progress = new Progress(out, mode);
+        List<Coordinate> artifacts;
+        for (var root : roots) progress.publish(Event.resolve(root.text()));
+        try {
+            artifacts = services.resolve(roots.stream().map(Coordinate::text).toList()).stream()
+                    .map(Coordinate::parse).toList();
+            for (var root : roots) progress.publish(Event.resolved(root.text(), artifacts.size()));
+        } catch (Exception failure) {
+            var reason = failure.getMessage() == null ? failure.toString() : failure.getMessage();
+            for (var root : roots) progress.publish(Event.resolveFailed(root.text(), reason));
+            var result = new Result(List.of(), List.of(),
+                    roots.stream().map(root -> new Failure(root.text(), reason)).toList());
+            progress.publish(Event.complete(0, 0, result.failed().size()));
+            progress.close();
+            return result;
+        }
         try (var system = ActorSystem.named("tuul-add")
-                .define(new Coordinator(roots), Spawn.ephemeral().effects(ACTOR_EFFECT_DEADLINE))
+                .define(new Coordinator(roots, artifacts), Spawn.ephemeral().effects(ACTOR_EFFECT_DEADLINE))
                 .define(progress, Spawn.ephemeral().mailbox(32).effects(ACTOR_EFFECT_DEADLINE))) {
             var root = Address.of(COORDINATOR, "run");
             var progressAddress = progress.at("run");
-            progress.attach(system, progressAddress);
             system.effect(Progress.RENDER, progress::render);
             system.effect(Progress.CLOSE, progress::closeOutput);
             system.effect(DOWNLOAD, (effect, emit) -> download(effect, emit, services, progress));
-            system.effect(RESOLVE, (effect, emit) -> resolve(effect, emit, services, progress));
+            progress.attach(system, progressAddress);
             system.tell(root, Message.of("add.start"));
             var answer = system.ask(root, Message.of(RESULT), ASK_DEADLINE).join();
             var result = result(answer);
@@ -289,9 +303,10 @@ public final class Add {
         }
 
         @Override
-        public List<String> resolve(String coordinate) throws Exception {
-            return new Maven.Resolver(session, repositories).resolve(Coordinate.parse(coordinate)).stream()
-                    .map(Coordinate::text).toList();
+        public List<String> resolve(List<String> coordinates) throws Exception {
+            return new Maven.Resolver(session, repositories)
+                    .resolve(coordinates.stream().map(Coordinate::parse).toList()).selected().stream()
+                    .map(node -> node.coordinate().text()).toList();
         }
 
         @Override
@@ -329,21 +344,6 @@ public final class Add {
             }
             events.accept(Event.failed(artifact.label(), reason));
             return Download.failed(reason);
-        }
-    }
-
-    private static void resolve(Effect effect, Effect.Emitter emit, Services services, Progress progress) {
-        var coordinate = Coordinate.parse(effect.string("coordinate", ""));
-        progress.publish(Event.resolve(coordinate.text()));
-        try {
-            var resolved = services.resolve(coordinate.text());
-            progress.publish(Event.resolved(coordinate.text(), resolved.size()));
-            emit.emit(Message.of(RESOLVED).with("coordinate", coordinate.text())
-                    .with("artifacts", Json.Array.strings(resolved)));
-        } catch (Exception failure) {
-            var reason = failure.getMessage() == null ? failure.toString() : failure.getMessage();
-            progress.publish(Event.resolveFailed(coordinate.text(), reason));
-            emit.emit(Message.of(RESOLUTION_FAILED).with("coordinate", coordinate.text()).with("reason", reason));
         }
     }
 
@@ -433,7 +433,7 @@ public final class Add {
         return List.copyOf(strings);
     }
 
-    static record Coordinate(String group, String artifact, String version, String classifier) {
+    static record Coordinate(String group, String artifact, String version, String type, String classifier) {
         static Coordinate parse(String text) {
             if (text == null || text.isBlank()) throw new IllegalArgumentException("empty Maven coordinate");
             var parts = text.split(":", -1);
@@ -443,7 +443,7 @@ public final class Add {
                 if (part.isEmpty() || !part.chars().allMatch(c -> Character.isLetterOrDigit(c) || c == '.' || c == '-' || c == '_'))
                     throw new IllegalArgumentException("invalid Maven coordinate: " + text);
             }
-            return new Coordinate(parts[0], parts[1], parts[2], parts.length == 4 ? parts[3] : "");
+            return new Coordinate(parts[0], parts[1], parts[2], "jar", parts.length == 4 ? parts[3] : "");
         }
 
         String text() {
@@ -451,7 +451,8 @@ public final class Add {
         }
 
         String file() {
-            return artifact + "-" + version + (classifier.isEmpty() ? "" : "-" + classifier) + ".jar";
+            var extension = type.equals("pom") ? "pom" : "jar";
+            return artifact + "-" + version + (classifier.isEmpty() ? "" : "-" + classifier) + "." + extension;
         }
 
         URI uri(URI repository) {
@@ -464,11 +465,31 @@ public final class Add {
         }
 
         static Coordinate of(String group, String artifact, String version, String classifier) {
-            return new Coordinate(group, artifact, version, classifier);
+            return new Coordinate(group, artifact, version, "jar", classifier);
+        }
+
+        static Coordinate of(String group, String artifact, String version, String type, String classifier) {
+            return new Coordinate(group, artifact, version, type, classifier);
         }
 
         Coordinate withoutClassifier() {
-            return new Coordinate(group, artifact, version, "");
+            return new Coordinate(group, artifact, version, type, "");
+        }
+
+        Coordinate withType(String value) {
+            return new Coordinate(group, artifact, version, value, classifier);
+        }
+
+        Coordinate pomCoordinate() {
+            return new Coordinate(group, artifact, version, "pom", "");
+        }
+
+        String dependencyKey() {
+            return group + ":" + artifact;
+        }
+
+        String conflictKey() {
+            return group + ":" + artifact + ":" + type + ":" + classifier;
         }
     }
 
@@ -539,6 +560,13 @@ public final class Add {
                     started, downloadsStarted, launched);
         }
 
+        Job resolvedAll(List<Coordinate> found) {
+            var next = new LinkedHashMap<String, List<Coordinate>>();
+            for (var root : roots) next.put(root.text(), found);
+            return new Job(roots, found, outcomes, next, resolutionFailures,
+                    started, downloadsStarted, launched);
+        }
+
         Job resolutionFailure(Coordinate root, String reason) {
             var next = new LinkedHashMap<>(resolutionFailures);
             next.putIfAbsent(root.text(), new Failure(root.text(), reason));
@@ -582,9 +610,11 @@ public final class Add {
 
     private static final class Coordinator implements Definition<Job> {
         private final List<Coordinate> roots;
+        private final List<Coordinate> artifacts;
 
-        private Coordinator(List<Coordinate> roots) {
+        private Coordinator(List<Coordinate> roots, List<Coordinate> artifacts) {
             this.roots = roots;
+            this.artifacts = artifacts;
         }
 
         @Override
@@ -594,7 +624,7 @@ public final class Add {
 
         @Override
         public Application<Job> instantiate(Address self) {
-            return Application.of(Job.waiting(roots))
+            return Application.of(Job.waiting(roots).resolvedAll(artifacts))
                     .on("add.start", Coordinator::start)
                     .on(RESOLVED, Coordinator::resolved)
                     .on(RESOLUTION_FAILED, Coordinator::resolutionFailed)
@@ -607,10 +637,7 @@ public final class Add {
 
         private static Step<Job> start(Job state, Message message) {
             if (state.started()) return Step.of(state);
-            var effects = state.roots().stream()
-                    .map(root -> Effect.of(RESOLVE).with("coordinate", root.text()))
-                    .toList();
-            return new Step<>(state.begin(), effects);
+            return downloads(state.begin());
         }
 
         private static Step<Job> resolved(Job state, Message message) {
@@ -628,6 +655,7 @@ public final class Add {
             if (state.resolutions().size() + state.resolutionFailures().size() != state.roots().size()
                     || state.downloadsStarted()) return Step.of(state);
             var artifacts = scheduled(state.artifacts());
+            if (artifacts.isEmpty()) return Step.of(state.beginDownloads(0));
             var count = batches(artifacts.size()).getFirst();
             var effects = artifacts.subList(0, count).stream().map(Coordinator::download).toList();
             return new Step<>(state.beginDownloads(count), effects);

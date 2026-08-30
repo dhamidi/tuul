@@ -67,6 +67,7 @@ final class Progress implements Definition<Progress.State> {
     void attach(ActorSystem system, Address address) {
         this.system = system;
         this.address = address;
+        if (mode == Add.Mode.TTY ? !pending.isEmpty() : !lines.isEmpty()) signal();
     }
 
     void publish(Add.Event event) {
@@ -77,7 +78,11 @@ final class Progress implements Definition<Progress.State> {
     }
 
     void close() {
-        if (system == null || closed.isDone()) return;
+        if (closed.isDone()) return;
+        if (system == null) {
+            closeOutput(null, null);
+            return;
+        }
         if (system.tell(address, Message.of(CLOSE)) != DeliveryStatus.accepted) {
             closed.complete(null);
             return;
@@ -86,6 +91,7 @@ final class Progress implements Definition<Progress.State> {
     }
 
     private void signal() {
+        if (system == null) return;
         if (!wakePending.compareAndSet(false, true)) return;
         if (system.tell(address, Message.of(WAKE)) != DeliveryStatus.accepted) {
             wakePending.set(false);

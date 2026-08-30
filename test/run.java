@@ -45,6 +45,7 @@ void main(String[] arguments) {
             Named.integration("browser.BrowserTest", browser.BrowserTest::run),
             Named.fast("project.ProjectTest", project.ProjectTest::run),
             Named.fast("project.AddTest", project.AddTest::run),
+            Named.fast("project.MavenTest", project.MavenTest::run),
             Named.integration("project.AddIntegrationTest", project.AddIntegrationTest::run),
             Named.integration("project.ProjectIntegrationTest", project.ProjectTest::integration),
             Named.integration("project.SpecsTest", project.SpecsTest::run),
