@@ -4,7 +4,8 @@ import java.util.List;
 import java.util.Set;
 import java.util.concurrent.Executors;
 
-/// Runs all test suites, or one suite selected by `--suite`.
+/// Runs the fast test suites by default, all suites with `--mode all`, or one
+/// suite selected by `--suite`.
 ///
 /// The runner prints a progress line before each suite and a duration-sorted
 /// report after all selected suites finish. Each suite has a bounded timeout.
@@ -66,7 +67,8 @@ void main(String[] arguments) {
 }
 
 private static boolean selected(Options options, Named suite) {
-    return options.name().isEmpty() || options.name().equals(suite.name());
+    if (!options.name().isEmpty()) return options.name().equals(suite.name());
+    return options.mode().equals("all") || !INTEGRATION.contains(suite.name());
 }
 
 private static final Set<String> PURE = Set.of(
@@ -80,8 +82,19 @@ private static final Set<String> PURE = Set.of(
         "web.ui.UiTest",
         "symbols.SymbolsTest");
 
+private static final Set<String> INTEGRATION = Set.of(
+        "actors.ActorsTest",
+        "web.cable.CableTest",
+        "web.hyperspec.HyperspecTest",
+        "browser.BrowserTest",
+        "project.ProjectTest",
+        "project.SpecsTest",
+        "sqlite3.SqliteTest",
+        "sqlite3.ApiTest");
+
 private static Options options(String[] arguments, List<Named> suites) {
     var name = "";
+    var mode = "fast";
     var timeout = Duration.ofMinutes(1);
     for (var at = 0; at < arguments.length; at++) {
         switch (arguments[at]) {
@@ -97,6 +110,11 @@ private static Options options(String[] arguments, List<Named> suites) {
                     usage("--timeout needs whole seconds");
                 }
             }
+            case "--mode" -> {
+                if (++at == arguments.length) usage("--mode needs fast or all");
+                mode = arguments[at];
+                if (!mode.equals("fast") && !mode.equals("all")) usage("--mode needs fast or all");
+            }
             case "--help" -> usage(null);
             default -> usage("unknown option: " + arguments[at]);
         }
@@ -106,7 +124,7 @@ private static Options options(String[] arguments, List<Named> suites) {
         usage("unknown suite: " + name);
     }
     if (timeout.isZero() || timeout.isNegative()) usage("--timeout must be positive");
-    return new Options(name, timeout);
+    return new Options(name, mode, timeout);
 }
 
 private static void usage(String problem) {
@@ -117,4 +135,4 @@ private static void usage(String problem) {
 
 private record Named(String name, Check.Suite body) {}
 
-private record Options(String name, Duration timeout) {}
+private record Options(String name, String mode, Duration timeout) {}

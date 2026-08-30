@@ -92,7 +92,7 @@ public final class App {
     }
 
     private static Step<State> test(State state, Message message) {
-        return Step.of(state.doing(State.Action.TEST), native_(state));
+        return Step.of(state.doing(State.Action.TEST, message.flag("all") || message.flag("integration")), native_(state));
     }
 
     private static Step<State> compiled(State state, Message message) {
@@ -107,7 +107,8 @@ public final class App {
     /// One compile, three meanings: report it, run the application, or go on to
     /// compile the tests and run those.
     private static Step<State> built(State state, Message message) {
-        if (message.flag("tests")) return Step.of(state, Effect.of("project.launch.tests").with("directory", where(state)));
+        if (message.flag("tests")) return Step.of(state, Effect.of("project.launch.tests")
+                .with("directory", where(state)).with("all", state.allTests()));
         return switch (state.action()) {
             case BUILD -> Step.of(state, report("compiled " + count(message) + " classes"));
             case RUN -> Step.of(state, Effect.of("project.launch")
@@ -268,7 +269,8 @@ public final class App {
 
     private static void launchTests(Effect effect, Effect.Emitter emit, Writer out) throws Exception {
         var layout = new Layout(Path.of(effect.string("directory", ".")));
-        start(Launch.java(List.of(), running(layout, layout.tests()), "run", List.of()), layout, emit, out);
+        var arguments = effect.flag("all") ? List.of("--mode", "all") : List.<String>of();
+        start(Launch.java(List.of(), running(layout, layout.tests()), "run", arguments), layout, emit, out);
     }
 
     /// What a project runs against: its own classes, then the code it was

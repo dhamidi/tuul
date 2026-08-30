@@ -34,9 +34,14 @@ depends = ["bootstrap"]
 run = 'java --enable-native-access=ALL-UNNAMED -cp build/bootstrap/classes:build/bootstrap/cli main build'
 
 [tasks.test]
-description = "Compile and run everything under test through Tuul"
+description = "Compile and run the fast test suite through Tuul"
 depends = ["build"]
 run = 'java --enable-native-access=ALL-UNNAMED -cp build/bootstrap/classes:build/bootstrap/cli main test'
+
+[tasks.test-all]
+description = "Compile and run the complete test suite, including integration tests"
+depends = ["build"]
+run = 'java --enable-native-access=ALL-UNNAMED -cp build/classes:build/entry/cli main test --all'
 
 [tasks.spec]
 description = "Run the hyperspecs in spec/ against a live application"
