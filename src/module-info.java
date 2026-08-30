@@ -14,6 +14,7 @@ module tuul {
     exports application;
     exports argparse;
     exports browser;
+    exports compiler;
     exports docs;
     exports eventstream;
     exports fetch;

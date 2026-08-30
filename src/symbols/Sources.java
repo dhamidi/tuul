@@ -1,25 +1,16 @@
 package symbols;
 
-import java.io.File;
 import java.io.IOException;
 import java.io.OutputStream;
 import java.io.ByteArrayOutputStream;
-import java.net.URI;
-import java.nio.charset.StandardCharsets;
 import java.nio.file.Files;
 import java.nio.file.Path;
 import java.util.ArrayList;
 import java.util.LinkedHashMap;
 import java.util.List;
 import java.util.Map;
-import java.util.stream.Collectors;
-import javax.tools.DiagnosticCollector;
-import javax.tools.FileObject;
-import javax.tools.ForwardingJavaFileManager;
-import javax.tools.JavaFileManager;
-import javax.tools.JavaFileObject;
-import javax.tools.SimpleJavaFileObject;
-import javax.tools.ToolProvider;
+import compiler.ClassSink;
+import compiler.Compiler;
 
 /// Compiles a source tree with javac and keeps the class files in memory.
 ///
@@ -36,36 +27,28 @@ public final class Sources {
     private Sources() {}
 
     public static Map<String, byte[]> compile(List<Path> roots) throws IOException {
-        return compile(roots, List.of());
+        return compile(roots, List.of(), Compiler.system());
     }
 
     /// Compiles against the vendored jars. Javac reads them from the module path
     /// when the source tree has `module-info.java`. Otherwise, javac reads them
     /// from the classpath.
     public static Map<String, byte[]> compile(List<Path> roots, List<Path> dependencies) throws IOException {
-        var compiler = ToolProvider.getSystemJavaCompiler();
-        if (compiler == null) throw new IOException("no javac in this runtime — run tuul on a JDK, not a JRE");
-
-        var sources = find(roots);
-        if (sources.isEmpty()) return Map.of();
-
-        var problems = new DiagnosticCollector<JavaFileObject>();
-        var files = compiler.getStandardFileManager(problems, null, StandardCharsets.UTF_8);
-        var memory = new Memory(files);
-        var module = sources.stream().anyMatch(path -> path.getFileName().toString().equals("module-info.java"));
-        var task = compiler.getTask(null, memory, problems, options(dependencies, module), null,
-                files.getJavaFileObjectsFromPaths(sources));
-        if (!task.call()) throw new IOException("javac failed:\n" + report(problems));
-        return memory.classes();
+        return compile(roots, dependencies, Compiler.system());
     }
 
-    private static List<String> options(List<Path> classpath, boolean module) {
-        var options = new ArrayList<>(List.of("-proc:none", "-parameters", "-g:none", "-nowarn",
-                "--release", String.valueOf(Runtime.version().feature())));
-        if (classpath.isEmpty()) return options;
-        options.add(module ? "--module-path" : "-classpath");
-        options.add(classpath.stream().map(Path::toString).collect(Collectors.joining(File.pathSeparator)));
-        return options;
+    /// Compiles through `compiler`. The caller can control class output and
+    /// diagnostics by supplying another [Compiler].
+    public static Map<String, byte[]> compile(List<Path> roots, List<Path> dependencies, Compiler compiler)
+            throws IOException {
+        var sources = find(roots);
+        if (sources.isEmpty()) return Map.of();
+        var memory = new Memory();
+        var module = sources.stream().anyMatch(path -> path.getFileName().toString().equals("module-info.java"));
+        var result = compiler.compile(new Compiler.Request(
+                sources, dependencies, module, Runtime.version().feature(), false), memory);
+        if (!result.ok()) throw new IOException("javac failed:\n" + report(result.problems()));
+        return memory.classes();
     }
 
     /// Every Java file under the roots, except the entrypoints.
@@ -100,53 +83,32 @@ public final class Sources {
         return file.endsWith(".java") && !file.equals(ENTRYPOINT);
     }
 
-    private static String report(DiagnosticCollector<JavaFileObject> problems) {
-        return problems.getDiagnostics().stream()
-                .filter(problem -> problem.getKind() == javax.tools.Diagnostic.Kind.ERROR)
-                .map(problem -> problem.getSource() == null
-                        ? problem.getMessage(null)
-                        : problem.getSource().getName() + ":" + problem.getLineNumber() + " " + problem.getMessage(null))
+    private static String report(List<Compiler.Problem> problems) {
+        return problems.stream()
+                .map(problem -> problem.source() == null
+                        ? problem.message()
+                        : problem.source() + ":" + problem.line() + " " + problem.message())
                 .limit(10)
-                .collect(Collectors.joining("\n"));
+                .collect(java.util.stream.Collectors.joining("\n"));
     }
 
     /// A file manager that hands javac an [OutputStream] per class instead of a
     /// file.
-    private static final class Memory extends ForwardingJavaFileManager<JavaFileManager> {
+    private static final class Memory implements ClassSink {
 
-        private final Map<String, Compiled> written = new LinkedHashMap<>();
-
-        private Memory(JavaFileManager delegate) {
-            super(delegate);
-        }
+        private final Map<String, ByteArrayOutputStream> written = new LinkedHashMap<>();
 
         @Override
-        public JavaFileObject getJavaFileForOutput(Location location, String name, JavaFileObject.Kind kind, FileObject sibling) {
-            return written.computeIfAbsent(name, Compiled::new);
+        public OutputStream open(String name) {
+            var bytes = new ByteArrayOutputStream();
+            written.put(name, bytes);
+            return bytes;
         }
 
         private Map<String, byte[]> classes() {
             var classes = new LinkedHashMap<String, byte[]>();
-            written.forEach((name, file) -> classes.put(name, file.bytes()));
+            written.forEach((name, bytes) -> classes.put(name, bytes.toByteArray()));
             return classes;
-        }
-    }
-
-    private static final class Compiled extends SimpleJavaFileObject {
-
-        private final ByteArrayOutputStream bytes = new ByteArrayOutputStream();
-
-        private Compiled(String name) {
-            super(URI.create("memory:///" + name.replace('.', '/') + ".class"), Kind.CLASS);
-        }
-
-        @Override
-        public OutputStream openOutputStream() {
-            return bytes;
-        }
-
-        private byte[] bytes() {
-            return bytes.toByteArray();
         }
     }
 }

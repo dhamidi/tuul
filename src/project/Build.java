@@ -1,6 +1,5 @@
 package project;
 
-import java.io.File;
 import java.io.IOException;
 import java.io.InputStream;
 import java.nio.charset.StandardCharsets;
@@ -12,11 +11,7 @@ import java.security.NoSuchAlgorithmException;
 import java.util.ArrayList;
 import java.util.Comparator;
 import java.util.List;
-import java.util.stream.Collectors;
-import javax.tools.Diagnostic;
-import javax.tools.DiagnosticCollector;
-import javax.tools.JavaFileObject;
-import javax.tools.ToolProvider;
+import compiler.Compiler;
 import symbols.Vendor;
 
 /// Compiles a project onto disk: the libraries together, then each entrypoint
@@ -41,6 +36,12 @@ public final class Build {
     private Build() {}
 
     public static Result compile(Layout layout) throws IOException {
+        return compile(layout, Compiler.system());
+    }
+
+    /// Compiles a project through `compiler`. Fingerprints and resources use
+    /// the same filesystem behavior as [#compile(Layout)].
+    public static Result compile(Layout layout, Compiler compiler) throws IOException {
         if (!layout.exists()) return new Result(0, List.of("no src/ in " + layout.root().toAbsolutePath()));
         var vendor = Vendor.of(List.of(layout.vendor()));
         var dependencies = vendor.classpath();
@@ -55,7 +56,7 @@ public final class Build {
             libraries = new Result(written(layout.classes()), List.of());
         } else {
             clear(layout.classes());
-            libraries = javac(librarySources, layout.classes(), dependencies, Files.isRegularFile(descriptor));
+            libraries = javac(librarySources, layout.classes(), dependencies, Files.isRegularFile(descriptor), compiler);
             if (!libraries.ok()) return libraries;
             resources(libraryRoots, layout.src(), layout.classes());
             remember(layout, "libraries", libraryFingerprint);
@@ -73,7 +74,7 @@ public final class Build {
             } else {
                 clear(layout.entry(entrypoint));
                 built = javac(sources(List.of(directory)), layout.entry(entrypoint),
-                        with(dependencies, layout.classes()), false);
+                        with(dependencies, layout.classes()), false, compiler);
                 if (!built.ok()) return built;
                 resources(List.of(directory), directory, layout.entry(entrypoint));
                 remember(layout, "entry-" + entrypoint, fingerprint);
@@ -86,6 +87,12 @@ public final class Build {
     /// Tests are compiled on top of a built project, into a directory of their
     /// own, and run by their `run` class.
     public static Result compileTests(Layout layout) throws IOException {
+        return compileTests(layout, Compiler.system());
+    }
+
+    /// Compiles tests through `compiler`. A current test fingerprint returns
+    /// without calling the compiler.
+    public static Result compileTests(Layout layout, Compiler compiler) throws IOException {
         if (!Files.isDirectory(layout.test())) return new Result(0, List.of("no test/ in " + layout.root().toAbsolutePath()));
         var vendor = Vendor.of(List.of(layout.vendor()));
         var fingerprint = fingerprint(List.of(layout.test()), null, vendor.stamp() +
@@ -95,7 +102,7 @@ public final class Build {
         }
         clear(layout.tests());
         var classpath = with(vendor.classpath(), layout.classes());
-        var built = javac(sources(List.of(layout.test())), layout.tests(), classpath, false);
+        var built = javac(sources(List.of(layout.test())), layout.tests(), classpath, false, compiler);
         if (built.ok()) {
             resources(List.of(layout.test()), layout.test(), layout.tests());
             remember(layout, "tests", fingerprint);
@@ -192,25 +199,17 @@ public final class Build {
         }
     }
 
-    private static Result javac(List<Path> sources, Path out, List<Path> classpath, boolean module) throws IOException {
+    private static Result javac(List<Path> sources, Path out, List<Path> classpath, boolean module, Compiler compiler)
+            throws IOException {
         if (sources.isEmpty()) return new Result(0, List.of());
-        var compiler = ToolProvider.getSystemJavaCompiler();
-        if (compiler == null) throw new IOException("no javac in this runtime — run tuul on a JDK, not a JRE");
         Files.createDirectories(out);
-
-        var problems = new DiagnosticCollector<JavaFileObject>();
-        var files = compiler.getStandardFileManager(problems, null, StandardCharsets.UTF_8);
-        var options = new ArrayList<>(List.of(
-                "-proc:none", "-parameters", "-nowarn",
-                "-d", out.toString(),
-                "--release", String.valueOf(Runtime.version().feature())));
-        if (!classpath.isEmpty()) {
-            options.add(module ? "--module-path" : "-classpath");
-            options.add(classpath.stream().map(Path::toString).collect(Collectors.joining(File.pathSeparator)));
-        }
-        var task = compiler.getTask(null, files, problems, options, null, files.getJavaFileObjectsFromPaths(sources));
-        if (!task.call()) return new Result(0, report(problems));
-        return new Result(written(out), List.of());
+        var result = compiler.compile(new Compiler.Request(
+                sources, classpath, module, Runtime.version().feature(), true), name -> {
+                    var file = out.resolve(name.replace('.', '/') + ".class");
+                    Files.createDirectories(file.getParent());
+                    return Files.newOutputStream(file);
+                });
+        return result.ok() ? new Result(result.classes(), List.of()) : new Result(0, report(result.problems()));
     }
 
     /// Everything beside the code that is not code, copied where the code
@@ -255,19 +254,18 @@ public final class Build {
         }
     }
 
-    private static List<String> report(DiagnosticCollector<JavaFileObject> problems) {
-        return problems.getDiagnostics().stream()
-                .filter(problem -> problem.getKind() == Diagnostic.Kind.ERROR)
+    private static List<String> report(List<Compiler.Problem> problems) {
+        return problems.stream()
                 .map(Build::describe)
                 .limit(20)
                 .toList();
     }
 
-    private static String describe(Diagnostic<? extends JavaFileObject> problem) {
-        var where = problem.getSource() == null
+    private static String describe(Compiler.Problem problem) {
+        var where = problem.source() == null
                 ? ""
-                : Path.of(problem.getSource().getName()).getFileName() + ":" + problem.getLineNumber() + " ";
-        return where + problem.getMessage(null);
+                : problem.source().getFileName() + ":" + problem.line() + " ";
+        return where + problem.message();
     }
 
     private static List<Path> with(List<Path> classpath, Path extra) {

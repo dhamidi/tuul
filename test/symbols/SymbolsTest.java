@@ -9,8 +9,10 @@ import java.util.LinkedHashMap;
 import java.util.List;
 import java.util.Map;
 import java.util.Set;
+import java.util.concurrent.atomic.AtomicInteger;
 import java.util.jar.JarEntry;
 import java.util.jar.JarOutputStream;
+import compiler.Compiler;
 
 public final class SymbolsTest {
 
@@ -31,6 +33,33 @@ public final class SymbolsTest {
         vendored();
         remembers();
         entrypoints();
+        controlledCompilation();
+    }
+
+    /// A caller can control project compilation without replacing dependency
+    /// or platform lookup.
+    private static void controlledCompilation() throws IOException {
+        var root = Files.createTempDirectory("tuul-controlled-symbols");
+        var source = Files.createDirectories(root.resolve("symbols"));
+        Files.writeString(source.resolve("Fixture.java"), "package symbols; final class Fixture {}");
+        Files.writeString(root.resolve("main.java"), "void main() {}");
+        var calls = new AtomicInteger();
+        Compiler compiler = (request, classes) -> {
+            calls.incrementAndGet();
+            Check.equal("the symbol compiler does not receive an entrypoint",
+                    List.of("Fixture.java"), request.sources().stream().map(path -> path.getFileName().toString()).toList());
+            try (var in = SymbolsTest.class.getResourceAsStream("SymbolsTest$Fixture.class");
+                    var out = classes.open("symbols.SymbolsTest$Fixture")) {
+                in.transferTo(out);
+            }
+            return new Compiler.Result(1, List.of());
+        };
+        try (var index = Index.of(List.of(root), List.of(), kept(), compiler)) {
+            Check.that("an injected compiler supplies project classes",
+                    index.lookup("symbols.SymbolsTest.Fixture").isPresent());
+            Check.that("the catalog compiles its project once", index.names().contains("symbols.SymbolsTest$Fixture"));
+            Check.equal("the injected compiler ran once", 1, calls.get());
+        }
     }
 
     /// A project may have more than one entrypoint, and asking about it still
@@ -650,4 +679,6 @@ public final class SymbolsTest {
         root.toFile().deleteOnExit();
         return root;
     }
+
+    private static final class Fixture {}
 }

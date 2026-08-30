@@ -18,6 +18,7 @@ import java.util.Map;
 import java.util.Optional;
 import java.util.TreeSet;
 import java.util.function.Supplier;
+import compiler.Compiler;
 import sqlite3.SqliteException;
 
 /// Every symbol tuul can answer questions about, in the order it looks: the
@@ -61,17 +62,19 @@ public final class Index implements Catalog {
     private final Vendor vendor;
     private final Optional<Store> store;
     private final String stamp;
+    private final Compiler compiler;
     private Map<String, byte[]> classes;
 
     /// Worked out once: the roots do not change while a server is running, and
     /// walking the JDK's modules for every page would be a walk per page.
     private List<Catalog.Root> groups;
 
-    private Index(List<Path> roots, Vendor vendor, Optional<Store> store, String stamp) {
+    private Index(List<Path> roots, Vendor vendor, Optional<Store> store, String stamp, Compiler compiler) {
         this.roots = List.copyOf(roots);
         this.vendor = vendor;
         this.store = store;
         this.stamp = stamp;
+        this.compiler = compiler;
     }
 
     public static Index of(List<Path> sourceRoots) throws IOException {
@@ -85,8 +88,15 @@ public final class Index implements Catalog {
     /// The project as it stands: its sources compiled against its dependencies,
     /// and those dependencies available to be asked about themselves.
     public static Index of(List<Path> sourceRoots, List<Path> vendorRoots, Path index) throws IOException {
+        return of(sourceRoots, vendorRoots, index, Compiler.system());
+    }
+
+    /// Opens an index that compiles project sources through `compiler`.
+    /// Dependency and platform class files still come from their archives.
+    public static Index of(List<Path> sourceRoots, List<Path> vendorRoots, Path index, Compiler compiler)
+            throws IOException {
         var vendor = Vendor.of(vendorRoots);
-        return new Index(sourceRoots, vendor, Store.open(index), stamp(sourceRoots, vendor));
+        return new Index(sourceRoots, vendor, Store.open(index), stamp(sourceRoots, vendor), compiler);
     }
 
     /// Looks up a symbol by name. `a.b.Outer.Inner` also matches the nested
@@ -566,7 +576,7 @@ public final class Index implements Catalog {
     private Map<String, byte[]> compile() {
         if (classes != null) return classes;
         try {
-            classes = Sources.compile(roots, vendor.classpath());
+            classes = Sources.compile(roots, vendor.classpath(), compiler);
         } catch (IOException e) {
             throw new UncheckedIOException(e);
         }
