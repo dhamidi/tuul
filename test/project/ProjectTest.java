@@ -150,12 +150,24 @@ public final class ProjectTest {
     }
 
     private static void builds(Layout layout) throws IOException {
+        Files.createDirectories(layout.resources());
+        Files.writeString(layout.resources().resolve("application.properties"), "spring.application.name=hello\n");
+        Files.writeString(layout.src().resolve("helloworld/package.txt"), "package-local\n");
+        Files.writeString(layout.src().resolve("cli/index.html"), "<h1>Hello</h1>\n");
         var built = Build.compile(layout);
         Check.that("a scaffolded project compiles: " + built.problems(), built.ok());
         Check.that("the library lands in build/classes",
                 Files.isRegularFile(layout.classes().resolve("helloworld/Greeting.class")));
         Check.that("each entrypoint lands apart from it, since every main.java is class main",
                 Files.isRegularFile(layout.entry("cli").resolve("main.class")));
+        Check.that("root resources land at the classpath root",
+                Files.isRegularFile(layout.classes().resolve("application.properties")));
+        Check.that("a Spring-style root lookup finds application.properties",
+                rootResource(layout, "application.properties"));
+        Check.that("package-local resources remain beside library classes",
+                Files.isRegularFile(layout.classes().resolve("helloworld/package.txt")));
+        Check.that("entrypoint resources retain their classpath-root path",
+                Files.isRegularFile(layout.entry("cli").resolve("index.html")));
 
         var tests = Build.compileTests(layout);
         Check.that("and its tests compile against it: " + tests.problems(), tests.ok());
@@ -171,6 +183,17 @@ public final class ProjectTest {
         var testsBefore = Files.getLastModifiedTime(tests);
         Check.that("current tests do not invoke javac again", Build.compileTests(layout).ok());
         Check.equal("the cached test output is left alone", testsBefore, Files.getLastModifiedTime(tests));
+
+        Files.writeString(layout.resources().resolve("application.properties"), "spring.application.name=changed\n");
+        Check.that("changing a root resource invalidates the library build", Build.compile(layout).ok());
+        Check.equal("the changed root resource reaches build output", "spring.application.name=changed\n",
+                Files.readString(layout.classes().resolve("application.properties")));
+    }
+
+    private static boolean rootResource(Layout layout, String name) throws IOException {
+        try (var loader = new java.net.URLClassLoader(new java.net.URL[] {layout.classes().toUri().toURL()})) {
+            return loader.getResource(name) != null;
+        }
     }
 
     private static void launches(Layout layout) throws IOException, InterruptedException {

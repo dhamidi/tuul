@@ -268,6 +268,8 @@ public final class Scaffold {
 
                 `src/%s/` is the library — the application lives there.
                 `src/cli/main.java` is an entrypoint, and should stay thin.
+                `src/resources/` contains files for the classpath root.
+                Keep package-local resources beside their library classes.
                 `src/greet/` wraps `native/hello.c` through java.lang.foreign:
                 a downcall into C, and a Java method C calls back through.
                 `native/` is C, one library per file or per directory.

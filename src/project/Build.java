@@ -23,7 +23,8 @@ import symbols.Vendor;
 /// A project compiles against the jars in `vendor/` and nothing else. If
 /// `src/module-info.java` exists, javac reads those jars from the module path.
 /// Otherwise, javac reads them from the classpath. Entrypoints and tests stay
-/// unnamed. Tuul does not enable preview features.
+/// unnamed. Tuul does not enable preview features. Files in `src/resources/`
+/// land at the root of `build/classes/`.
 public final class Build {
 
     /// What a compile did, or what stopped it. Problems are javac's own words.
@@ -51,7 +52,9 @@ public final class Build {
         var librarySources = sources(libraryRoots);
         if (Files.isRegularFile(descriptor)) librarySources.addFirst(descriptor);
 
-        var libraryFingerprint = fingerprint(libraryRoots, descriptor, vendor.stamp());
+        var fingerprintRoots = new ArrayList<>(libraryRoots);
+        fingerprintRoots.add(layout.resources());
+        var libraryFingerprint = fingerprint(fingerprintRoots, descriptor, vendor.stamp());
         var compileFingerprint = Compilation.fingerprint(
                 librarySources, dependencies, Files.isRegularFile(descriptor), Runtime.version().feature(), true);
         Result libraries;
@@ -62,6 +65,7 @@ public final class Build {
             libraries = javac(librarySources, layout.classes(), dependencies, Files.isRegularFile(descriptor), compiler);
             if (!libraries.ok()) return libraries;
             resources(libraryRoots, layout.src(), layout.classes());
+            resources(List.of(layout.resources()), layout.resources(), layout.classes());
             remember(layout, "libraries", libraryFingerprint);
         }
         remember(layout, "libraries.compile", compileFingerprint);
@@ -216,8 +220,7 @@ public final class Build {
         return result.ok() ? new Result(result.classes(), List.of()) : new Result(0, report(result.problems()));
     }
 
-    /// Everything beside the code that is not code, copied where the code
-    /// went.
+    /// Copies non-Java files to the output directory.
     ///
     /// `javac -d` writes class files and nothing else, so a file sitting next
     /// to a class — an icon, a template, a spec — is not on the classpath when
@@ -225,8 +228,10 @@ public final class Build {
     /// a confusing failure: the file is plainly there in the source tree, and
     /// the only thing wrong is that nobody copied it.
     ///
-    /// `from` is the directory the package structure is measured against, so a
-    /// resource lands beside the class that expects to find it.
+    /// `from` is the directory that defines the resource path. Library resources
+    /// use `src/`, so they remain package-local. Root resources use
+    /// `src/resources/`, so they land directly in `build/classes/`. Entrypoint
+    /// resources use their entrypoint directory and retain their current paths.
     private static void resources(List<Path> roots, Path from, Path out) throws IOException {
         for (var root : roots) {
             if (!Files.isDirectory(root)) continue;

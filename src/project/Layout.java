@@ -28,6 +28,11 @@ public record Layout(Path root) {
         return root.resolve("vendor");
     }
 
+    /// Files in this directory land at the classpath root.
+    public Path resources() {
+        return src().resolve("resources");
+    }
+
     public Path nativeRoot() {
         return root.resolve("native");
     }
@@ -126,6 +131,7 @@ public record Layout(Path root) {
         var found = new ArrayList<Path>();
         try (var tree = Files.list(src())) {
             tree.filter(Files::isDirectory)
+                    .filter(path -> !path.equals(resources()))
                     .filter(path -> Files.isRegularFile(path.resolve(ENTRYPOINT)) == entrypoints)
                     .sorted()
                     .forEach(found::add);
