@@ -1,10 +1,13 @@
 package symbols;
 
 import java.nio.file.Path;
+import java.util.List;
 import java.util.Locale;
 import java.util.Optional;
 import java.util.regex.Pattern;
 import json.Json;
+import markdown.Markdown;
+import markdown.Outline;
 
 /// One Diataxis document that belongs to a project package.
 ///
@@ -47,6 +50,34 @@ public record Document(String packageName, String kind, String slug, String titl
             default -> kind.substring(0, 1).toUpperCase(Locale.ROOT) + kind.substring(1);
         };
     }
+
+    /// Returns the Markdown after the first-line title.
+    ///
+    /// The body is unchanged when line 1 is not an ATX level-one heading.
+    public String content() {
+        return content(body);
+    }
+
+    /// Returns `body` after its first-line ATX level-one heading.
+    public static String content(String body) {
+        if (!body.startsWith("# ")) return body;
+        var end = body.indexOf('\n');
+        return end < 0 ? "" : body.substring(end + 1);
+    }
+
+    /// Returns the level-two headings that navigate this document.
+    ///
+    /// This method parses Markdown when a description needs an outline. The
+    /// index does not call it while it discovers or stores documents.
+    public List<Section> sections() {
+        return Outline.of(Markdown.parse(content())).stream()
+                .filter(heading -> heading.level() == 2)
+                .map(heading -> new Section(heading.title(), heading.id()))
+                .toList();
+    }
+
+    /// One visible section and the fragment that identifies it.
+    public record Section(String title, String anchor) {}
 
     /// Returns the object that `tuul docs --json` and the browser serve.
     public Json.Object describe() {

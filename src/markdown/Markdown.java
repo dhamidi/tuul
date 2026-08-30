@@ -80,6 +80,26 @@ public final class Markdown {
         Html.render(document, links, out);
     }
 
+    /// Renders with stable fragment identifiers on headings.
+    ///
+    /// Use [Outline#of] to read the identifiers before rendering. Use this
+    /// method for a page that offers heading navigation. Use [#render] when
+    /// heading identifiers are not part of the page contract.
+    public static void renderAnchored(Document document, Writer out) throws IOException {
+        renderAnchored(document, Links.NONE, out);
+    }
+
+    /// Renders with stable heading identifiers and lets `links` resolve
+    /// references that the document did not define.
+    public static void renderAnchored(Document document, Links links, Writer out) throws IOException {
+        Html.renderAnchored(document, links, out);
+    }
+
+    /// Parses and renders with stable fragment identifiers on headings.
+    public static void renderAnchored(String source, Links links, Writer out) throws IOException {
+        renderAnchored(parse(source), links, out);
+    }
+
     /// Parses and renders in one step, for the caller who wants HTML and has no
     /// use for the tree.
     public static void render(String source, Writer out) throws IOException {

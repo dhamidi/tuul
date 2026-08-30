@@ -42,8 +42,10 @@ public final class Docs {
                 .with("fields", fields(type, all));
     }
 
-    /// Describes one symbol and lists its package documents. The list contains
-    /// identity and title only. Call [Catalog#document] to read a body.
+    /// Describes one symbol and lists its package documents.
+    ///
+    /// Each list item contains identity, title, and its level-two outline. Call
+    /// [Catalog#document] to read a body.
     public static Json.Object describe(TypeInfo type, boolean all, List<Document> documents) {
         var description = describe(type, all);
         if (type.kind() != TypeInfo.Kind.PACKAGE || documents.isEmpty()) return description;
@@ -51,7 +53,12 @@ public final class Docs {
                 .map(document -> (Json) Json.Object.of()
                         .with("kind", document.kind())
                         .with("slug", document.slug())
-                        .with("title", document.title()))
+                        .with("title", document.title())
+                        .with("sections", Json.Array.of(document.sections().stream()
+                                .map(section -> (Json) Json.Object.of()
+                                        .with("title", section.title())
+                                        .with("anchor", section.anchor()))
+                                .toList())))
                 .toList()));
     }
 

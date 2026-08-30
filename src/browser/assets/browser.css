@@ -238,6 +238,56 @@ turbo-frame { display: block; }
 }
 .ui-doc table { display: block; overflow-x: auto; max-width: 100%; }
 
+/* Package documents ------------------------------------------------------ */
+
+/* A package can start with one file for each kind. Four full-width sections
+ * made those four links look like four mostly empty chapters. These compact
+ * groups keep the Diataxis map visible. A document can still grow through its
+ * outline, and another file can join the same group without changing shape. */
+.document-grid {
+  display: grid;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  gap: var(--ui-space-4);
+}
+
+.document-group {
+  min-width: 0;
+  padding: var(--ui-space-3) var(--ui-space-4);
+  background: var(--ui-surface);
+  border: 1px solid var(--ui-rule);
+  border-radius: var(--ui-radius);
+}
+
+.document-kind {
+  margin: 0 0 var(--ui-space-2);
+  color: var(--ui-muted);
+  font-size: var(--ui-text-sm);
+  font-weight: 600;
+  letter-spacing: 0.04em;
+  text-transform: uppercase;
+}
+
+.document-entry { min-width: 0; padding: var(--ui-space-2) 0; }
+.document-entry + .document-entry { border-top: 1px solid var(--ui-rule); }
+.document-title { display: inline-block; font-weight: 600; overflow-wrap: anywhere; }
+
+/* The card supplies the boundary. A second rule under every outline would
+ * divide a one-document card twice. */
+.document-entry .ui-disclosure { margin-top: var(--ui-space-1); border: 0; }
+.document-entry .ui-disclosure-head {
+  min-height: 2rem;
+  margin-left: calc(-1 * var(--ui-space-2));
+  color: var(--ui-muted);
+  font-size: var(--ui-text-sm);
+  font-weight: 400;
+}
+.document-entry .ui-disclosure-body { padding-bottom: 0; }
+.document-entry .ui-item { padding: var(--ui-space-1) 0; }
+
+@media (max-width: 38rem) {
+  .document-grid { grid-template-columns: minmax(0, 1fr); }
+}
+
 /* A search result -------------------------------------------------------- */
 
 /* One result: a kind chip, the symbol's name, and the first sentence of what it

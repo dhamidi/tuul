@@ -2,6 +2,7 @@ package markdown;
 
 import java.io.IOException;
 import java.io.Writer;
+import java.util.Map;
 
 /// HTML, written into a [Writer] as the document is walked.
 ///
@@ -19,12 +20,14 @@ public final class Html {
     private final Document document;
     private final Links links;
     private final Writer out;
+    private final Map<Integer, String> headings;
     private char last = '\n';
 
-    private Html(Document document, Links links, Writer out) {
+    private Html(Document document, Links links, Writer out, Map<Integer, String> headings) {
         this.document = document;
         this.links = links;
         this.out = out;
+        this.headings = headings;
     }
 
     public static void render(Document document, Writer out) throws IOException {
@@ -34,7 +37,13 @@ public final class Html {
     /// Renders, offering `links` every reference the document itself never
     /// defined. See [Links] for why that offer is made here rather than earlier.
     public static void render(Document document, Links links, Writer out) throws IOException {
-        new Html(document, links, out).write();
+        new Html(document, links, out, Map.of()).write();
+    }
+
+    /// Renders with an identifier on each heading. Use [Outline#of] to make
+    /// links that point at these identifiers.
+    public static void renderAnchored(Document document, Links links, Writer out) throws IOException {
+        new Html(document, links, out, Outline.identifiers(document)).write();
     }
 
     /// Writes, remembering the last character, so that [#line] can tell whether
@@ -124,7 +133,10 @@ public final class Html {
             }
             case HEADING -> {
                 line();
-                write("<h" + cursor.number() + ">");
+                write("<h" + cursor.number());
+                var id = headings.get(step.node());
+                if (id != null) write(" id=\"" + attribute(id) + "\"");
+                write(">");
             }
             case BREAK -> {
                 line();

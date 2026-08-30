@@ -15,6 +15,7 @@ public final class MarkdownTest {
 
     public static void run() throws IOException {
         headings();
+        outlines();
         breaks();
         code();
         quotes();
@@ -50,6 +51,26 @@ public final class MarkdownTest {
         equal("an underline makes a heading of the paragraph above it", "<h1>foo</h1>\n", "foo\n===\n");
         equal("and a dashed one makes it level two", "<h2>foo</h2>\n", "foo\n---\n");
         equal("a heading may be empty", "<h1></h1>\n", "#\n");
+    }
+
+    private static void outlines() {
+        var document = Markdown.parse("## Use `Tcl` &amp; values\n\n## Use Tcl & values\n");
+        Check.equal("an outline reads visible heading text",
+                List.of(
+                        new Outline.Heading(2, "Use Tcl & values", "use-tcl-values"),
+                        new Outline.Heading(2, "Use Tcl & values", "use-tcl-values-2")),
+                Outline.of(document));
+
+        var out = new StringWriter();
+        try {
+            Markdown.renderAnchored(document, out);
+        } catch (IOException e) {
+            throw new java.io.UncheckedIOException(e);
+        }
+        Check.equal("anchored rendering uses the outline identifiers",
+                "<h2 id=\"use-tcl-values\">Use <code>Tcl</code> &amp; values</h2>\n"
+                        + "<h2 id=\"use-tcl-values-2\">Use Tcl &amp; values</h2>\n",
+                out.toString());
     }
 
     private static void breaks() {

@@ -363,14 +363,31 @@ public final class Views {
                     .filter(document -> document.string("kind", "").equals(kind))
                     .toList();
             if (documents.isEmpty()) continue;
-            written.add(Ui.stack(Props.of("gap", "sm"),
-                    Ui.heading(Props.of("level", "2"), text(section(kind))),
-                    Ui.items(Props.of().on("columns"), Html.each(documents, document -> Ui.item(
-                            Ui.anchor(Props.of("href", documentPath(routes, description.string("class", ""), kind,
-                                            document.string("slug", "")), "frame", Turbo.TOP),
-                                    text(document.string("title", ""))))))));
+            written.add(documentGroup(routes, description.string("class", ""), kind, documents));
         }
-        return Html.fragment(written);
+        if (written.isEmpty()) return Html.nothing();
+        return Html.element("div", classes("document-grid"), Html.fragment(written));
+    }
+
+    private static Html documentGroup(Router routes, String packageName, String kind, List<Json.Object> documents) {
+        return Html.element("section", classes("document-group"),
+                Html.element("h2", classes("document-kind"), text(section(kind))),
+                Html.element("div", classes("document-list"),
+                        Html.each(documents, document -> documentEntry(routes, packageName, kind, document))));
+    }
+
+    private static Html documentEntry(Router routes, String packageName, String kind, Json.Object document) {
+        var path = documentPath(routes, packageName, kind, document.string("slug", ""));
+        var sections = objects(document, "sections");
+        var outline = sections.isEmpty() ? Html.nothing() : Ui.disclosure(
+                Props.of("label", sections.size() + (sections.size() == 1 ? " section" : " sections")),
+                Ui.items(Html.each(sections, section -> Ui.item(
+                        Ui.anchor(Props.of("href", path + "#" + section.string("anchor", ""), "frame", Turbo.TOP),
+                                text(section.string("title", "")))))));
+        return Html.element("div", classes("document-entry"),
+                Ui.anchor(Props.of("href", path, "frame", Turbo.TOP), classes("document-title"),
+                        text(document.string("title", ""))),
+                outline);
     }
 
     /// Renders one document or a list for a kind that has no intro document.
@@ -389,7 +406,7 @@ public final class Views {
                                 Ui.heading(Props.of("level", "1"), Microdata.of("title"), text(title)),
                                 Ui.badge(Microdata.of("kind"), text(kind))),
                         Html.element("meta", Microdata.of("package"), content(packageName)),
-                        body.isBlank() ? Html.nothing() : documentation(links, withoutTitle(body))),
+                        body.isBlank() ? Html.nothing() : anchoredDocumentation(links, symbols.Document.content(body))),
                 documentLinks(routes, packageName, kind, others));
     }
 
@@ -409,12 +426,6 @@ public final class Views {
                 Ui.crumb(Props.of("href", symbolPath(routes, packageName), "frame", Turbo.TOP), text(packageName)),
                 Ui.crumb(Props.of("href", documentPath(routes, packageName, kind, ""), "frame", Turbo.TOP), text(kind)),
                 Ui.crumb(Props.of(), text(title)));
-    }
-
-    private static String withoutTitle(String body) {
-        if (!body.startsWith("# ")) return body;
-        var end = body.indexOf('\n');
-        return end < 0 ? "" : body.substring(end + 1);
     }
 
     private static String section(String kind) {
@@ -500,6 +511,13 @@ public final class Views {
         if (doc.isBlank()) return Html.nothing();
         return Html.element("div", classes("ui-doc"), Microdata.of("doc"),
                 Html.deferred(out -> Markdown.render(doc, links, out)));
+    }
+
+    /// Renders long-form documentation with fragment targets on its headings.
+    private static Html anchoredDocumentation(Links links, String doc) {
+        if (doc.isBlank()) return Html.nothing();
+        return Html.element("div", classes("ui-doc"), Microdata.of("doc"),
+                Html.deferred(out -> Markdown.renderAnchored(doc, links, out)));
     }
 
     /// Code keeps its shape but not the indentation that marked it as code, so

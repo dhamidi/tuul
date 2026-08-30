@@ -90,14 +90,20 @@ public final class ViewsTest {
     }
 
     private static void documents(Router routes) {
+        var sections = Json.Array.of(List.of(Json.Object.of()
+                .with("title", "Create the interpreter").with("anchor", "create-the-interpreter")));
         var listed = Json.Array.of(List.of(Json.Object.of()
-                .with("kind", "tutorial").with("slug", "").with("title", "A first script")));
+                .with("kind", "tutorial").with("slug", "").with("title", "A first script")
+                .with("sections", sections)));
         var package_ = Json.Object.of()
                 .with("class", "tcl").with("kind", "package")
                 .with("documents", listed)
                 .with("nested", Json.Array.of(List.of()));
         var hub = markup(Views.symbol(routes, Symbol.nothing().asking("tcl").describing(package_)));
         Check.that("a package links to each document", hub.contains("href=\"/symbols/tcl/tutorial\""));
+        Check.that("a package links to sections inside one document",
+                hub.contains("href=\"/symbols/tcl/tutorial#create-the-interpreter\""));
+        Check.that("document kinds are compact groups", hub.contains("class=\"document-grid\""));
 
         var description = Json.Object.of()
                 .with("package", "tcl").with("kind", "tutorial").with("slug", "")
@@ -107,6 +113,11 @@ public final class ViewsTest {
         Check.that("a document page describes a document", page.contains("itemtype=\"/Document\""));
         Check.that("the document names its package", page.contains("itemprop=\"package\" content=\"tcl\""));
         Check.equal("the source title does not add a second first-level heading", 1, count(page, "<h1"));
+
+        var sectioned = description.with("doc", "# A first script\n\n## Create the interpreter\n\nRun Tcl.\n");
+        var anchored = markup(Views.packageDocument(routes, markdown.Links.NONE, sectioned));
+        Check.that("a document section has the fragment target used by the package page",
+                anchored.contains("<h2 id=\"create-the-interpreter\">Create the interpreter</h2>"));
     }
 
     /// A symbol page: what it says it is describing, and what it links to.

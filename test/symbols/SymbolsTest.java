@@ -35,6 +35,12 @@ public final class SymbolsTest {
                 Document.title("# First script\n\nStart here.\n", "tutorial", "first-script"));
         Check.equal("a slug supplies a missing title", "first script",
                 Document.title("Start here.\n", "tutorial", "first-script"));
+        var document = new Document("sample", "tutorial", "", "First script",
+                "# First script\n\n## Start here\n\nText.\n\n### Detail\n", "src/sample/tutorial.md");
+        Check.equal("a document outline contains its level-two sections",
+                List.of(new Document.Section("Start here", "start-here")), document.sections());
+        Check.that("a document title is not part of its rendered content",
+                document.content().startsWith("\n## Start here"));
     }
 
     public static void integration() throws IOException {
