@@ -217,6 +217,7 @@ final class Store implements IndexStore {
                 left join document on document.id = search.document
                 left join origin on origin.id = coalesce(type.origin, document.origin)
                 where search match ?
+                  and coalesce(origin.location, '') <> ?
                 order by case
                     when lower(replace(search.symbol, '$', '.')) = lower(?) then 0
                     when search.member is null and lower(replace(search.symbol, '$', '.')) like '%.' || lower(?) then 1
@@ -224,7 +225,7 @@ final class Store implements IndexStore {
                     else 3
                 end, rank
                 limit ?
-                """, match, text.strip(), text.strip(), limit)) {
+                """, match, Index.platformNavigationLocation(), text.strip(), text.strip(), limit)) {
             while (rows.next()) {
                 found.add(new Catalog.Match(
                         rows.text(0).replace('$', '.'), rows.text(1), rows.text(2), rows.text(3),

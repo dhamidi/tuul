@@ -13,6 +13,7 @@ expect status 200
 # can show.
 expect link "json"
 expect link "java.base"
+expect link "jdk.jshell"
 
 follow "json"
 expect at /symbols/json
@@ -23,6 +24,23 @@ expect attribute symbol name json
 expect link "Json"
 follow "Json"
 expect attribute symbol name json.Json
+
+# The background generation publishes the JDK modules and packages that the
+# root and module pages offer. These names are deliberately not warmed by the
+# test setup.
+visit /tree
+follow "jdk.jshell"
+expect at /symbols/jdk.jshell
+expect attribute symbol name jdk.jshell
+
+visit /tree
+follow "java.base"
+expect at /symbols/java.base
+expect attribute symbol name java.base
+expect link "java.lang"
+follow "java.lang"
+expect at /symbols/java.lang
+expect attribute symbol name java.lang
 
 # The pane the tree drives exists on every page. A tree link that asked for it
 # and did not get it would blank the panel at HTTP 200, which is the failure

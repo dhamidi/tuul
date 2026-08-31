@@ -88,6 +88,7 @@ final class PersistentCatalog implements Catalog {
         kept.complete("project", "sources").ifPresent(found::add);
         kept.stored("vendor", "vendor").ifPresent(found::add);
         kept.stored("platform", System.getProperty("java.home")).ifPresent(found::add);
+        kept.stored("platform", Index.platformNavigationLocation()).ifPresent(found::add);
         return found;
     }
 

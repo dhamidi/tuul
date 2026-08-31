@@ -63,6 +63,8 @@ public final class Index implements Catalog {
 
     public static final String PLATFORM = "platform";
 
+    private static final String PLATFORM_NAVIGATION = "#navigation";
+
     /// A symbol the search found: what it is called, what kind of thing it is,
     /// how it was declared, and what it says about itself.
     ///
@@ -642,6 +644,79 @@ public final class Index implements Catalog {
         store.orElseThrow().publish("platform", location, stamp, types, List.of());
     }
 
+    /// Publishes the module and package rows the browser root points at. They
+    /// have their own complete generation because they are navigation, not
+    /// search rows; this lets the browser use them immediately without adding
+    /// package documentation to ordinary symbol search results.
+    private void indexPlatformGroups() {
+        if (store.isEmpty()) return;
+        var groups = platformGroups();
+        if (groups.isEmpty()) return;
+
+        var location = platformNavigationLocation();
+        var stamp = Runtime.version().toString();
+        var current = snapshot("platform", location, stamp);
+        if (current.isPresent() && current.get().fresh()
+                && groups.keySet().stream().allMatch(name -> kept(current.get().id(), name).isPresent())) return;
+        store.orElseThrow().publish("platform", location, stamp, groups, List.of());
+    }
+
+    static String platformNavigationLocation() {
+        return System.getProperty("java.home") + PLATFORM_NAVIGATION;
+    }
+
+    /// The JDK groups are small enough to publish before its classes. The
+    /// module and package names are the navigation surface; the class rows are
+    /// the separate, lazy search surface.
+    private static Map<String, TypeInfo> platformGroups() {
+        var modules = new LinkedHashMap<String, List<String>>();
+        var packageTypes = new LinkedHashMap<String, List<String>>();
+        var packageModules = new LinkedHashMap<String, String>();
+        try (var listed = Files.list(modules())) {
+            for (var module : listed.toList()) {
+                var exported = exports(module);
+                if (exported.isEmpty()) continue;
+                var moduleName = module.getFileName().toString();
+                modules.put(moduleName, exported);
+                for (var packageName : exported) {
+                    var directory = module.resolve(packageName.replace('.', '/'));
+                    if (!Files.isDirectory(directory)) continue;
+                    packageTypes.computeIfAbsent(packageName, ignored -> new ArrayList<>())
+                            .addAll(typesIn(directory, packageName));
+                    packageModules.putIfAbsent(packageName, moduleName);
+                }
+            }
+        } catch (IOException unreadable) {
+            throw new UncheckedIOException("cannot index JDK groups", unreadable);
+        }
+
+        var groups = new LinkedHashMap<String, TypeInfo>();
+        for (var module : modules.entrySet()) {
+            groups.put(module.getKey(), group(module.getKey(), TypeInfo.Kind.MODULE, module.getValue(),
+                    jdkSource(module.getKey(), "module-info.java")));
+        }
+        for (var packageName : new TreeSet<>(packageTypes.keySet())) {
+            groups.put(packageName, group(packageName, TypeInfo.Kind.PACKAGE,
+                    platformContents(packageName, packageTypes),
+                    jdkSource(packageModules.get(packageName), packageName.replace('.', '/') + "/package-info.java")));
+        }
+        return groups;
+    }
+
+    private static List<String> platformContents(String name, Map<String, List<String>> packageTypes) {
+        var prefix = name + ".";
+        var packages = new TreeSet<String>();
+        for (var packageName : packageTypes.keySet()) {
+            if (!packageName.startsWith(prefix)) continue;
+            var rest = packageName.substring(prefix.length());
+            var dot = rest.indexOf('.');
+            packages.add(dot < 0 ? packageName : prefix + rest.substring(0, dot));
+        }
+        var contents = new ArrayList<String>(packages);
+        contents.addAll(packageTypes.getOrDefault(name, List.of()));
+        return List.copyOf(contents);
+    }
+
     private static TypeInfo searchable(TypeInfo type, String source) {
         return new TypeInfo(type.name(), type.kind(), type.modifiers(), List.of(), "", List.of(), List.of(), List.of(),
                 List.of(), List.of(), "", List.of(), source, 0);
@@ -763,6 +838,8 @@ public final class Index implements Catalog {
                     "project", "documents", documentStamp, Map.of(), discoveredDocuments());
             changed = true;
         }
+
+        indexPlatformGroups();
 
         if (changed || store.orElseThrow().roots().isEmpty()) {
             var summaries = new ArrayList<Catalog.Root>();
