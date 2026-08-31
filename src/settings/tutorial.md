@@ -4,7 +4,7 @@ This tutorial designs one settings actor for an application. An image
 component contributes a schema. An environment variable supplies the first
 value. A later actor message changes that value.
 
-The package does not implement this design yet. For exact behavior, read
+For exact behavior, read
 [reference.md](reference.md).
 
 You need the `actors`, `json`, `jsonschema`, and `settings` packages. You do not
@@ -86,7 +86,7 @@ The function is a test source. A deployed application uses
 history and then sends `actors.resume`. The settings actor emits one
 `settings.resolve` effect for each eligible missing setting.
 
-The initializer reads the source and emits `settings.initialized`. The runtime
+The initializer reads the source and emits `initialize`. The runtime
 records that message before the actor changes its state. Replay does not read
 the environment.
 

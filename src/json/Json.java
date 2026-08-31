@@ -58,6 +58,26 @@ public sealed interface Json {
             return new Object(Map.of());
         }
 
+        /// Creates an object with one JSON field.
+        public static Object of(String name, Json value) {
+            return new Object(Map.of(name, value));
+        }
+
+        /// Creates an object with one string field.
+        public static Object of(String name, String value) {
+            return of(name, Json.of(value));
+        }
+
+        /// Creates an object with one boolean field.
+        public static Object of(String name, boolean value) {
+            return of(name, Json.of(value));
+        }
+
+        /// Creates an object with one numeric field.
+        public static Object of(String name, double value) {
+            return of(name, Json.of(value));
+        }
+
         public Object with(String name, Json value) {
             var next = new LinkedHashMap<>(fields);
             next.put(name, value);

@@ -1,7 +1,6 @@
 # settings
 
-Durable, schema-validated application settings held by one actor. This
-directory has no implementation yet. These documents are the design.
+Durable, schema-validated application settings held by one actor.
 
 Each component contributes one top-level namespace and its JSON Schema. The
 package composes those contributions into the definition of

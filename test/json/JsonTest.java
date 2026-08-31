@@ -40,6 +40,9 @@ public final class JsonTest {
         Check.equal("field order is insertion order",
                 "{\"b\":1,\"a\":2}",
                 Json.Object.of().with("b", 1).with("a", 2).text());
+        Check.equal("an object can start with one field",
+                "{\"kind\":\"missing\"}",
+                Json.Object.of("kind", "missing").text());
     }
 
     private static void escapes() {

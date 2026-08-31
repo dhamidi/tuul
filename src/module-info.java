@@ -28,6 +28,7 @@ module tuul {
     exports peg;
     exports project;
     exports selftest;
+    exports settings;
     exports sqlite3;
     exports symbols;
     exports tcl;

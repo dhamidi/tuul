@@ -329,6 +329,15 @@ public final class ActorSystem implements AutoCloseable {
         return ask(to, message, PATIENCE);
     }
 
+    /// Loads an actor and runs its resume turn without sending a user message.
+    ///
+    /// This is useful for actors whose startup work is represented by effects,
+    /// such as settings initializers. It is idempotent while the actor is
+    /// loaded and returns once the actor has accepted the summon request.
+    public void summon(Address address) {
+        load(address.here());
+    }
+
     /// Routes one delivery.
     ///
     /// The order of these tests is part of the routing contract. A foreign
@@ -357,7 +366,7 @@ public final class ActorSystem implements AutoCloseable {
         }
         Actor target;
         try {
-            target = summon(here);
+            target = load(here);
         } catch (IllegalStateException stopped) {
             if (closed) return DeliveryStatus.closed;
             throw stopped;
@@ -455,7 +464,7 @@ public final class ActorSystem implements AutoCloseable {
             sender.self(back);
             return;
         }
-        if (summon(target).offer(back) != Mailbox.Admission.accepted) dropped.incrementAndGet();
+        if (load(target).offer(back) != Mailbox.Admission.accepted) dropped.incrementAndGet();
     }
 
     // ---- loading ---------------------------------------------------------
@@ -471,7 +480,7 @@ public final class ActorSystem implements AutoCloseable {
     /// loaded map, so a system that cannot own an actor does not half-load it.
     /// An actor that keeps no log is not claimed, because there is no shared
     /// history for a second owner to corrupt.
-    private Actor summon(Address address) {
+    private Actor load(Address address) {
         var active = loaded.get(address);
         if (active != null && !active.finished()) return active;
         synchronized (lifecycle) {
@@ -648,7 +657,7 @@ public final class ActorSystem implements AutoCloseable {
         if (effect.get("durable") instanceof Json.Bool(var durable)) {
             spawn(address, durable ? Spawn.durable() : Spawn.ephemeral());
         }
-        summon(address.here());
+        load(address.here());
     }
 
     private void await(Actor actor, List<PendingEffect> pending, EffectStep step) {
@@ -956,7 +965,7 @@ public final class ActorSystem implements AutoCloseable {
     }
 
     void activate(Address address) {
-        summon(address.here());
+        load(address.here());
     }
 
     List<Address> loadedAddresses() {

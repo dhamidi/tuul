@@ -5,7 +5,8 @@ Each section is one task. Do the steps in order. One instruction per step.
 Exact API and protocol rules are in [reference.md](reference.md). Design
 reasons are in [guide.md](guide.md).
 
-The package does not implement this design yet.
+The package implements this design in `Settings`, `Contribution`, `Initial`,
+`Initializers`, and `Secret`.
 
 ## Contribute settings from a component
 
@@ -131,7 +132,7 @@ var images = Contribution.named("images", schema)
         .initially("/maximumBytes", Initial.value(Json.of(20971520)));
 ```
 
-The actor emits a normal `settings.initialized` message for the constant. Its
+The actor emits a normal `initialize` message for the constant. Its
 history therefore says when the default became the value.
 
 JSON Schema `default` stays an annotation. Validation does not insert it.

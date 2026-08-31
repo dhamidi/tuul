@@ -1,7 +1,7 @@
 # Reference
 
 This document specifies the first `settings` package. It is an implementation
-contract. The package does not implement it yet.
+contract. The package implements it in the public types in this directory.
 
 For a first program, read [tutorial.md](tutorial.md). For tasks, read
 [howto.md](howto.md). For design reasons, read [guide.md](guide.md).
@@ -31,7 +31,7 @@ classpath scanner.
 | revision | The count of accepted state changes. |
 
 Environment initialization is not an override. In this package, an override
-is an explicit `settings.set` command.
+is an explicit `set` command.
 
 ## Actor identity
 
@@ -43,9 +43,12 @@ is an explicit `settings.set` command.
 | default spawn | durable |
 | public address factory | `Settings.address()` |
 
-An application has one settings actor. A multi-tenant deployment that runs one
-self-contained application stack for each tenant has one settings actor in
-each stack.
+An application has one settings actor. `Settings.of(...)` supplies the
+definition for that actor; it does not create a second address. The actor
+system keeps one definition per actor type, so this package does not provide
+multiple independent settings documents in one actor system. A multi-tenant
+deployment that runs one self-contained application stack for each tenant has
+one settings actor in each stack.
 
 `Settings` implements `Definition<Settings.State>`. The state type does not
 leave the actor system. `Definition.inspect` returns JSON.
@@ -100,9 +103,9 @@ mutation namespace.
 
 Returns `Address.of("settings", "application")`.
 
-### `settings.set(String pointer, Json value)`
+### `set(String pointer, Json value)`
 
-Returns a `settings.set` message from the composed `Settings` instance. The
+Returns a `set` message from the composed `Settings` instance. The
 pointer is an absolute RFC 6901 JSON Pointer. The empty pointer is invalid. The
 first pointer token must name an installed contribution.
 
@@ -122,9 +125,9 @@ An accepted set clears explicit absence and reinitialization requests that
 overlap the path. Two pointers overlap when either pointer is the other
 pointer or its ancestor. The change increments revision once.
 
-### `settings.unset(String pointer)`
+### `unset(String pointer)`
 
-Returns a `settings.unset` message.
+Returns an `unset` message.
 
 The factory records the full pointers of the initializer declarations that
 overlap the requested pointer. Replay uses that recorded list. A later
@@ -139,9 +142,9 @@ prevents a later summon from restoring the value. It increments revision once,
 including when the value was already absent but the command created a new
 explicit-absence decision.
 
-### `settings.reinitialize(String pointer)`
+### `reinitialize(String pointer)`
 
-Returns a `settings.reinitialize` message.
+Returns a `reinitialize` message.
 
 The pointer must name one declared initializer or an ancestor of one or more
 declared initializers. The actor clears explicit absence for the selected
@@ -250,7 +253,7 @@ String scheme()
 
 The scheme is non-empty and does not contain a colon. `run` accepts a
 `settings.resolve` effect for that scheme and emits at most one
-`settings.initialized` message. It emits nothing when the source is missing or
+`initialize` message. It emits nothing when the source is missing or
 invalid. The source invokes its failure sink for an invalid value or an I/O
 failure.
 
@@ -391,21 +394,21 @@ The protocol shapes specify replay and tests. They are not a supported message
 construction API. Application code must use the composed `Settings` instance.
 The runtime logs an inbound message before the actor validates it, so the
 package cannot protect a caller that puts secret bytes in a hand-built
-`settings.set` or `settings.initialized` message.
+`set` or `initialize` message.
 
 ### Commands
 
 | Type | Payload | State behavior | Reply |
 |---|---|---|---|
-| `settings.set` | `pointer`, `value` | Validate and replace one value. | `settings.changed` or `settings.rejected`. |
-| `settings.unset` | `pointer`, `initializers` | Validate and remove one value. | `settings.changed` or `settings.rejected`. |
-| `settings.reinitialize` | `pointer`, `requests` | Select declared initializers and emit effects. | `settings.initializing` or `settings.rejected`. |
+| `set` | `pointer`, `value` | Validate and replace one value. | `settings.changed` or `settings.rejected`. |
+| `unset` | `pointer`, `initializers` | Validate and remove one value. | `settings.changed` or `settings.rejected`. |
+| `reinitialize` | `pointer`, `requests` | Select declared initializers and emit effects. | `settings.initializing` or `settings.rejected`. |
 
 ### Initializer results
 
 | Type | Payload | State behavior |
 |---|---|---|
-| `settings.initialized` | `pointer`, `condition`, `value` | Validate and commit only when the durable condition still holds. |
+| `initialize` | `pointer`, `condition`, `value` | Validate and commit only when the durable condition still holds. |
 
 The public initializer handler builds these result messages. Application code
 does not build them.
@@ -429,7 +432,7 @@ The `condition` payload has one of these shapes:
 {"kind":"requested", "request":"6c1c...", "previous":20971520}
 ```
 
-The `request` field is the ID recorded by `settings.reinitialize`. The
+The `request` field is the ID recorded by `reinitialize`. The
 `previous` field is absent when the requested path was absent. It is present
 with the prior JSON value otherwise. JSON null is a present value.
 
@@ -469,7 +472,7 @@ carries the full pointer, source descriptor, decoder name, and a condition
 derived from durable state. The effect does not carry another message
 envelope.
 
-An eligible `Initial.value` produces the same `settings.initialized` message
+An eligible `Initial.value` produces the same `initialize` message
 through `application.send`. It needs no external handler.
 
 The handler emits one result message. The runtime sends that message back to
@@ -593,7 +596,7 @@ An unset command records the initializer paths that it made explicitly absent.
 A reinitialize command records request IDs and selected paths. Adding an
 initializer later does not change those earlier command payloads.
 
-A recorded `settings.initialized` result is interpreted for its pointer when
+A recorded `initialize` result is interpreted for its pointer when
 the owning contribution remains installed, even if that contribution no
 longer declares the initializer. Removing the owning contribution makes its
 historical mutations state no-ops. A live unknown-namespace command gets a

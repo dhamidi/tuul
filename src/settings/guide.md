@@ -88,7 +88,7 @@ replay would produce a different actor from the same history.
 
 After replay, the runtime sends `actors.resume`. The actor finds eligible
 missing paths and emits `settings.resolve`. An external handler reads the
-environment. Its successful result comes back as `settings.initialized` and is
+environment. Its successful result comes back as `initialize` and is
 recorded.
 
 The sequence is:
@@ -99,7 +99,7 @@ first summon
     -> actors.resume
     -> settings.resolve effect
     -> environment read
-    -> recorded settings.initialized
+    -> recorded initialize
     -> validated durable value
 
 later summon
@@ -108,7 +108,7 @@ later summon
 ```
 
 Changing the environment after the first success changes nothing. A person can
-send `settings.set` or `settings.reinitialize` when a change is intended.
+send `set` or `reinitialize` when a change is intended.
 
 This is not a 12-factor precedence chain. There is no permanent merge of
 defaults, files, environment variables, flags, and remote values.
@@ -122,7 +122,7 @@ The state must distinguish those cases. An accepted unset records explicit
 absence for matching initializer paths. A later `actors.resume` respects that
 decision.
 
-`settings.reinitialize` clears the decision for selected paths. This makes the
+`reinitialize` clears the decision for selected paths. This makes the
 source eligible again. The command is explicit because restoring a value can
 change application behavior.
 
@@ -199,7 +199,7 @@ accepted or ignored during replay as it was when live.
 ## Secret bytes do not belong in durable messages
 
 An actor log is durable and inspectable. Telemetry and error reporting can see
-message shapes. A raw access key in `settings.set` or `settings.initialized`
+message shapes. A raw access key in `set` or `initialize`
 would therefore spread into places that are not secret stores.
 
 Settings store a reference such as:

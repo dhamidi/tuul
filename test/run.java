@@ -14,6 +14,7 @@ void main(String[] arguments) {
             Named.fast("json.JsonTest", json.JsonTest::run),
             Named.fast("jsonrpc2.Jsonrpc2Test", jsonrpc2.Jsonrpc2Test::run),
             Named.fast("jsonschema.JsonschemaTest", jsonschema.JsonschemaTest::run),
+            Named.fast("settings.SettingsTest", settings.SettingsTest::run),
             Named.integration("actors.ActorsTest", actors.ActorsTest::run),
             Named.fast("markdown.MarkdownTest", markdown.MarkdownTest::run),
             Named.fast("application.ApplicationTest", application.ApplicationTest::run),
