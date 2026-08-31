@@ -32,6 +32,8 @@ visit /tree
 follow "jdk.jshell"
 expect at /symbols/jdk.jshell
 expect attribute symbol name jdk.jshell
+expect link "jdk.jshell.JShell"
+expect link "JShell.eval(String)"
 
 visit /tree
 follow "java.base"

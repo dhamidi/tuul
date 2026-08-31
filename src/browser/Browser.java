@@ -402,7 +402,9 @@ public final class Browser implements AutoCloseable {
         watch(cable, index, work);
         work.submit(() -> {
             try (var coordinator = Index.of(sources, vendor, index)) {
-                if (coordinator.ensureCurrent()) cable.broadcast(INDEX, Turbo.refresh());
+                var changed = coordinator.ensureCurrent();
+                if (coordinator.ensureBrowseCurrent()) changed = true;
+                if (changed) cable.broadcast(INDEX, Turbo.refresh());
             }
             return null;
         });

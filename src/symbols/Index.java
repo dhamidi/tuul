@@ -39,10 +39,12 @@ import sqlite3.SqliteException;
 ///
 /// [#ensureCurrent()] compares independent source and document fingerprints.
 /// It compiles changed Java sources and publishes complete replacement rows.
-/// Search also publishes a complete selected-dependency generation and a
-/// lightweight exported-JDK name generation. A source-JAR change refreshes
-/// dependency documentation without compiling the project. A successful
-/// generation remains in `index.db` for later processes.
+/// Search publishes a complete selected-dependency generation and a
+/// lightweight exported-JDK name generation. [#ensureBrowseCurrent] publishes
+/// the full JDK generation a read-only browser needs for cross-reference
+/// links. A source-JAR change refreshes dependency documentation without
+/// compiling the project. A successful generation remains in `index.db` for
+/// later processes.
 ///
 /// Call [#catalog(Path)] when a caller must only read committed rows. That
 /// catalog has no source paths and cannot start compilation.
@@ -507,6 +509,10 @@ public final class Index implements Catalog {
         return Runtime.version() + "|javadoc=" + Javadoc.FORMAT;
     }
 
+    static String platformBrowseLocation() {
+        return System.getProperty("java.home") + "#browse";
+    }
+
     /// Returns every project type name. Dependency and JDK names are separate
     /// origins and are made complete by [#search(String, int)].
     public List<String> names() {
@@ -646,6 +652,54 @@ public final class Index implements Catalog {
             throw new UncheckedIOException("cannot index JDK names", unreadable);
         }
         store.orElseThrow().publish("platform", location, stamp, types, List.of());
+    }
+
+    /// Publishes the full public JDK surface for a browser. Search only needs
+    /// names and therefore uses [#indexPlatform]; a doc browser also needs
+    /// members and comments so that references such as `JShell#eval` resolve.
+    /// The separate location keeps the cheap search generation lazy.
+    private boolean indexPlatformBrowser() {
+        if (store.isEmpty()) return false;
+        var location = platformBrowseLocation();
+        var stamp = platformStamp();
+        var current = snapshot("platform", location, stamp);
+        if (current.isPresent() && current.get().fresh() && current.get().complete()) return false;
+
+        var types = new LinkedHashMap<String, TypeInfo>();
+        var comments = new HashMap<String, Map<String, Javadoc.Comment>>();
+        var sources = new HashMap<String, String>();
+        try (var listed = Files.list(modules())) {
+            for (var module : listed.toList()) {
+                var moduleName = module.getFileName().toString();
+                for (var packageName : exports(module)) {
+                    var directory = module.resolve(packageName.replace('.', '/'));
+                    if (!Files.isDirectory(directory)) continue;
+                    try (var entries = Files.list(directory)) {
+                        for (var classFile : entries.filter(path -> path.toString().endsWith(".class")).toList()) {
+                            var bytes = read(classFile);
+                            if (!Classes.visible(bytes)) continue;
+                            var inspected = Classes.inspect(bytes);
+                            types.put(inspected.name(), documentedPlatform(inspected, moduleName, comments, sources,
+                                    "jrt:" + classFile));
+                        }
+                    }
+                }
+            }
+        } catch (IOException unreadable) {
+            throw new UncheckedIOException("cannot index JDK documentation", unreadable);
+        }
+        store.orElseThrow().publish("platform", location, stamp, types, List.of());
+        return true;
+    }
+
+    private static TypeInfo documentedPlatform(TypeInfo type, String module,
+            Map<String, Map<String, Javadoc.Comment>> comments, Map<String, String> sources, String classLocation) {
+        var entry = sourceFile(type.name());
+        var key = module + "/" + entry;
+        var source = sources.computeIfAbsent(key, ignored -> jdk(module, entry).orElse(null));
+        if (source == null) return type.at(classLocation);
+        var docs = comments.computeIfAbsent(key, ignored -> Javadoc.of(source, file(type.name())));
+        return Javadoc.attach(type.at(jdkLocation(module, entry)), docs, path(type.name()));
     }
 
     /// Publishes the module and package rows the browser root points at. They
@@ -807,6 +861,23 @@ public final class Index implements Catalog {
             throw new IllegalStateException(failed);
         } finally {
             BUILDING.remove(key, started);
+        }
+    }
+
+    /// Completes the JDK generation that a read-only browser needs for links.
+    ///
+    /// The ordinary refresh is deliberately cheap: it makes the project and
+    /// the browser tree current, while search and exact lookup fill in JDK
+    /// types on demand. A browser cannot do that through its [Catalog], so it
+    /// asks its background coordinator to finish the full JDK generation after
+    /// the first page is available.
+    public boolean ensureBrowseCurrent() throws IOException {
+        if (store.isEmpty()) return false;
+        var lock = index.resolveSibling(index.getFileName() + ".lock");
+        if (lock.getParent() != null) Files.createDirectories(lock.getParent());
+        try (var channel = FileChannel.open(lock, StandardOpenOption.CREATE, StandardOpenOption.WRITE);
+                var held = channel.lock()) {
+            return indexPlatformBrowser();
         }
     }
 

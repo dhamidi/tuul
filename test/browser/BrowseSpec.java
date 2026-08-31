@@ -67,11 +67,7 @@ public final class BrowseSpec {
         var file = index.resolve("index.db");
         try (var coordinator = Index.of(List.of(Checkout.at("src")), List.of(), file)) {
             coordinator.ensureCurrent();
-            // Keep the JDK types used by reference-link assertions warm. The
-            // module and package checks below must come only from the
-            // background-published navigation rows.
-            coordinator.lookup("java.io.Reader");
-            coordinator.lookup("java.io.Writer");
+            coordinator.ensureBrowseCurrent();
         }
         try (Catalog catalog = Index.catalog(file);
                 var browser = Browser.of(catalog, null);
