@@ -193,9 +193,9 @@ public final class Index implements Catalog {
         if (name.isEmpty() || name.contains("$")) return Optional.empty();
         return module(name)
                 .or(() -> store.isEmpty() ? projectPackage(name) : Optional.empty())
-                .or(() -> grouped("vendor", "vendor", vendor.stamp() + vendor.sourceStamp(), name,
+                .or(() -> grouped("vendor", "vendor", vendor.stamp() + vendor.sourceStamp() + Javadoc.FORMAT, name,
                         () -> vendoredPackage(name)))
-                .or(() -> grouped("platform", System.getProperty("java.home"), Runtime.version().toString(), name,
+                .or(() -> grouped("platform", System.getProperty("java.home"), platformStamp(), name,
                         () -> platformPackage(name)));
     }
 
@@ -224,7 +224,7 @@ public final class Index implements Catalog {
     /// module's own declaration rather than a guess about what names look
     /// internal.
     private Optional<TypeInfo> module(String name) {
-        return grouped("platform", System.getProperty("java.home"), Runtime.version().toString(), name, () -> {
+        return grouped("platform", System.getProperty("java.home"), platformStamp(), name, () -> {
             var directory = modules().resolve(name);
             if (!Files.isDirectory(directory)) return Optional.empty();
             var exported = exports(directory);
@@ -503,6 +503,10 @@ public final class Index implements Catalog {
         }
     }
 
+    private static String platformStamp() {
+        return Runtime.version() + "|javadoc=" + Javadoc.FORMAT;
+    }
+
     /// Returns every project type name. Dependency and JDK names are separate
     /// origins and are made complete by [#search(String, int)].
     public List<String> names() {
@@ -552,7 +556,7 @@ public final class Index implements Catalog {
     }
 
     private Optional<TypeInfo> vendored(String name) {
-        var stamp = vendor.stamp() + vendor.testStamp() + vendor.sourceStamp();
+        var stamp = vendor.stamp() + vendor.testStamp() + vendor.sourceStamp() + Javadoc.FORMAT;
         var origin = snapshot("vendor", "vendor", stamp);
         if (origin.isPresent() && origin.get().fresh()) {
             var kept = kept(origin.get().id(), name);
@@ -567,7 +571,7 @@ public final class Index implements Catalog {
     /// Publishes one complete searchable generation for selected dependencies.
     private void indexVendor() {
         if (store.isEmpty()) return;
-        var stamp = vendor.stamp() + vendor.testStamp() + vendor.sourceStamp();
+        var stamp = vendor.stamp() + vendor.testStamp() + vendor.sourceStamp() + Javadoc.FORMAT;
         var current = snapshot("vendor", "vendor", stamp);
         if (current.isPresent() && current.get().fresh() && current.get().complete()) return;
         var types = new LinkedHashMap<String, TypeInfo>();
@@ -600,7 +604,7 @@ public final class Index implements Catalog {
     /// for it.
     private Optional<TypeInfo> platform(String name) {
         var location = System.getProperty("java.home");
-        var stamp = Runtime.version().toString();
+        var stamp = platformStamp();
         var origin = snapshot("platform", location, stamp);
         if (origin.isPresent() && origin.get().fresh()) {
             var kept = kept(origin.get().id(), name);
@@ -618,7 +622,7 @@ public final class Index implements Catalog {
     private void indexPlatform() {
         if (store.isEmpty()) return;
         var location = System.getProperty("java.home");
-        var stamp = Runtime.version().toString();
+        var stamp = platformStamp();
         var current = snapshot("platform", location, stamp);
         if (current.isPresent() && current.get().fresh() && current.get().complete()) return;
 
@@ -654,7 +658,7 @@ public final class Index implements Catalog {
         if (groups.isEmpty()) return;
 
         var location = platformNavigationLocation();
-        var stamp = Runtime.version().toString();
+        var stamp = platformStamp();
         var current = snapshot("platform", location, stamp);
         if (current.isPresent() && current.get().fresh()
                 && groups.keySet().stream().allMatch(name -> kept(current.get().id(), name).isPresent())) return;
@@ -1017,7 +1021,8 @@ public final class Index implements Catalog {
                 }
             }
             sources.append(vendor.stamp()).append(Runtime.version()).append("|release=")
-                    .append(Runtime.version().feature()).append("|debug=true");
+                    .append(Runtime.version().feature()).append("|debug=true|javadoc=")
+                    .append(Javadoc.FORMAT);
             return new Inventory(fingerprint(sources.toString()), fingerprint(documents.toString()));
         }
     }

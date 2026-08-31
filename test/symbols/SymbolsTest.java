@@ -25,6 +25,7 @@ public final class SymbolsTest {
         controlledCompilation();
         joinsCompilation();
         markdownDoesNotCompile();
+        javadocMarkup();
     }
 
     private static void documentNames() {
@@ -309,9 +310,9 @@ public final class SymbolsTest {
     private static void javadoc(Index index) {
         var invoice = index.lookup("invoicing.Invoice").orElseThrow();
         Check.equal("a type carries its doc comment, paragraphs and all",
-                "An invoice for a fixed amount, identified by id.\n\nInvoices are compared by amount.",
+                "An invoice for a fixed amount, identified by `id`.\n\nInvoices are compared by amount.",
                 invoice.doc());
-        Check.equal("so does a method", "Orders invoices by amount, then id. See Invoice.Kind.",
+        Check.equal("so does a method", "Orders invoices by amount, then id. See [Invoice.Kind].",
                 method(invoice, "compareTo").doc());
         Check.equal("markdown doc comments are read too, brackets and all",
                 "The customer this invoice is for.\n\nNot [Invoice.Kind], and not [Nowhere] either.",
@@ -321,11 +322,10 @@ public final class SymbolsTest {
         // Writing back what was parsed dropped the brackets, which left the
         // word in the prose and no way for anything downstream to tell it had
         // ever been a cross-reference — see the pair above and [References].
-        // `{@link}` keeps its old shape, because nobody typed a bracket there.
         Check.that("a markdown reference keeps the syntax that makes it one",
                 method(invoice, "customer").doc().contains("[Invoice.Kind]"));
-        Check.that("and an inline tag does not grow one it never had",
-                !method(invoice, "compareTo").doc().contains("["));
+        Check.that("a Javadoc reference keeps the syntax that makes it one",
+                method(invoice, "compareTo").doc().contains("[Invoice.Kind]"));
 
         var kind = index.lookup("invoicing.Invoice.Kind").orElseThrow();
         Check.equal("a nested type finds its comment in the enclosing file", "What stage an invoice is at.", kind.doc());
@@ -346,24 +346,24 @@ public final class SymbolsTest {
     private static void platformJavadoc(Index index) {
         var string = index.lookup("java.lang.String").orElseThrow();
         Check.that("the JDK's types are documented",
-                string.doc().startsWith("The String class represents character strings."));
+                string.doc().startsWith("The `String` class represents character strings."));
         Check.that("so are its methods",
                 method(string, "length").doc().startsWith("Returns the length of this string."));
-        Check.that("markup is flattened to text, not left as tags",
+        Check.that("Javadoc markup is rendered as Markdown, not left as tags",
                 !string.doc().contains("{@") && !string.doc().contains("<p>"));
         Check.that("HTML paragraphs stay paragraphs, so the JDK's prose is not one wall of text",
                 string.doc().contains("\n\n"));
-        Check.that("and a <pre> example keeps the layout somebody wrote it with",
-                string.doc().contains("\n    String str = \"abc\";"));
+        Check.that("and a <pre> example remains a code block",
+                string.doc().contains("```") && string.doc().contains("String str = \"abc\";"));
         Check.that("@see carries what it points at, rather than pointing nowhere",
                 string.tags().stream()
                         .filter(tag -> tag.tag().equals("see"))
                         .anyMatch(tag -> tag.text().contains("java.lang.StringBuffer")));
 
         Check.that("overloads are matched by parameter type, not by name",
-                overload(string, "valueOf", "char").doc().startsWith("Returns the string representation of the char argument."));
+                overload(string, "valueOf", "char").doc().startsWith("Returns the string representation of the `char` argument."));
         Check.that("even when the overloads have the same arity",
-                overload(string, "valueOf", "int").doc().startsWith("Returns the string representation of the int argument."));
+                overload(string, "valueOf", "int").doc().startsWith("Returns the string representation of the `int` argument."));
 
         Check.equal("parameter names are recovered from the source, since the JDK ships none",
                 "java.lang.String substring(int beginIndex, int endIndex)",
@@ -379,6 +379,48 @@ public final class SymbolsTest {
                 entry.doc().startsWith("A map entry (key-value pair)."));
         Check.that("and so are its methods",
                 method(entry, "getKey").doc().startsWith("Returns the key corresponding to this entry."));
+
+        var spi = index.lookup("jdk.jshell.spi").orElseThrow();
+        Check.that("JDK links become references for the browser to resolve",
+                spi.doc().contains("[jdk.jshell.spi.ExecutionControl]")
+                        && spi.doc().contains("[ExecutionControlProvider#name()]"));
+        Check.that("JDK lists remain lists",
+                spi.doc().contains("- local\n") && spi.doc().contains("- jdi:hostname(localhost)\n"));
+        Check.that("JDK preformatted text remains fenced Markdown",
+                spi.doc().contains("```\n") && spi.doc().contains("spec   := name : params"));
+    }
+
+    private static void javadocMarkup() {
+        var source = """
+                /**
+                 * A paragraph with {@code value}, {@link java.lang.String String},
+                 * and {@link java.lang.String} and {@link #toString()}.
+                 * <pre>{@code
+                 * one
+                 * two
+                 * }</pre>
+                 * <ol>
+                 *   <li>first</li>
+                 *   <li>second</li>
+                 * </ol>
+                 */
+                final class Fixture {}
+                """;
+        var comment = Javadoc.of(source, "Fixture.java").get("Fixture");
+        Check.that("the DocTree visitor emits inline code",
+                comment.doc().contains("`value`"));
+        Check.that("the DocTree visitor emits a link reference",
+                comment.doc().contains("[java.lang.String]"));
+        Check.that("the DocTree visitor preserves a link label",
+                comment.doc().contains("[String][java.lang.String]"));
+        Check.that("the DocTree visitor preserves enclosing-member targets",
+                comment.doc().contains("[toString()][#toString()]"));
+        Check.that("the DocTree visitor emits a fenced code block",
+                comment.doc().contains("```\n") && comment.doc().contains("one\ntwo"));
+        Check.that("the DocTree visitor does not nest inline code in a fence",
+                !comment.doc().contains("```\n`") && !comment.doc().contains("`\n```"));
+        Check.that("the DocTree visitor emits ordered list markers",
+                comment.doc().contains("1. first\n2. second"));
     }
 
     /// A tuul project's dependencies are the jars in `vendor/` — nothing else
@@ -401,7 +443,8 @@ public final class SymbolsTest {
         Check.that("documented from the sources jar beside it",
                 greeter.doc().startsWith("Greets people by name."));
         Check.equal("block tags and all",
-                List.of("@param name who to greet", "@return the greeting", "@throws IllegalArgumentException if name is empty"),
+                List.of("@param name who to greet", "@return the greeting",
+                        "@throws IllegalArgumentException if `name` is empty"),
                 method(greeter, "greet").tags().stream().map(TypeInfo.Tag::line).toList());
         Check.equal("a vendored field is documented too",
                 "How the greeting starts.",
@@ -476,7 +519,7 @@ public final class SymbolsTest {
 
         try (var index = Index.of(List.of(root), List.of(), kept)) {
             Check.equal("a first lookup indexes the project",
-                    "An invoice for a fixed amount, identified by id.\n\nInvoices are compared by amount.",
+                    "An invoice for a fixed amount, identified by `id`.\n\nInvoices are compared by amount.",
                     index.lookup("invoicing.Invoice").orElseThrow().doc());
             Check.that("and every type in it, not only the one asked for",
                     index.names().containsAll(List.of("invoicing.Invoice", "invoicing.Invoice$Kind")));

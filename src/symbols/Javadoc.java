@@ -25,6 +25,7 @@ import com.sun.source.tree.MethodTree;
 import com.sun.source.tree.VariableTree;
 import com.sun.source.util.DocTrees;
 import com.sun.source.util.JavacTask;
+import com.sun.source.util.SimpleDocTreeVisitor;
 import com.sun.source.util.TreePath;
 import com.sun.source.util.TreePathScanner;
 import java.io.IOException;
@@ -37,7 +38,6 @@ import java.util.LinkedHashMap;
 import java.util.List;
 import java.util.Locale;
 import java.util.Map;
-import java.util.Set;
 import java.util.regex.Pattern;
 import java.util.stream.Collectors;
 import javax.tools.JavaFileObject;
@@ -54,20 +54,11 @@ import javax.tools.ToolProvider;
 /// that came out of the class file.
 public final class Javadoc {
 
+    static final String FORMAT = "markdown-visitor-1";
+
     private static final Pattern ANNOTATIONS = Pattern.compile("@\\w+(\\.\\w+)*");
     private static final Pattern GENERICS = Pattern.compile("<[^<>]*>");
     private static final Pattern QUALIFIERS = Pattern.compile("(\\w+\\.)+");
-
-    /// HTML that stands a block apart from what surrounds it.
-    private static final Set<String> PARAGRAPH = Set.of(
-            "p", "pre", "blockquote", "div", "ul", "ol", "dl", "table", "hr",
-            "h1", "h2", "h3", "h4", "h5", "h6");
-
-    /// HTML that starts a new line without standing apart.
-    private static final Set<String> LINE = Set.of("br", "li", "tr", "dt", "dd");
-
-    /// HTML whose content is laid out by hand and must not be squeezed.
-    private static final Set<String> PREFORMATTED = Set.of("pre");
 
     private Javadoc() {}
 
@@ -228,122 +219,273 @@ public final class Javadoc {
         return QUALIFIERS.matcher(erased.replace("...", "[]").replaceAll("\\s+", "")).replaceAll("");
     }
 
-    /// Flattens doc markup to the text a reader would see: `{@code x}` becomes
-    /// x, `{@link Foo}` becomes Foo, and a markdown comment — the `///` kind
-    /// this project writes — keeps its text without the link brackets and
-    /// backticks.
-    ///
-    /// HTML keeps its shape rather than becoming a space. A comment in the JDK
-    /// is HTML: `<p>` between paragraphs, `<pre>` around an example, `<li>` per
-    /// item. Flattening those to spaces is what turned `java.lang.String`'s
-    /// documentation into one immense sentence with a code sample lying down in
-    /// the middle of it.
+    /// Converts the JDK's semantic Javadoc tree to the Markdown that tuul
+    /// already renders. Blocks, lists, code, and links keep their meaning.
     private static String flatten(List<? extends DocTree> parts) {
-        var text = new StringBuilder();
-        var markdown = markdown(parts);
-        write(parts, markdown, text);
-        if (markdown) return text.toString().strip();
-        return text.toString()
-                .strip()
-                .replaceAll("(?<=\\S)[ \t]{2,}", " ")
-                .replaceAll("[ \t]+\n", "\n")
-                // A line of prose begins with the single space left where the
-                // source wrapped; a line of code begins with the author's
-                // indentation. Only the first is worth removing, so only a lone
-                // space before a non-space goes.
-                .replaceAll("(?m)^ (?=\\S)", "")
-                .replaceAll("\n{3,}", "\n\n");
+        return new MarkdownWriter(parts).write();
     }
 
-    /// Appends without normalising, so that a nested body — the summary inside
-    /// `{@summary}` — is written into the same text as everything around it and
-    /// tidied once at the end.
-    private static void write(List<? extends DocTree> parts, boolean markdown, StringBuilder text) {
-        var preformatted = 0;
-        for (var part : parts) {
-            switch (part) {
-                case TextTree tree -> text.append(preformatted > 0 ? tree.getBody() : squeeze(tree.getBody()));
-                case LiteralTree tree -> text.append(tree.getBody().getBody());
-                case LinkTree tree -> text.append(markdown ? written(tree) : reference(tree));
-                case EntityTree tree -> text.append(entity(tree));
-                case RawTextTree tree -> text.append(tree.getContent());
-                case ReferenceTree tree -> text.append(tree.getSignature());
-                case SummaryTree tree -> write(tree.getSummary(), markdown, text);
-                case IndexTree tree -> write(List.of(tree.getSearchTerm()), markdown, text);
-                case StartElementTree tree -> {
-                    if (PREFORMATTED.contains(name(tree.getName()))) preformatted++;
-                    text.append(gap(name(tree.getName())));
+    /// The visitor emits Markdown rather than HTML because the browser supplies
+    /// the final HTML and resolves references against its own symbol index.
+    private static final class MarkdownWriter extends SimpleDocTreeVisitor<Void, Void> {
+
+        private final List<? extends DocTree> parts;
+        private final StringBuilder text = new StringBuilder();
+        private final Deque<ListFrame> lists = new ArrayDeque<>();
+        private final boolean markdown;
+        private int preformatted;
+        private boolean reference;
+
+        private MarkdownWriter(List<? extends DocTree> parts) {
+            this.parts = parts;
+            this.markdown = parts.stream().anyMatch(part -> part instanceof RawTextTree);
+        }
+
+        private String write() {
+            visit(parts, null);
+            return text.toString().strip();
+        }
+
+        @Override
+        public Void visitText(TextTree tree, Void ignored) {
+            var body = preformatted > 0 || markdown ? tree.getBody() : squeeze(tree.getBody());
+            if (reference && !body.isBlank()) {
+                if (Character.isWhitespace(body.charAt(0)) && body.length() > 1
+                        && Character.isLetterOrDigit(body.charAt(1))) {
+                    body = body.substring(1);
+                    text.append(' ');
+                } else if (Character.isLetterOrDigit(body.charAt(0))) {
+                    text.append(' ');
                 }
-                case EndElementTree tree -> {
-                    if (PREFORMATTED.contains(name(tree.getName()))) preformatted = Math.max(0, preformatted - 1);
-                    text.append(PARAGRAPH.contains(name(tree.getName())) ? "\n\n" : "");
+            }
+            if (preformatted > 0 && body.startsWith("\n") && !text.isEmpty()
+                    && text.charAt(text.length() - 1) == '\n') {
+                body = body.substring(1);
+            }
+            text.append(body);
+            reference = false;
+            return null;
+        }
+
+        @Override
+        public Void visitRawText(RawTextTree tree, Void ignored) {
+            text.append(tree.getContent());
+            reference = false;
+            return null;
+        }
+
+        @Override
+        public Void visitLiteral(LiteralTree tree, Void ignored) {
+            var body = tree.getBody().getBody();
+            if (preformatted > 0) text.append(body);
+            else if (tree.getKind() == DocTree.Kind.CODE) inlineCode(body);
+            else text.append(body);
+            reference = false;
+            return null;
+        }
+
+        @Override
+        public Void visitLink(LinkTree tree, Void ignored) {
+            if (tree.getReference() == null) return null;
+            var signature = tree.getReference().getSignature();
+            var visible = tree.getLabel().isEmpty()
+                    ? signature.startsWith("#") ? signature.substring(1) : signature
+                    : new MarkdownWriter(tree.getLabel()).write();
+            if (visible.equals(signature)) text.append('[').append(visible).append(']');
+            else text.append('[').append(visible).append("][").append(signature).append(']');
+            reference = true;
+            return null;
+        }
+
+        @Override
+        public Void visitEntity(EntityTree tree, Void ignored) {
+            var entity = tree.getName().toString();
+            text.append(switch (entity) {
+                case "lt" -> "<";
+                case "gt" -> ">";
+                case "amp" -> "&";
+                case "quot" -> "\"";
+                case "nbsp" -> " ";
+                default -> entity.startsWith("#")
+                        ? String.valueOf((char) Integer.parseInt(entity.substring(1))) : "";
+            });
+            reference = false;
+            return null;
+        }
+
+        @Override
+        public Void visitReference(ReferenceTree tree, Void ignored) {
+            text.append(tree.getSignature());
+            reference = true;
+            return null;
+        }
+
+        @Override
+        public Void visitIdentifier(com.sun.source.doctree.IdentifierTree tree, Void ignored) {
+            text.append(tree.getName());
+            return null;
+        }
+
+        @Override
+        public Void visitSummary(SummaryTree tree, Void ignored) {
+            visit(tree.getSummary(), null);
+            return null;
+        }
+
+        @Override
+        public Void visitIndex(IndexTree tree, Void ignored) {
+            visit(tree.getSearchTerm(), null);
+            return null;
+        }
+
+        @Override
+        public Void visitUnknownInlineTag(com.sun.source.doctree.UnknownInlineTagTree tree, Void ignored) {
+            visit(tree.getContent(), null);
+            return null;
+        }
+
+        @Override
+        public Void visitStartElement(StartElementTree tree, Void ignored) {
+            var element = name(tree.getName());
+            switch (element) {
+                case "p", "div", "section" -> blankLine();
+                case "pre" -> {
+                    blankLine();
+                    text.append("```\n");
+                    preformatted++;
                 }
-                default -> {}
+                case "ul" -> {
+                    blankLine();
+                    lists.push(new ListFrame(false));
+                }
+                case "ol" -> {
+                    blankLine();
+                    lists.push(new ListFrame(true));
+                }
+                case "li" -> {
+                    line();
+                    var list = lists.peek();
+                    if (lists.size() > 1) text.append("  ".repeat(lists.size() - 1));
+                    text.append(list == null || !list.ordered ? "- " : list.next() + ". ");
+                }
+                case "br" -> text.append("  \n");
+                case "hr" -> {
+                    blankLine();
+                    text.append("---\n");
+                }
+                case "blockquote" -> {
+                    blankLine();
+                    text.append("> ");
+                }
+                case "h1", "h2", "h3", "h4", "h5", "h6" -> {
+                    blankLine();
+                    text.append("#".repeat(Integer.parseInt(element.substring(1)))).append(' ');
+                }
+                case "code" -> {
+                    if (preformatted == 0) inlineCodeStart();
+                }
+                case "strong", "b" -> text.append("**");
+                case "em", "i" -> text.append('*');
+                default -> { }
+            }
+            return null;
+        }
+
+        @Override
+        public Void visitEndElement(EndElementTree tree, Void ignored) {
+            var element = name(tree.getName());
+            switch (element) {
+                case "pre" -> {
+                    line();
+                    text.append("```\n");
+                    preformatted = Math.max(0, preformatted - 1);
+                    blankLine();
+                }
+                case "p", "div", "section", "blockquote", "h1", "h2", "h3", "h4", "h5", "h6" -> blankLine();
+                case "ul", "ol" -> {
+                    line();
+                    if (!lists.isEmpty()) lists.pop();
+                    blankLine();
+                }
+                case "li" -> line();
+                case "code" -> {
+                    if (preformatted == 0) inlineCodeEnd();
+                }
+                case "strong", "b" -> text.append("**");
+                case "em", "i" -> text.append('*');
+                default -> { }
+            }
+            return null;
+        }
+
+        @Override
+        public Void visitComment(com.sun.source.doctree.CommentTree tree, Void ignored) {
+            text.append(tree.getBody());
+            return null;
+        }
+
+        @Override
+        public Void visitErroneous(com.sun.source.doctree.ErroneousTree tree, Void ignored) {
+            text.append(tree.getBody());
+            return null;
+        }
+
+        private void inlineCode(String body) {
+            var fence = "`".repeat(Math.max(1, longestBackticks(body) + 1));
+            text.append(fence).append(body).append(fence);
+        }
+
+        private void inlineCodeStart() {
+            text.append('`');
+        }
+
+        private void inlineCodeEnd() {
+            text.append('`');
+        }
+
+        private void blankLine() {
+            line();
+            if (text.length() < 2 || text.charAt(text.length() - 2) != '\n') text.append('\n');
+        }
+
+        private void line() {
+            while (!text.isEmpty() && (text.charAt(text.length() - 1) == ' '
+                    || text.charAt(text.length() - 1) == '\t')) {
+                text.deleteCharAt(text.length() - 1);
+            }
+            if (!text.isEmpty() && text.charAt(text.length() - 1) != '\n') text.append('\n');
+        }
+
+        private static int longestBackticks(String body) {
+            var longest = 0;
+            var run = 0;
+            for (var character : body.toCharArray()) {
+                if (character == '`') longest = Math.max(longest, ++run);
+                else run = 0;
+            }
+            return longest;
+        }
+
+        private static String squeeze(String body) {
+            return body.replaceAll("\\s+", " ");
+        }
+
+        private static String name(javax.lang.model.element.Name element) {
+            return element.toString().toLowerCase(Locale.ROOT);
+        }
+
+        private static final class ListFrame {
+            private final boolean ordered;
+            private int number = 1;
+
+            private ListFrame(boolean ordered) {
+                this.ordered = ordered;
+            }
+
+            private int next() {
+                return number++;
             }
         }
-    }
-
-    /// Whitespace in prose is whitespace; inside `<pre>` it is the author's
-    /// layout, and squeezing it is how an example becomes a paragraph.
-    private static String squeeze(String body) {
-        return body.replaceAll("\\s+", " ");
-    }
-
-    private static String name(javax.lang.model.element.Name element) {
-        return element.toString().toLowerCase(Locale.ROOT);
-    }
-
-    private static String gap(String element) {
-        if (PARAGRAPH.contains(element)) return "\n\n";
-        return LINE.contains(element) ? "\n" : "";
-    }
-
-    private static String reference(LinkTree tree) {
-        if (tree.getReference() == null) return "";
-        var signature = tree.getReference().getSignature();
-        return signature.startsWith("#") ? signature.substring(1) : signature;
-    }
-
-    /// A reference in a markdown comment, put back the way it was typed.
-    ///
-    /// `[Blocks]` in a `///` comment is javadoc's reference link, and javac
-    /// hands it over parsed — which is how the brackets came to be dropped
-    /// here, leaving the word `Blocks` in the prose and nothing to click. They
-    /// are the author's own syntax and the only record that a cross-reference
-    /// was meant, so they go back: what a reader wants is a link, and what
-    /// makes one is a [symbols.References] that can look the name up against
-    /// the index. That is a question about a symbol, asked later, by somebody
-    /// who has an index and a URL space; all that is needed here is not to
-    /// throw away the question.
-    ///
-    /// A `/** */` comment is left alone. There the author wrote `{@link Foo}`
-    /// and never typed a bracket, and inventing one would put punctuation into
-    /// prose that nobody asked for.
-    private static String written(LinkTree tree) {
-        return tree.getReference() == null ? "" : "[" + tree.getReference().getSignature() + "]";
-    }
-
-    /// Whether the comment was written in markdown — the `///` kind, which
-    /// JDK 23 made first class and which this repository writes everywhere.
-    ///
-    /// It decides whether the tidying below runs. That tidying exists to undo
-    /// the ` * ` a javadoc comment wraps its lines with; a markdown comment has
-    /// no such margin, and running it over one squeezes the indentation that
-    /// says where a code block is.
-    private static boolean markdown(List<? extends DocTree> parts) {
-        return parts.stream().anyMatch(part -> part instanceof RawTextTree);
-    }
-
-    private static String entity(EntityTree tree) {
-        var name = tree.getName().toString();
-        return switch (name) {
-            case "lt" -> "<";
-            case "gt" -> ">";
-            case "amp" -> "&";
-            case "quot" -> "\"";
-            case "nbsp" -> " ";
-            default -> name.startsWith("#") ? String.valueOf((char) Integer.parseInt(name.substring(1))) : "";
-        };
     }
 
     /// Walks the declarations, not the code: method bodies hold nothing worth
