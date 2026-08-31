@@ -25,9 +25,10 @@ import java.util.Objects;
 ///         .on(GET_TOTAL, Basket::answerTotal);
 /// ```
 ///
-/// Commands commit the state their handlers return. Queries discard the state
-/// their handlers return and keep the state from before the query. Query
-/// effects still run, so a query can reply to its caller.
+/// Command handlers replace the current state with the state they return.
+/// Query handlers discard the state they return and preserve the state from
+/// before the query. Query effects still run, so a query can reply to its
+/// caller.
 ///
 /// Every behavior also accepts `handle-error`, `handle-timeout`, and
 /// `handle-delivery-error`. Register a handler with the matching declaration
