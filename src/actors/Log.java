@@ -16,8 +16,8 @@ import java.util.stream.Stream;
 /// The cost of that choice is real and worth stating: only the actor's own
 /// definition can interpret its log. Nothing else can read a basket's commands
 /// and work out what the basket contains, because the meaning lives in the
-/// update functions. A projection that needs the answer asks the actor, or
-/// replays it through [ActorSystem#inspectAt(Address, long)].
+/// update functions. A derived view that needs the answer asks the authority,
+/// or replays it through [ActorSystem#inspectAt(Address, long)].
 ///
 /// ## Every message, including the ones effects produced
 ///

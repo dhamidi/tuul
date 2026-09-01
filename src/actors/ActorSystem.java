@@ -262,9 +262,10 @@ public final class ActorSystem implements AutoCloseable {
 
     // ---- sending ---------------------------------------------------------
 
-    /// Sends a message without waiting for local mailbox room or processing.
-    /// Returns the delivery status. A foreign call returns after the transport
-    /// accepts or refuses the delivery.
+    /// Attempts delivery without waiting for message processing. For a local
+    /// address, `accepted` means that the destination mailbox admitted the
+    /// message. It does not mean that the destination handled or journaled it.
+    /// A foreign call returns after the transport accepts or refuses delivery.
     public DeliveryStatus tell(Address to, Message message) {
         return deliver(Delivery.of(to, message));
     }

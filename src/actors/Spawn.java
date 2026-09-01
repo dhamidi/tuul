@@ -10,9 +10,9 @@ import java.time.Duration;
 /// why this is a spawn option rather than a property of the definition: whether
 /// a state has another home is a deployment question, not a modelling one.
 ///
-/// A projection actor is the case that makes this matter. Its state lives in a
-/// database it writes through effects, so recording a second copy in a log
-/// would mean two records of one truth, and two records of one truth disagree.
+/// A collection or derived-view actor backed by a database is the case that
+/// makes this matter. Its state lives in a database it writes through effects,
+/// so recording a second copy in a log would mean two records of one truth.
 /// It runs with [#ephemeral()] and keeps no log. A basket, whose decisions have
 /// no other home, runs with [#durable()].
 ///

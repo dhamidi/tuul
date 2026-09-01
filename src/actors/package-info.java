@@ -102,9 +102,74 @@
 ///
 /// The rule that decides which to use is short. **An actor is durable, or its
 /// state lives in a store it writes through effects. Never both.** A basket's
-/// decisions have no other home, so it is durable. A projection whose state is
-/// a SQL table is not, because a log beside the table would be a second record
-/// of one truth, and two records of one truth disagree.
+/// decisions have no other home, so it is durable. A collection actor whose
+/// records live in a SQL table is ephemeral, because a log beside the table
+/// would be a second record of one truth.
+///
+/// ## Modeling a domain with actors
+///
+/// Choose an actor boundary from the decisions that must be serialized. The
+/// actor that owns those decisions is the authority for that part of the
+/// domain.
+///
+/// An entity actor owns one entity with an independent lifecycle. Give it one
+/// [Address] and put its state-changing rules in command handlers. Give it
+/// queries when callers need a read that follows earlier accepted messages.
+/// Derive child addresses with [Address#child(String, String)] when the child
+/// belongs to that entity. Do not create one actor per record only because a
+/// record has an id.
+///
+/// An authoritative collection actor owns a set of records and the decisions
+/// that change that set. It can implement create, update, delete, lookup,
+/// ordering, and cursor pagination as commands and queries on one actor.
+/// Records do not need separate actors when they share that collection's
+/// consistency boundary. Partition the collection when one actor would hold
+/// unrelated work. Use the business owner as the partition key, such as
+/// `account/42/orders` or `customer/42/notes`, instead of inventing a global
+/// collection actor.
+///
+/// A collection actor is authoritative when its state is the source of truth.
+/// Spawn it with [Spawn#durable()] when its state is only in its command log.
+/// Spawn it with [Spawn#ephemeral()] when an external store is the source of
+/// truth and the actor writes that store through an effect handler registered
+/// with [ActorSystem#effect(String, application.Effect.Handler)]. One actor may
+/// own that store. The store does not become a second actor runtime.
+///
+/// A derived view actor keeps a read model that is useful for a query but is
+/// not authoritative. The authoritative actor sends it changes with
+/// [ActorEffect#tell(Address, application.Message)], or a coordinator sends
+/// them on its behalf. A derived view may be rebuilt from the authority. A
+/// view can be ephemeral when its state lives in an external store, because
+/// the store holds the view and not a second authoritative history.
+///
+/// A derived view is not a transaction boundary. A local actor tell completes
+/// when the destination mailbox admits the delivery. It does not wait for the
+/// destination to handle the message or append it to its journal. A crash in
+/// that interval can lose the delivery. A source actor can redeliver an effect
+/// after its own crash when [Spawn#redelivers()] is enabled, but that option
+/// does not make two actor journals commit atomically. Make view updates
+/// idempotent and carry a deduplication key when a repeated update is possible.
+/// Treat a view as eventually consistent unless the authority and the view are
+/// the same actor.
+///
+/// A registry actor serializes a narrow global decision, such as claiming a
+/// normalized email address or slug. The registry owns the claim and release
+/// rules. An entity or collection actor refers to the registry's result rather
+/// than relying on an eventually updated view for uniqueness. Address registry
+/// entries by the normalized key when that gives one serialization point.
+///
+/// A coordinator actor owns a workflow that spans several actors. It records
+/// the workflow decisions when they must survive a restart, and it sends
+/// commands to entity, collection, or registry actors. Keep business state in
+/// the actor that owns it. Use [ActorEffect#schedule(java.time.Duration,
+/// application.Message)] for deadlines and [ActorEffect#spawn(Address)] for
+/// children that the workflow creates.
+///
+/// The actor address provides a simple partitioning tool. Put the ownership
+/// key in the id, use [Address#child(String, String)] for hierarchical names,
+/// and use [Fleet#under(String)] when a bounded fan-out over one owner is
+/// needed. This is an application naming decision. It is not a hidden shard
+/// manager, and [Registry] does not contain domain membership.
 ///
 /// ## Looking at a running system
 ///

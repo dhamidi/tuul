@@ -12,8 +12,10 @@ public final class ActorEffect {
 
     private ActorEffect() {}
 
-    /// Requests delivery of `message` to `to`. A local delivery does not wait
-    /// for mailbox room. A foreign delivery runs as an external effect.
+    /// Requests delivery of `message` to `to`. A local effect completes when
+    /// the destination mailbox admits the delivery. It does not wait for the
+    /// destination to handle or journal the message. A foreign delivery runs
+    /// as an external effect.
     public static Effect tell(Address to, Message message) {
         return Effect.sending(ActorSystem.TELL, message).about(ActorSystem.TO, to.json());
     }
