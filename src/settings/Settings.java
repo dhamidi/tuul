@@ -179,8 +179,9 @@ public final class Settings implements Definition<Settings.State> {
     ///
     /// The pointer must be absolute, non-empty, and belong to an installed
     /// namespace. Missing intermediate objects are created by the actor.
-    /// Array indexes are not traversal steps. A write below a secret path is
-    /// rejected, and a secret path accepts only a [Secret] reference.
+    /// An array index replaces an existing item. A final `-` appends an item.
+    /// A write below a secret path is rejected. A secret path accepts only a
+    /// [Secret] reference.
     /// The returned message is not sent by this method.
     public Message set(String pointer, Json value) {
         var path = configuration.owned(pointer);
@@ -431,23 +432,27 @@ public final class Settings implements Definition<Settings.State> {
     }
 
     private static Mutation setAt(Json value, List<String> path, Json replacement) {
-        if (!(value instanceof Json.Object object)) return new Mutation(value, false, "cannot traverse an array");
-        if (path.size() == 1) return new Mutation(object.with(path.getFirst(), replacement), true, "");
-        var child = object.get(path.getFirst());
-        if (child == null) child = Json.Object.of();
-        var next = setAt(child, path.subList(1, path.size()), replacement);
-        return next.reason().isEmpty() ? new Mutation(object.with(path.getFirst(), next.value()), true, "") : next;
+        try {
+            return new Mutation(pointer(path).set(value, replacement), true, "");
+        } catch (json.JsonException invalid) {
+            return new Mutation(value, false, "cannot-traverse");
+        }
     }
 
     private static Mutation removeAt(Json value, List<String> path) {
-        if (!(value instanceof Json.Object object)) return new Mutation(value, false, "cannot traverse an array");
-        if (path.size() == 1) return object.fields().containsKey(path.getFirst())
-                ? new Mutation(object.without(path.getFirst()), true, "")
-                : new Mutation(value, false, "");
-        var child = object.get(path.getFirst());
-        if (child == null) return new Mutation(value, false, "");
-        var next = removeAt(child, path.subList(1, path.size()));
-        return next.reason().isEmpty() ? new Mutation(object.with(path.getFirst(), next.value()), next.changed(), "") : next;
+        var pointer = pointer(path);
+        if (!pointer.exists(value)) return new Mutation(value, false, "");
+        try {
+            return new Mutation(pointer.remove(value), true, "");
+        } catch (json.JsonException invalid) {
+            return new Mutation(value, false, "cannot-traverse");
+        }
+    }
+
+    private static json.Pointer pointer(List<String> path) {
+        var pointer = json.Pointer.root();
+        for (var token : path) pointer = pointer.append(token);
+        return pointer;
     }
 
 }

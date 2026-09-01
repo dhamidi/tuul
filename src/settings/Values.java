@@ -33,8 +33,7 @@ public final class Values {
     /// The pointer must name an installed namespace. An absent value returns an
     /// empty [Optional]. The method does not return a mutable copy.
     public Optional<Json> find(String pointer) {
-        var path = configuration.owned(pointer);
-        var found = Configuration.locate(document, path);
-        return found.present() ? Optional.of(found.value()) : Optional.empty();
+        configuration.owned(pointer);
+        return document.find(pointer);
     }
 }

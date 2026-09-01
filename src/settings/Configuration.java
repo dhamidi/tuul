@@ -211,14 +211,10 @@ public final class Configuration {
     }
 
     static Located locate(Json value, List<String> path) {
-        var current = value;
-        for (var token : path) {
-            if (!(current instanceof Json.Object object) || !object.fields().containsKey(token)) {
-                return new Located(false, null);
-            }
-            current = object.get(token);
-        }
-        return new Located(true, current);
+        var pointer = json.Pointer.root();
+        for (var token : path) pointer = pointer.append(token);
+        var found = pointer.find(value);
+        return found.map(json -> new Located(true, json)).orElseGet(() -> new Located(false, null));
     }
 
     private static long size(Json value) {

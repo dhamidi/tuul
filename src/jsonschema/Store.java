@@ -3,10 +3,10 @@ package jsonschema;
 import java.net.URI;
 import java.util.HashMap;
 import java.util.LinkedHashMap;
-import java.util.List;
 import java.util.Map;
 import java.util.Optional;
 import json.Json;
+import json.Pointer;
 
 /// Every schema, vocabulary and format that a compilation is allowed to see.
 ///
@@ -210,28 +210,18 @@ public final class Store {
     private Optional<Located> pointer(Resource resource, String pointer) {
         var node = resource.root();
         var base = resource.id();
-        var local = "";
-        for (var step : pointer.substring(1).split("/", -1)) {
-            var token = Pointer.unescape(step);
-            node = switch (node) {
-                case Json.Object(var fields) -> fields.get(token);
-                case Json.Array(var items) -> index(items, token);
-                case null, default -> null;
-            };
-            if (node == null) return Optional.empty();
-            local = local + "/" + step;
+        var local = Pointer.root();
+        for (var token : Pointer.parse(pointer).tokens()) {
+            var selected = Pointer.root().append(token).find(node);
+            if (selected.isEmpty()) return Optional.empty();
+            node = selected.orElseThrow();
+            local = local.append(token);
             if (node instanceof Json.Object(var fields) && fields.get("$id") instanceof Json.Str(var id)) {
                 base = Pointer.document(Pointer.resolve(base, id));
-                local = "";
+                local = Pointer.root();
             }
         }
-        return Optional.of(new Located(base, local, node));
-    }
-
-    private static Json index(List<Json> items, String token) {
-        if (!token.chars().allMatch(Character::isDigit) || token.isEmpty()) return null;
-        var at = Integer.parseInt(token);
-        return at < items.size() ? items.get(at) : null;
+        return Optional.of(new Located(base, local.toString(), node));
     }
 
     private void collect(URI id, Json root) {
@@ -262,7 +252,7 @@ public final class Store {
         object.fields().forEach((name, value) -> {
             var shape = shapes.get(name);
             if (shape == null) return;
-            var step = local + "/" + Pointer.escape(name);
+            var step = Pointer.parse(local).append(name).toString();
             switch (shape) {
                 case NONE -> {}
                 case SCHEMA -> walk(value, base, step, anchors, dynamic, false);
@@ -275,8 +265,8 @@ public final class Store {
                 }
                 case SCHEMA_MAP -> {
                     if (value instanceof Json.Object(var members)) {
-                        members.forEach((key, member) ->
-                                walk(member, base, step + "/" + Pointer.escape(key), anchors, dynamic, false));
+                        members.forEach((key, member) -> walk(member, base,
+                                Pointer.parse(step).append(key).toString(), anchors, dynamic, false));
                     }
                 }
             }

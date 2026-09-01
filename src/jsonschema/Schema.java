@@ -7,6 +7,7 @@ import java.util.List;
 import java.util.Map;
 import java.util.Set;
 import json.Json;
+import json.Pointer;
 
 /// A schema from a [Store], ready to look at instances.
 ///
@@ -84,7 +85,7 @@ public final class Schema {
         for (var name : List.of("$ref", "$dynamicRef")) {
             if (!(object.get(name) instanceof Json.Str(var reference))) continue;
             var target = Pointer.resolve(base, reference);
-            var from = Pointer.absolute(base, local + "/" + name).toString();
+            var from = Pointer.absolute(base, Pointer.parse(local).append(name).toString()).toString();
             var found = store.resolve(target)
                     .orElseThrow(() -> SchemaException.unresolved(reference, target, from));
             check(found.schema(), found.base(), found.pointer(), seen);
@@ -93,7 +94,7 @@ public final class Schema {
         for (var field : object.fields().entrySet()) {
             var shape = shapes.get(field.getKey());
             if (shape == null) continue;
-            var step = local + "/" + Pointer.escape(field.getKey());
+            var step = Pointer.parse(local).append(field.getKey()).toString();
             switch (shape) {
                 case NONE -> {}
                 case SCHEMA -> check(field.getValue(), base, step, seen);
@@ -105,7 +106,7 @@ public final class Schema {
                 case SCHEMA_MAP -> {
                     if (field.getValue() instanceof Json.Object(var members)) {
                         for (var member : members.entrySet()) {
-                            check(member.getValue(), base, step + "/" + Pointer.escape(member.getKey()), seen);
+                            check(member.getValue(), base, Pointer.parse(step).append(member.getKey()).toString(), seen);
                         }
                     }
                 }

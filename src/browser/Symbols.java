@@ -5,6 +5,7 @@ import application.Message;
 import application.Step;
 import java.util.List;
 import json.Json;
+import json.Pointer;
 import symbols.Docs;
 import symbols.Catalog;
 
@@ -117,7 +118,7 @@ public final class Symbols {
     }
 
     public static Step<Found> matched(Found state, Message message) {
-        return Step.of(state.matching(message.body().list("matches")));
+        return Step.of(state.matching(message.body().find("/matches").map(Json::list).orElse(List.of())));
     }
 
     public static Step<Found> unsearched(Found state, Message message) {
@@ -171,6 +172,6 @@ public final class Symbols {
     }
 
     private static String parameter(Message message, String name) {
-        return message.body().get("params") instanceof Json.Object params ? params.string(name, "") : "";
+        return message.body().find(Pointer.ofTokens("params", name)).map(value -> value.string("")).orElse("");
     }
 }

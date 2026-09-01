@@ -9,6 +9,7 @@ import java.net.URI;
 import java.util.ArrayList;
 import java.util.Set;
 import json.Json;
+import json.Pointer;
 
 /// The applicator vocabulary: the keywords that apply other schemas.
 ///
@@ -146,7 +147,7 @@ public final class Applicator {
         if (!(value instanceof Json.Object(var members))) return;
         members.forEach((name, subschema) -> {
             if (!fields.containsKey(name)) return;
-            context.apply(subschema, "/dependentSchemas/" + Pointer.escape(name));
+            context.apply(subschema, Pointer.ofTokens("dependentSchemas", name).toString());
         });
     }
 
@@ -213,7 +214,7 @@ public final class Applicator {
             var subschema = members.get(name);
             if (subschema == null) return;
             matched.add(Json.of(name));
-            var step = "/" + Pointer.escape(name);
+            var step = Pointer.root().append(name).toString();
             context.apply(subschema, "/properties" + step, held, step);
         });
         context.annotate(Json.Array.of(matched));
@@ -226,8 +227,8 @@ public final class Applicator {
         members.forEach((pattern, subschema) -> fields.forEach((name, held) -> {
             if (!Patterns.found(pattern, name)) return;
             matched.add(Json.of(name));
-            context.apply(subschema, "/patternProperties/" + Pointer.escape(pattern), held,
-                    "/" + Pointer.escape(name));
+            context.apply(subschema, Pointer.ofTokens("patternProperties", pattern).toString(), held,
+                    Pointer.root().append(name).toString());
         }));
         context.annotate(Json.Array.of(matched));
     }
@@ -252,7 +253,7 @@ public final class Applicator {
             if (named.contains(name)) return;
             if (patterns.stream().anyMatch(pattern -> Patterns.found(pattern, name))) return;
             matched.add(Json.of(name));
-            context.apply(value, "/additionalProperties", held, "/" + Pointer.escape(name));
+            context.apply(value, "/additionalProperties", held, Pointer.root().append(name).toString());
         });
         context.annotate(Json.Array.of(matched));
     }
@@ -265,7 +266,7 @@ public final class Applicator {
     private static void propertyNames(Json value, Json instance, Context context) {
         if (!(instance instanceof Json.Object(var fields))) return;
         for (var name : fields.keySet()) {
-            context.apply(value, "/propertyNames", Json.of(name), "/" + Pointer.escape(name));
+            context.apply(value, "/propertyNames", Json.of(name), Pointer.root().append(name).toString());
         }
     }
 }

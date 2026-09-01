@@ -14,6 +14,7 @@ public final class SettingsTest {
     public static void run() throws Exception {
         validatesRuntimeValues();
         initializesAndValidates();
+        updatesArrays();
         decodesEnvironmentValues();
         protectsSecretReferences();
     }
@@ -49,15 +50,14 @@ public final class SettingsTest {
             system.summon(Settings.address());
             Thread.sleep(50);
             Check.equal("constant initialization is durable", 2.0,
-                    ((Json.Num) ((Json.Object) ((Json.Object) ((Json.Object) system.inspect(Settings.address()))
-                            .get("values")).get("numbers")).get("number")).value());
+                    system.inspect(Settings.address()).at("/values/numbers/number").number(0));
             var rejected = system.ask(Settings.address(), settings.set("/numbers/number", Json.of(-1)),
                     Duration.ofSeconds(1)).join();
             Check.equal("invalid settings are rejected", "settings.rejected", rejected.type());
             Thread.sleep(50);
             var inspected = (Json.Object) system.inspect(Settings.address());
             Check.equal("invalid settings do not change revision", 1.0,
-                    ((Json.Num) inspected.get("revision")).value());
+                    inspected.at("/revision").number(0));
         }
     }
 
@@ -69,9 +69,32 @@ public final class SettingsTest {
                 .effect(Settings.RESOLVE, Initializers.environment(name -> name.equals("NAME") ? "tuul" : null))) {
             system.summon(Settings.address());
             Thread.sleep(50);
-            var values = (Json.Object) ((Json.Object) system.inspect(Settings.address())).get("values");
             Check.equal("environment initialization is decoded", "tuul",
-                    ((Json.Str) ((Json.Object) values.get("environment")).get("name")).value());
+                    system.inspect(Settings.address()).at("/values/environment/name").string(""));
+        }
+    }
+
+    private static void updatesArrays() throws Exception {
+        var schema = Json.parse("""
+                {"type":"object","properties":{"items":{"type":"array","items":{"type":"string"}}},
+                 "required":["items"]}
+                """);
+        var settings = Settings.of(Contribution.named("lists", schema)
+                .initially("/items", Initial.value(Json.parse("[\"a\",\"b\"]"))));
+        try (var system = ActorSystem.named("settings-arrays").define(settings)) {
+            system.summon(Settings.address());
+            Thread.sleep(50);
+            var replaced = system.ask(Settings.address(), settings.set("/lists/items/1", Json.of("B")),
+                    Duration.ofSeconds(1)).join();
+            Check.equal("a settings pointer replaces an array item", "settings.changed", replaced.type());
+            var appended = system.ask(Settings.address(), settings.set("/lists/items/-", Json.of("c")),
+                    Duration.ofSeconds(1)).join();
+            Check.equal("a settings pointer appends an array item", "settings.changed", appended.type());
+            var removed = system.ask(Settings.address(), settings.unset("/lists/items/0"),
+                    Duration.ofSeconds(1)).join();
+            Check.equal("a settings pointer removes an array item", "settings.changed", removed.type());
+            Check.equal("settings array edits preserve item order", Json.parse("[\"B\",\"c\"]"),
+                    system.inspect(Settings.address()).at("/values/lists/items"));
         }
     }
 

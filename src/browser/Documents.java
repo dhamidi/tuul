@@ -5,6 +5,7 @@ import application.Message;
 import application.Step;
 import java.util.List;
 import json.Json;
+import json.Pointer;
 import symbols.Catalog;
 
 /// The state and effects for one package-document request.
@@ -40,15 +41,18 @@ public final class Documents {
     }
 
     public static Step<State> asked(State state, Message message) {
-        var params = message.body().get("params") instanceof Json.Object object ? object : Json.Object.of();
-        var packageName = params.string("name", "");
-        var kind = params.string("kind", "");
-        var slug = params.string("slug", "");
+        var packageName = parameter(message, "name");
+        var kind = parameter(message, "kind");
+        var slug = parameter(message, "slug");
         if (packageName.isBlank() || !List.of("tutorial", "howto", "reference", "guide").contains(kind)) {
             return Step.of(state.failed("no document was named"));
         }
         return Step.of(state.asking(packageName, kind, slug), Effect.of(LOOK)
                 .with("package", packageName).with("kind", kind).with("slug", slug));
+    }
+
+    private static String parameter(Message message, String name) {
+        return message.body().find(Pointer.ofTokens("params", name)).map(value -> value.string("")).orElse("");
     }
 
     public static Step<State> found(State state, Message message) {

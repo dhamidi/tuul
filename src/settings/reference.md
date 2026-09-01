@@ -582,8 +582,8 @@ Paths use RFC 6901 JSON Pointer syntax.
 - `/a~0b` selects the property `a~b`.
 - An invalid escape is rejected.
 - A missing intermediate object is created for `set` only.
-- Array indexes are not mutation steps in the first implementation.
-- An array can be replaced as one complete value.
+- An array index replaces or removes an existing item.
+- A final `-` appends an array item during `set`.
 
 ## Ordering and concurrency
 
@@ -630,8 +630,8 @@ An initializer applies both bounds. Its handler enforces the 1 MiB decoded
 value bound before it emits a message. The actor enforces the 8 MiB complete
 document bound after schema validation and before commit.
 
-The first implementation does not mutate through an array index. A caller can
-replace an array as one value.
+An array update must select an existing array. The actor does not infer an
+array when it creates missing object parents.
 
 ## Replay and compatibility
 

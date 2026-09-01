@@ -10,13 +10,17 @@ import java.util.Collections;
 import java.util.LinkedHashMap;
 import java.util.List;
 import java.util.Map;
+import java.util.Optional;
+import java.util.function.UnaryOperator;
 
 /// A JSON value.
 ///
-/// Values are immutable and built by pattern matching, not by getters:
-/// `if (value instanceof Json.Str(var text))`. Documents are read from a
-/// [Reader] and written to a [Writer] — see [JsonReader] and [JsonWriter] for
-/// the streaming interfaces underneath.
+/// Values are immutable. Documents are read from a [Reader] and written to a
+/// [Writer]. [JsonReader] and [JsonWriter] provide the streaming interfaces.
+///
+/// Call [#at(String)] to extract a value with an RFC 6901 JSON Pointer. Call
+/// [#set(String, Json)], [#update(String, UnaryOperator)], or [#remove(String)]
+/// to return an edited document. No operation changes its input.
 public sealed interface Json {
 
     Json NULL = new Null();
@@ -146,6 +150,127 @@ public sealed interface Json {
 
     static Json parse(String text) {
         return parse(new StringReader(text));
+    }
+
+    /// Returns the value selected by an RFC 6901 JSON Pointer.
+    ///
+    /// An empty pointer returns this value. A missing member, invalid array
+    /// index, or scalar traversal throws [JsonException]. Use [#find(String)]
+    /// when a missing value is expected.
+    default Json at(String pointer) {
+        return Pointer.parse(pointer).get(this);
+    }
+
+    /// Returns the value selected by a compiled pointer.
+    default Json at(Pointer pointer) {
+        return pointer.get(this);
+    }
+
+    /// Returns the selected value, or an empty result when it does not exist.
+    default Optional<Json> find(String pointer) {
+        return Pointer.parse(pointer).find(this);
+    }
+
+    /// Returns the selected value, or an empty result when it does not exist.
+    default Optional<Json> find(Pointer pointer) {
+        return pointer.find(this);
+    }
+
+    /// Returns a selection that retains this document and an absolute location.
+    ///
+    /// Use [Selection#at(String)] to evaluate Relative JSON Pointers from that
+    /// location. The absolute pointer must select a concrete value.
+    default Selection select(String pointer) {
+        return new Selection(this, Pointer.parse(pointer));
+    }
+
+    /// Returns a selection from a compiled absolute pointer.
+    default Selection select(Pointer pointer) {
+        return new Selection(this, pointer);
+    }
+
+    /// Returns a document with `replacement` at `pointer`.
+    ///
+    /// This method creates missing object parents. It appends to an existing
+    /// array when the final token is `-`. It does not create an inferred array.
+    default Json set(String pointer, Json replacement) {
+        return Pointer.parse(pointer).set(this, replacement);
+    }
+
+    /// Returns a document with `replacement` at a compiled pointer.
+    default Json set(Pointer pointer, Json replacement) {
+        return pointer.set(this, replacement);
+    }
+
+    /// Returns a document with a string at `pointer`.
+    default Json set(String pointer, String replacement) {
+        return set(pointer, Json.of(replacement));
+    }
+
+    /// Returns a document with a boolean at `pointer`.
+    default Json set(String pointer, boolean replacement) {
+        return set(pointer, Json.of(replacement));
+    }
+
+    /// Returns a document with a number at `pointer`.
+    default Json set(String pointer, double replacement) {
+        return set(pointer, Json.of(replacement));
+    }
+
+    /// Returns a document with each string pointer set in map iteration order.
+    ///
+    /// A later set sees all earlier sets. Use an ordered map when pointers
+    /// overlap and order changes the result.
+    default Json set(Map<String, ? extends Json> replacements) {
+        var changed = this;
+        for (var replacement : replacements.entrySet()) {
+            changed = changed.set(replacement.getKey(), replacement.getValue());
+        }
+        return changed;
+    }
+
+    /// Applies `change` to the selected value and returns the edited document.
+    ///
+    /// The selected value must exist. The function must return a JSON value.
+    default Json update(String pointer, UnaryOperator<Json> change) {
+        return Pointer.parse(pointer).update(this, change);
+    }
+
+    /// Applies `change` at a compiled pointer and returns the edited document.
+    default Json update(Pointer pointer, UnaryOperator<Json> change) {
+        return pointer.update(this, change);
+    }
+
+    /// Returns a document without the selected object member or array item.
+    ///
+    /// The selected value must exist. The root cannot be removed.
+    default Json remove(String pointer) {
+        return Pointer.parse(pointer).remove(this);
+    }
+
+    /// Returns a document without the value at a compiled pointer.
+    default Json remove(Pointer pointer) {
+        return pointer.remove(this);
+    }
+
+    /// Returns this string value, or `fallback` when this is another JSON type.
+    default String string(String fallback) {
+        return this instanceof Str(var value) ? value : fallback;
+    }
+
+    /// Returns this numeric value, or `fallback` when this is another JSON type.
+    default double number(double fallback) {
+        return this instanceof Num(var value) ? value : fallback;
+    }
+
+    /// Returns this boolean value, or false when this is another JSON type.
+    default boolean flag() {
+        return this instanceof Bool(var value) && value;
+    }
+
+    /// Returns this array's items, or an empty list when this is another JSON type.
+    default List<Json> list() {
+        return this instanceof Array(var items) ? items : List.of();
     }
 
     /// Streams this value into `out` and flushes; the writer stays open.

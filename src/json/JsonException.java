@@ -1,6 +1,6 @@
 package json;
 
-/// Anything that goes wrong while reading or writing JSON.
+/// A JSON read, write, pointer syntax, or pointer evaluation failure.
 public final class JsonException extends RuntimeException {
 
     public JsonException(String message) {

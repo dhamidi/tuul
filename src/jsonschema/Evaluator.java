@@ -5,6 +5,7 @@ import java.util.ArrayList;
 import java.util.List;
 import java.util.Optional;
 import json.Json;
+import json.Pointer;
 
 /// The engine: it applies the keywords of a schema object to an instance, and
 /// it carries the two things that no single keyword can carry on its own.
@@ -211,7 +212,7 @@ final class Evaluator {
         @Override
         public Store.Located resolve(String reference) {
             var target = Pointer.resolve(at.base(), reference);
-            var from = Pointer.absolute(at.base(), at.local() + "/" + Pointer.escape(keyword)).toString();
+            var from = Pointer.absolute(at.base(), Pointer.parse(at.local()).append(keyword).toString()).toString();
             return engine.store().resolve(target)
                     .orElseThrow(() -> SchemaException.unresolved(reference, target, from));
         }
@@ -230,17 +231,16 @@ final class Evaluator {
         @Override
         public Output follow(Store.Located target) {
             return engine.evaluate(target.schema(),
-                    at.jump(target.base(), target.pointer(), "/" + Pointer.escape(keyword)), instance);
+                    at.jump(target.base(), target.pointer(), Pointer.root().append(keyword).toString()), instance);
         }
 
         private Location here() {
             return new Location(at.keywords() + "/" + keyword,
-                    Pointer.absolute(at.base(), at.local() + "/" + Pointer.escape(keyword)), at.instance());
+                    Pointer.absolute(at.base(), Pointer.parse(at.local()).append(keyword).toString()), at.instance());
         }
 
         private static String last(String pointer) {
-            var slash = pointer.lastIndexOf('/');
-            return slash < 0 ? pointer : Pointer.unescape(pointer.substring(slash + 1));
+            return Pointer.parse(pointer).last().orElse("");
         }
     }
 }

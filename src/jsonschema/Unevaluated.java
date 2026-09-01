@@ -9,6 +9,7 @@ import java.util.HashSet;
 import java.util.List;
 import java.util.Set;
 import json.Json;
+import json.Pointer;
 
 /// `unevaluatedItems` and `unevaluatedProperties`: the two keywords that read
 /// what everything else produced.
@@ -46,7 +47,7 @@ public final class Unevaluated {
         fields.forEach((name, held) -> {
             if (seen.contains(name)) return;
             matched.add(Json.of(name));
-            context.apply(value, "/unevaluatedProperties", held, "/" + Pointer.escape(name));
+            context.apply(value, "/unevaluatedProperties", held, Pointer.root().append(name).toString());
         });
         context.annotate(Json.Array.of(matched));
     }
