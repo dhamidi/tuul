@@ -8,28 +8,22 @@ import actors.MessageType;
 import application.Effect;
 import application.Message;
 import application.Step;
-import java.io.IOException;
-import java.nio.charset.StandardCharsets;
 import java.util.ArrayList;
 import java.util.HashMap;
 import java.util.HashSet;
-import java.util.LinkedHashMap;
 import java.util.List;
 import java.util.Map;
 import java.util.Objects;
 import java.util.Set;
 import java.util.UUID;
 import json.Json;
-import jsonschema.Output;
-import jsonschema.Schema;
-import jsonschema.Store;
 
 /// Defines the durable actor that owns one application's settings document.
 ///
 /// The actor folds `set`, `unset`, `reinitialize`, and `initialize` messages
-/// into immutable state. It validates each changed namespace with the schema
-/// supplied by its [Contribution]. It records accepted commands and
-/// initializer results in the actor log.
+/// into immutable state. It uses the [Configuration] supplied by its
+/// contributions to validate each changed namespace. It records accepted
+/// commands and initializer results in the actor log.
 ///
 /// Call [#of] with the installed contributions. Register the definition with
 /// an actor system. This package intentionally gives that system one settings
@@ -72,7 +66,6 @@ public final class Settings implements Definition<Settings.State> {
     private static final String CHANGED = "settings.changed";
     private static final String INITIALIZING = "settings.initializing";
     private static final String REJECTED = "settings.rejected";
-    private static final long MAX_DOCUMENT = 8L * 1024L * 1024L;
 
     /// One durable reinitialization request and the value it must replace.
     ///
@@ -126,27 +119,15 @@ public final class Settings implements Definition<Settings.State> {
         }
     }
 
-    private record Initializer(String pointer, List<String> path, Initial initial) {}
-    private record ContributionInfo(String namespace, List<String> namespacePath, Schema schema,
-                                    List<String> secrets, List<Initializer> initializers) {}
-    private record Located(boolean present, Json value) {}
     private record Mutation(Json value, boolean changed, String reason) {}
-    private record Candidate(State state, Json errors) {}
 
-    private final Map<String, ContributionInfo> contributions;
-    private final Map<String, Initializer> initializers;
-    private final List<Initializer> orderedInitializers;
+    private final Configuration configuration;
+    private final List<Configuration.Initializer> orderedInitializers;
     private final List<MessageType> messageTypes;
 
-    private Settings(List<ContributionInfo> contributions) {
-        this.contributions = new LinkedHashMap<>();
-        contributions.stream().sorted(java.util.Comparator.comparing(ContributionInfo::namespace))
-                .forEach(info -> this.contributions.put(info.namespace(), info));
-        this.initializers = new HashMap<>();
-        this.contributions.values().forEach(info -> info.initializers().forEach(initial ->
-                this.initializers.put(initial.pointer(), initial)));
-        this.orderedInitializers = this.initializers.values().stream()
-                .sorted(java.util.Comparator.comparing(Initializer::pointer)).toList();
+    private Settings(Configuration configuration) {
+        this.configuration = configuration;
+        this.orderedInitializers = configuration.orderedInitializers();
         this.messageTypes = List.of(MessageType.command(SET), MessageType.command(UNSET),
                 MessageType.command(REINITIALIZE), MessageType.command(INITIALIZED));
     }
@@ -159,63 +140,29 @@ public final class Settings implements Definition<Settings.State> {
     /// invalid initializer or secret declarations before an actor starts.
     /// Passing no contributions creates an actor with no mutable namespaces.
     public static Settings of(Contribution... contributions) {
-        Objects.requireNonNull(contributions, "contributions");
-        var names = new HashSet<String>();
-        var infos = new ArrayList<ContributionInfo>();
-        for (var contribution : contributions) {
-            Objects.requireNonNull(contribution, "contribution");
-            if (!names.add(contribution.namespace())) {
-                throw new IllegalArgumentException("duplicate settings namespace: " + contribution.namespace());
-            }
-            if (!(contribution.schema() instanceof Json.Object schemaObject)
-                    || !(schemaObject.get("type") instanceof Json.Str(var type))
-                    || !type.equals("object")) {
-                throw new IllegalArgumentException("the schema for " + contribution.namespace()
-                        + " must be an object with type object");
-            }
-            var schema = Store.of().compile(contribution.schema());
-            var namespacePath = List.of(contribution.namespace());
-            var secretPaths = contribution.secrets().stream()
-                    .map(relative -> Pointer.join(contribution.namespace(), relative))
-                    .toList();
-            var declarations = new ArrayList<Initializer>();
-            for (var declaration : contribution.initializers()) {
-                var path = Pointer.relative(declaration.relative());
-                var pointer = Pointer.join(contribution.namespace(), declaration.relative());
-                var initial = declaration.initial();
-                if (secretPaths.stream().map(Pointer::absolute).anyMatch(secret ->
-                        Pointer.overlaps(secret, Pointer.absolute(pointer)))) {
-                    if (!initial.constant() || !Secret.isReference(initial.value())) {
-                        throw new IllegalArgumentException("only a secret reference can initialize " + pointer);
-                    }
-                    if (secretPaths.stream().map(Pointer::absolute).anyMatch(secret ->
-                            Pointer.prefix(Pointer.absolute(pointer), secret)
-                                    && !Pointer.absolute(pointer).equals(secret))) {
-                        throw new IllegalArgumentException("an initializer cannot write below secret path " + pointer);
-                    }
-                }
-                var fullPath = new ArrayList<String>();
-                fullPath.add(contribution.namespace());
-                fullPath.addAll(path);
-                declarations.add(new Initializer(pointer, List.copyOf(fullPath), initial));
-            }
-            for (var secret : secretPaths) {
-                var parsed = Pointer.absolute(secret);
-                if (!parsed.getFirst().equals(contribution.namespace())) {
-                    throw new IllegalArgumentException("secret path is outside " + contribution.namespace());
-                }
-            }
-            if (declarations.stream().map(Initializer::pointer).distinct().count() != declarations.size()) {
-                throw new IllegalArgumentException("duplicate initializer pointer in " + contribution.namespace());
-            }
-            infos.add(new ContributionInfo(contribution.namespace(), namespacePath, schema,
-                    secretPaths, List.copyOf(declarations)));
-        }
-        var all = infos.stream().flatMap(info -> info.initializers().stream()).toList();
-        if (all.stream().map(Initializer::pointer).distinct().count() != all.size()) {
-            throw new IllegalArgumentException("duplicate settings initializer pointer");
-        }
-        return new Settings(infos);
+        return of(Configuration.of(contributions));
+    }
+
+    /// Builds the durable actor on one already composed configuration.
+    ///
+    /// The actor and runtime snapshots then share the same compiled schemas and
+    /// declarations. This method does not register or summon the actor.
+    public static Settings of(Configuration configuration) {
+        return new Settings(Objects.requireNonNull(configuration, "configuration"));
+    }
+
+    /// Returns the immutable configuration shared by this actor and runtime
+    /// snapshots.
+    public Configuration configuration() {
+        return configuration;
+    }
+
+    /// Validates a JSON document for use as runtime settings.
+    ///
+    /// The returned snapshot is independent of the actor. It does not read
+    /// initializer sources or persist the document.
+    public Values values(Json.Object document) {
+        return configuration.values(document);
     }
 
     /// Returns the local address of the one settings actor in an actor system.
@@ -236,9 +183,9 @@ public final class Settings implements Definition<Settings.State> {
     /// rejected, and a secret path accepts only a [Secret] reference.
     /// The returned message is not sent by this method.
     public Message set(String pointer, Json value) {
-        var path = owned(pointer);
+        var path = configuration.owned(pointer);
         Objects.requireNonNull(value, "value");
-        checkSecrets(path, value);
+        configuration.checkSecrets(path, value);
         return Message.of(SET).with("pointer", pointer).with("value", value);
     }
 
@@ -249,10 +196,10 @@ public final class Settings implements Definition<Settings.State> {
     /// explicit-absence decision. The returned message is not sent by this
     /// method.
     public Message unset(String pointer) {
-        owned(pointer);
+        configuration.owned(pointer);
         var initializers = orderedInitializers.stream()
                 .filter(initial -> Pointer.overlaps(initial.path(), Pointer.absolute(pointer)))
-                .map(Initializer::pointer).toList();
+                .map(Configuration.Initializer::pointer).toList();
         return Message.of(UNSET).with("pointer", pointer)
                 .with("initializers", Json.Array.strings(initializers));
     }
@@ -263,7 +210,7 @@ public final class Settings implements Definition<Settings.State> {
     /// The message contains a new random request id for each selected
     /// initializer. The returned message is not sent by this method.
     public Message reinitialize(String pointer) {
-        var path = owned(pointer);
+        var path = configuration.owned(pointer);
         var selected = orderedInitializers.stream()
                 .filter(initial -> Pointer.overlaps(initial.path(), path)).toList();
         if (selected.isEmpty()) throw new IllegalArgumentException("no initializer at " + pointer);
@@ -306,10 +253,10 @@ public final class Settings implements Definition<Settings.State> {
     private Step<State> set(State state, Message message) {
         var pointer = message.string("pointer", "");
         try {
-            var path = owned(pointer);
+            var path = configuration.owned(pointer);
             var value = message.get("value");
             if (value == null) return reject(state, pointer, "missing-value", null);
-            checkSecrets(path, value);
+            configuration.checkSecrets(path, value);
             var mutation = setAt(state.values(), path, value);
             if (!mutation.reason().isEmpty()) return reject(state, pointer, mutation.reason(), null);
             return commit(state, pointer, mutation.value(), path, null);
@@ -321,7 +268,7 @@ public final class Settings implements Definition<Settings.State> {
     private Step<State> unset(State state, Message message) {
         var pointer = message.string("pointer", "");
         try {
-            var path = owned(pointer);
+            var path = configuration.owned(pointer);
             var mutation = removeAt(state.values(), path);
             if (!mutation.reason().isEmpty()) return reject(state, pointer, mutation.reason(), null);
             var absent = new HashSet<String>();
@@ -344,7 +291,7 @@ public final class Settings implements Definition<Settings.State> {
     private Step<State> reinitialize(State state, Message message) {
         var pointer = message.string("pointer", "");
         try {
-            var path = owned(pointer);
+            var path = configuration.owned(pointer);
             var raw = message.get("requests");
             if (!(raw instanceof Json.Object requests)) return reject(state, pointer, "invalid-requests", null);
             var nextRequests = new HashMap<>(state.requests());
@@ -356,7 +303,7 @@ public final class Settings implements Definition<Settings.State> {
                 }
                 var initialPath = Pointer.absolute(entry.getKey());
                 if (!Pointer.overlaps(initialPath, path)) continue;
-                var prior = locate(state.values(), initialPath);
+                var prior = Configuration.locate(state.values(), initialPath);
                 nextRequests.put(entry.getKey(), new Request(id, prior.present(), prior.value()));
                 nextAbsent.remove(entry.getKey());
                 selected++;
@@ -372,11 +319,11 @@ public final class Settings implements Definition<Settings.State> {
     private Step<State> initialized(State state, Message message) {
         var pointer = message.string("pointer", "");
         try {
-            var path = owned(pointer);
+            var path = configuration.owned(pointer);
             var value = message.get("value");
             var condition = message.get("condition");
             if (value == null || !current(state, path, condition)) return Step.of(state);
-            checkSecrets(path, value);
+            configuration.checkSecrets(path, value);
             var mutation = setAt(state.values(), path, value);
             if (!mutation.reason().isEmpty()) return Step.of(state);
             var committed = commitCandidate(state, mutation.value(), path);
@@ -394,7 +341,7 @@ public final class Settings implements Definition<Settings.State> {
     private Step<State> resume(State state, Message ignored) {
         var effects = new ArrayList<Effect>();
         for (var initial : orderedInitializers) {
-            var current = locate(state.values(), initial.path());
+            var current = Configuration.locate(state.values(), initial.path());
             var request = state.requests().get(initial.pointer());
             if (request == null && (current.present() || state.absent().contains(initial.pointer()))) continue;
             var condition = request == null ? Json.Object.of().with("kind", "missing")
@@ -422,12 +369,7 @@ public final class Settings implements Definition<Settings.State> {
     }
 
     private Json commitCandidate(State state, Json values, List<String> path) {
-        var namespace = path.getFirst();
-        var contribution = contributions.get(namespace);
-        var candidate = values instanceof Json.Object object ? object.get(namespace) : null;
-        if (candidate != null && !contribution.schema().validate(candidate).valid()) return null;
-        if (size(values) > MAX_DOCUMENT) return null;
-        return values;
+        return configuration.validCandidate(values, path) ? values : null;
     }
 
     private Step<State> reject(State state, String pointer, String reason, Json errors) {
@@ -441,45 +383,13 @@ public final class Settings implements Definition<Settings.State> {
         return Step.of(state, ActorEffect.reply(Message.of(type, payload)));
     }
 
-    private void checkSecrets(List<String> path, Json value) {
-        var info = contributions.get(path.getFirst());
-        for (var secret : info.secrets()) {
-            var secretPath = Pointer.absolute(secret);
-            if (secretPath.equals(path)) {
-                if (!Secret.isReference(value)) throw new IllegalArgumentException("secret value must be a reference");
-            } else if (Pointer.prefix(secretPath, path)) {
-                throw new IllegalArgumentException("a write below a secret path is not allowed");
-            } else if (Pointer.prefix(path, secretPath)) {
-                var supplied = locate(value, secretPath.subList(path.size(), secretPath.size()));
-                if (supplied.present() && !Secret.isReference(supplied.value())) {
-                    throw new IllegalArgumentException("secret value must be a reference");
-                }
-            }
-        }
-    }
-
-    private List<String> owned(String pointer) {
-        var path = Pointer.absolute(pointer);
-        if (!contributions.containsKey(path.getFirst())) throw new IllegalArgumentException("unknown settings namespace");
-        return path;
-    }
-
     private Json validation(State state, List<String> path, Json values) {
-        var info = contributions.get(path.getFirst());
-        var candidate = ((Json.Object) values).get(path.getFirst());
-        var output = candidate == null ? Output.ok() : info.schema().validate(candidate);
-        var text = new java.io.StringWriter();
-        try {
-            output.basic(text);
-        } catch (IOException impossible) {
-            throw new IllegalStateException(impossible);
-        }
-        return Json.parse(text.toString());
+        return configuration.validation((Json.Object) values, path);
     }
 
     private static boolean current(State state, List<String> path, Json condition) {
         if (!(condition instanceof Json.Object object)) return false;
-        var current = locate(state.values(), path);
+        var current = Configuration.locate(state.values(), path);
         var kind = object.string("kind", "");
         if (kind.equals("missing")) {
             return !current.present() && !state.absent().contains(Pointer.render(path));
@@ -520,15 +430,6 @@ public final class Settings implements Definition<Settings.State> {
         }
     }
 
-    private static Located locate(Json value, List<String> path) {
-        var current = value;
-        for (var token : path) {
-            if (!(current instanceof Json.Object object) || !object.fields().containsKey(token)) return new Located(false, null);
-            current = object.get(token);
-        }
-        return new Located(true, current);
-    }
-
     private static Mutation setAt(Json value, List<String> path, Json replacement) {
         if (!(value instanceof Json.Object object)) return new Mutation(value, false, "cannot traverse an array");
         if (path.size() == 1) return new Mutation(object.with(path.getFirst(), replacement), true, "");
@@ -549,28 +450,4 @@ public final class Settings implements Definition<Settings.State> {
         return next.reason().isEmpty() ? new Mutation(object.with(path.getFirst(), next.value()), next.changed(), "") : next;
     }
 
-    private static long size(Json value) {
-        var writer = new CountingWriter();
-        try {
-            value.write(writer);
-        } catch (IOException impossible) {
-            throw new IllegalStateException(impossible);
-        }
-        return writer.bytes;
-    }
-
-    private static final class CountingWriter extends java.io.Writer {
-        private long bytes;
-        @Override public void write(char[] value, int offset, int length) {
-            bytes += new String(value, offset, length).getBytes(StandardCharsets.UTF_8).length;
-        }
-        @Override public void write(String value, int offset, int length) {
-            bytes += value.substring(offset, offset + length).getBytes(StandardCharsets.UTF_8).length;
-        }
-        @Override public void write(int value) {
-            bytes += String.valueOf((char) value).getBytes(StandardCharsets.UTF_8).length;
-        }
-        @Override public void flush() {}
-        @Override public void close() {}
-    }
 }

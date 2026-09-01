@@ -5,8 +5,37 @@ Each section is one task. Do the steps in order. One instruction per step.
 Exact API and protocol rules are in [reference.md](reference.md). Design
 reasons are in [guide.md](guide.md).
 
-The package implements this design in `Settings`, `Contribution`, `Initial`,
-`Initializers`, and `Secret`.
+The package implements this design in `Configuration`, `Values`, `Settings`,
+`Contribution`, `Initial`, `Initializers`, and `Secret`.
+
+## Validate runtime settings
+
+Use `Configuration` and `Values` when settings exist only for the current
+process. This path does not start an actor and does not read environment
+variables or files.
+
+1. Compose the installed contributions.
+2. Build one JSON document from explicit application values.
+3. Call `Configuration.values`.
+4. Pass the returned snapshot to the components that need it.
+
+```java
+var configuration = Configuration.of(images, cable);
+var values = configuration.values(Json.Object.of()
+        .with("browser", browserValues)
+        .with("cable", cableValues));
+```
+
+The method rejects unknown namespaces, invalid namespace values, invalid
+secret values, and documents larger than the settings limit. A missing
+namespace is allowed so an application can resolve optional values separately.
+Use `Values.find` for a pointer and check the result before building a typed
+runtime option.
+
+Use `Settings.of(configuration)` when the application needs durable history,
+actor-ordered changes, or source initializers. Inspect the actor once and pass
+its `values` object to `configuration.values` before passing settings to runtime
+components. Do not inspect the actor from a request handler.
 
 ## Contribute settings from a component
 

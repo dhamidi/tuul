@@ -1,11 +1,17 @@
 # settings
 
-Durable, schema-validated application settings held by one actor.
+Schema-validated application settings with immutable runtime values and an
+optional durable actor.
+
+`Configuration` composes component contributions and validates a JSON document.
+`Values` holds the immutable runtime snapshot. `Settings` adds the durable
+`settings/application` actor when the application needs history and changes.
 
 Each component contributes one top-level namespace and its JSON Schema. The
-package composes those contributions into the definition of
-`settings/application`. Ordinary actor messages change the settings document.
-The actor log is the settings history.
+application composes those contributions into a `Configuration` and validates
+runtime values without an actor. It can also pass the same contributions to
+`Settings.of` for the durable `settings/application` actor. Ordinary actor
+messages change the durable document. The actor log is the settings history.
 
 An environment variable, file, or constant value can initialize a missing
 setting. It is a source for one actor effect. A successful result returns as an

@@ -8,9 +8,9 @@ For a first program, read [tutorial.md](tutorial.md). For tasks, read
 
 ## Scope
 
-The package defines one durable settings actor, contribution composition,
-initializer declarations, standard initializer handlers, and secret
-references.
+The package defines runtime value validation, one durable settings actor,
+contribution composition, initializer declarations, standard initializer
+handlers, and secret references.
 
 The package does not define an engine lifecycle, a dependency-injection
 container, a database, a remote settings service, a secret store, or a
@@ -57,7 +57,9 @@ leave the actor system. `Definition.inspect` returns JSON.
 
 | Type | Purpose |
 |---|---|
-| `Settings` | Composes contributions, defines the actor, and builds protocol messages. |
+| `Configuration` | Composes contributions and validates runtime documents. |
+| `Values` | Holds one immutable validated runtime document. |
+| `Settings` | Uses a configuration, defines the actor, and builds protocol messages. |
 | `Settings.State` | Holds the current document, explicit absences, reinitialization request IDs, and revision. |
 | `Contribution` | Describes one owned namespace. |
 | `Initial` | Describes one initializer source and its decoder. |
@@ -69,6 +71,41 @@ leave the actor system. `Definition.inspect` returns JSON.
 The first implementation keeps the small supporting types nested when that
 makes the public surface smaller. The semantic names in this document remain
 the same.
+
+## `Configuration`
+
+### `Configuration.of(Contribution...)`
+
+Returns one immutable composition of the supplied contributions. It performs
+the same schema, namespace, initializer, and secret declaration checks as
+`Settings.of`. It does not create an actor or read an initializer source.
+
+Passing no contributions creates a configuration with no namespaces.
+
+### `values(Json.Object document)`
+
+Validates `document` and returns one immutable `Values` snapshot. The document
+must contain only installed namespaces. Each present namespace must satisfy its
+schema. A present secret path must contain a secret reference. A missing
+namespace is allowed. The complete document must not exceed 8 MiB.
+
+The method does not require every namespace to be present. An application can
+use this behavior while it resolves optional runtime values. The method throws
+`IllegalArgumentException` for an unknown namespace, an invalid namespace
+value, an invalid secret value, or an oversized document.
+
+## `Values`
+
+### `document()`
+
+Returns the validated JSON document. It does not change after the snapshot is
+created.
+
+### `find(String pointer)`
+
+Returns the value at an absolute JSON Pointer. An absent value returns an empty
+`Optional`. The pointer must name an installed namespace. The method does not
+read an actor or a source.
 
 ## `Settings`
 
@@ -98,6 +135,23 @@ field name such as `revision` does not conflict with a namespace.
 
 `Settings.of()` with no contributions is valid. The resulting actor accepts no
 mutation namespace.
+
+### `Settings.of(Configuration)`
+
+Builds the durable actor from an existing [Configuration]. The actor and the
+runtime snapshots created by that configuration share its compiled schemas and
+declarations. The method does not register or summon the actor.
+
+### `configuration()`
+
+Returns the immutable [Configuration] used by this actor. The configuration can
+create runtime snapshots with [Configuration#values].
+
+### `values(Json.Object document)`
+
+Delegates to the actor's [Configuration] and returns a validated runtime
+snapshot. It does not read the actor state, read an initializer source, or
+persist the document.
 
 ### `Settings.address()`
 

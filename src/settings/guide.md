@@ -4,7 +4,7 @@ This document explains the settings design. It is not a tutorial or an API
 list. For a first program, read [tutorial.md](tutorial.md). For tasks, read
 [howto.md](howto.md). For exact rules, read [reference.md](reference.md).
 
-## Settings are actor state
+## Durable settings are actor state
 
 Tuul has one durable primitive: the actor.
 
@@ -12,12 +12,27 @@ Application settings must survive a process restart. They must have an order
 when two people change them. They must also show how the current value came to
 exist. A durable actor already supplies those properties.
 
-The settings package therefore defines `settings/application`. Its state is a
-JSON document. Its messages are changes. Its log is history.
+The settings package defines `settings/application` for durable settings. Its
+state is a JSON document. Its messages are changes. Its log is history.
 
-There is no settings database beside the actor. An ephemeral actor can manage
-a database when a component needs one, but the settings package does not need
-that component.
+## Runtime settings are values
+
+Some settings exist only while one process runs. A server receives them from
+its command line or application assembly. It does not need an actor or a log
+for those values.
+
+[Configuration] composes the same component contributions for this case.
+`Configuration.values` validates one JSON document and returns an immutable
+`Values` snapshot. The snapshot does not read sources or change later.
+
+The durable [Settings] actor uses the same configuration rules. An application
+can inspect the actor once, create a `Values` snapshot, and pass typed options
+to its components. A request handler must not inspect the actor for each
+request.
+
+There is no settings database beside the durable actor. An ephemeral actor can
+manage a database when a component needs one, but runtime values do not need an
+actor at all.
 
 ## One actor is enough
 

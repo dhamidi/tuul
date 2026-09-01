@@ -12,9 +12,30 @@ public final class SettingsTest {
     private SettingsTest() {}
 
     public static void run() throws Exception {
+        validatesRuntimeValues();
         initializesAndValidates();
         decodesEnvironmentValues();
         protectsSecretReferences();
+    }
+
+    private static void validatesRuntimeValues() {
+        var schema = Json.parse("""
+                {"type":"object","properties":{"name":{"type":"string"}},
+                 "required":["name"],"additionalProperties":false}
+                """);
+        var configuration = Configuration.of(Contribution.named("application", schema));
+        var values = configuration.values(Json.Object.of()
+                .with("application", Json.Object.of("name", "tuul")));
+        Check.equal("runtime values keep the validated document", "tuul",
+                ((Json.Str) values.find("/application/name").orElseThrow()).value());
+        var settings = Settings.of(configuration);
+        Check.equal("the actor uses the same configuration", "tuul",
+                ((Json.Str) settings.values(values.document()).find("/application/name").orElseThrow()).value());
+        Check.that("runtime values find an absent pointer", values.find("/application/missing").isEmpty());
+        Check.throwing("runtime values reject an unknown namespace", () -> configuration.values(
+                Json.Object.of("unknown", Json.Object.of())));
+        Check.throwing("runtime values reject an invalid namespace", () -> configuration.values(
+                Json.Object.of("application", Json.Object.of("name", 1))));
     }
 
     private static void initializesAndValidates() throws Exception {

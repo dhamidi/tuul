@@ -9,7 +9,8 @@ import json.Json;
 ///
 /// A contribution owns one top-level property in the settings document. Its
 /// schema validates the value under that property. Its initializer and secret
-/// declarations add rules to the same property.
+/// declarations add rules to the same property. [Configuration] and [Settings]
+/// use the declaration to validate runtime and durable values.
 ///
 /// Call [#named] to create a contribution. Call [#initially] or [#secret] to
 /// return a new contribution with one more declaration. The original value
@@ -42,7 +43,8 @@ public final class Contribution {
     /// Creates a contribution for `namespace`.
     ///
     /// The namespace must be non-empty. The schema must describe an object and
-    /// is compiled when the caller passes this contribution to [Settings#of].
+    /// is compiled when the caller passes this contribution to
+    /// [Configuration#of] or [Settings#of].
     /// The schema validates the namespace value without the top-level name.
     /// This method does not add an initializer or a secret path.
     public static Contribution named(String namespace, Json schema) {
