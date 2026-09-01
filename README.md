@@ -144,8 +144,9 @@ restarts it when a source file changes.
 | `tuul run <name>` | Run a named entrypoint or development task |
 | `tuul console` | Open a REPL with the application's module path |
 | `tuul generate <what>` | Generate a library, entrypoint, task, native module, or test |
-| `tuul docs <symbol>` | Query symbols in the application, dependencies, and JDK |
-| `tuul docs --search <text>` | Search the application, selected dependencies, and exported JDK types |
+| `tuul docs <symbol>` | Query symbols, members, and package documents in the application, dependencies, and JDK |
+| `tuul docs <symbol> --code` | Print the source of a symbol, member, or document |
+| `tuul docs --search <text>` | Search the application, selected dependencies, and exported JDK types, grouped by package |
 | `tuul deploy` | Release and ship the application |
 | `tuul doctor` | Check the JDK, module graph, and `vendor/` |
 
@@ -539,21 +540,72 @@ Serializable
 TreeCodec
 ```
 
-Use search when you do not know the full symbol name:
+A member is a name too, and so is the source behind any name:
 
 ```sh
-$ tuul docs --search SpringBootApplication
-org.springframework.boot.autoconfigure.SpringBootApplication  [org.springframework.boot:spring-boot-autoconfigure:3.5.5]
+$ tuul docs invoicing.Invoice#compareTo
+invoicing.Invoice#compareTo
+  at src/invoicing/Invoice.java:7
+
+  int compareTo(Invoice other)  :42
+      Orders invoices by amount, then id.
+
+$ tuul docs invoicing.Invoice#compareTo --code
+    /// Orders invoices by amount, then id.
+    @Override
+    public int compareTo(Invoice other) {
+        return amount.compareTo(other.amount);
+    }
+```
+
+A package answers with what it holds and the Markdown written beside it —
+its `README.md` and its `tutorial`, `howto`, `reference` and `guide` files.
+`--documents` reads them all in one call:
+
+```sh
+$ tuul docs invoicing
+package invoicing
+  Money owed, and who owes it.
+
+  invoicing/readme  Invoicing
+  invoicing/tutorial  First invoice
+
+  invoicing.Invoice
+  invoicing.Ledger
+
+$ tuul docs invoicing/tutorial
+$ tuul docs invoicing --documents
+```
+
+Use search when you do not know the full symbol name. Results are grouped
+by the name they share, and that name is one you can ask for next:
+
+```sh
+$ tuul docs --search "event stream"
+eventstream
+  eventstream.Parser
+      Reads a text/event-stream.
+  eventstream.Event#data
+      The data lines, joined.
 
 $ tuul docs --search SpringBootApplication --json
-{"matches":[{"symbol":"org.springframework.boot.autoconfigure.SpringBootApplication","kind":"ANNOTATION","doc":"...","origin":"org.springframework.boot:spring-boot-autoconfigure:3.5.5","source":"vendor/org.springframework.boot/spring-boot-autoconfigure/3.5.5/spring-boot-autoconfigure-3.5.5-sources.jar!/org/springframework/boot/autoconfigure/SpringBootApplication.java"}]}
+{"query":"SpringBootApplication","every":true,"groups":[{"prefix":"org.springframework.boot.autoconfigure","matches":[{"symbol":"org.springframework.boot.autoconfigure.SpringBootApplication","kind":"annotation","doc":"...","origin":"org.springframework.boot:spring-boot-autoconfigure:3.5.5","source":"vendor/org.springframework.boot/spring-boot-autoconfigure/3.5.5/spring-boot-autoconfigure-3.5.5-sources.jar!/org/springframework/boot/autoconfigure/SpringBootApplication.java"}]}]}
 ```
+
+Every word has to match. When nothing holds every word, the results that
+hold some of them are shown instead and standard error says so.
 
 Search covers project symbols, the selected runtime and test dependency set,
 and exported JDK names. The first search builds complete cached project and
 dependency generations plus a lightweight JDK name generation. Dependency
 source JARs supply type and public or protected member documentation. Exact
 symbol lookup remains lazy and supplies full JDK source documentation.
+
+Everything `tuul docs` knows is in `build/index.db`, and it is refreshed
+only when a question needs it: a question about `java.lang.String` never
+waits for the project to compile. A project that does not compile is
+answered from the last build that did, with a `warning:` on standard error
+that carries javac's messages. `tuul docs docs` reads the rest.
 
 ## Contributing
 

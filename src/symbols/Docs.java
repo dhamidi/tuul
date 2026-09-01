@@ -44,13 +44,26 @@ public final class Docs {
 
     /// Describes one symbol and lists its package documents.
     ///
-    /// Each list item contains identity, title, and its level-two outline. Call
+    /// Each list item names the document — `web/tutorial`, which asks for it
+    /// again — with its title and its level-two outline. Call
     /// [Catalog#document] to read a body.
+    ///
+    /// A package with no `package-info.java` and a `README.md` says what it is
+    /// for in the README's first paragraph, so the summary line is not blank
+    /// for the packages that wrote their overview in Markdown.
     public static Json.Object describe(TypeInfo type, boolean all, List<Document> documents) {
         var description = describe(type, all);
         if (type.kind() != TypeInfo.Kind.PACKAGE || documents.isEmpty()) return description;
+        if (type.doc().isEmpty()) {
+            description = documents.stream()
+                    .filter(document -> document.kind().equals(Document.README))
+                    .findFirst()
+                    .map(readme -> describe(type, all).with("doc", readme.summary()))
+                    .orElse(description);
+        }
         return description.with("documents", Json.Array.of(documents.stream()
                 .map(document -> (Json) Json.Object.of()
+                        .with("symbol", document.symbol())
                         .with("kind", document.kind())
                         .with("slug", document.slug())
                         .with("title", document.title())
@@ -84,6 +97,10 @@ public final class Docs {
             }
             return;
         }
+        if (!description.string("member", "").isEmpty()) {
+            member(description, out);
+            return;
+        }
         out.write(head(description));
         out.write("\n");
         wrap(summary(description.string("doc", "")), "  ", out);
@@ -98,6 +115,40 @@ public final class Docs {
         else line(description, "nested", "  declares ", out);
         members(description, "methods", out);
         members(description, "fields", out);
+    }
+
+    /// One member, asked for by name: every overload, each with the whole of
+    /// its comment rather than the first sentence, because the member was
+    /// what the reader came for.
+    private static void member(Json.Object description, Writer out) throws IOException {
+        out.write(description.string("class", "?") + "#" + description.string("member", "") + "\n");
+        where(description, out);
+        for (var section : List.of("methods", "fields")) {
+            for (var value : description.list(section)) {
+                if (!(value instanceof Json.Object entry)) continue;
+                out.write("\n  " + Signatures.shorten(entry.string("signature", "")));
+                var line = number(entry, "line");
+                out.write((line > 0 ? "  :" + line : "") + "\n");
+                wrap(entry.string("doc", ""), "      ", out);
+                for (var tag : entry.list("tags")) {
+                    if (tag instanceof Json.Object held) fold(line(held), "      ", "          ", out);
+                }
+            }
+        }
+    }
+
+    /// The package documents in full, one after another, each under a line
+    /// that names it and says which file it is. `--documents` prints this so
+    /// that reading a package is one question rather than one per document.
+    public static void documents(List<Json> documents, Writer out) throws IOException {
+        for (var value : documents) {
+            if (!(value instanceof Json.Object document) || !(document.get("doc") instanceof Json.Str(var body))) {
+                continue;
+            }
+            out.write("\n--- " + document.string("symbol", "") + " (" + document.string("source", "") + ") ---\n");
+            out.write(body);
+            if (!body.endsWith("\n")) out.write("\n");
+        }
     }
 
     /// A type *declares* the types written in its body; a package or a module
@@ -122,15 +173,16 @@ public final class Docs {
         for (var name : held) out.write("  " + name + "\n");
     }
 
+    /// The documents a package has, each as the name that asks for it and
+    /// its title. The name comes first for the reason the roots listing is
+    /// unshortened: it is what gets handed back.
     private static void documents(Json.Object description, Writer out) throws IOException {
         var documents = description.list("documents");
         if (documents.isEmpty()) return;
         out.write("\n");
         for (var value : documents) {
             if (!(value instanceof Json.Object document)) continue;
-            var slug = document.string("slug", "");
-            out.write("  " + document.string("kind", "") + "  " + document.string("title", "")
-                    + (slug.isEmpty() ? "" : "  " + slug) + "\n");
+            out.write("  " + document.string("symbol", "") + "  " + document.string("title", "") + "\n");
         }
     }
 
@@ -219,14 +271,26 @@ public final class Docs {
         return text.isEmpty() ? head : head + " " + text;
     }
 
-    /// What a search found: the symbol, and the first thing it says about
-    /// itself. A list of names with no summaries is a list nobody can choose
-    /// from.
+    /// What a search found, group by group: the name the group shares, then
+    /// each symbol and the first thing it says about itself. A list of names
+    /// with no summaries is a list nobody can choose from.
+    public static void groups(List<Json> groups, Writer out) throws IOException {
+        var first = true;
+        for (var value : groups) {
+            if (!(value instanceof Json.Object group)) continue;
+            if (!first) out.write("\n");
+            first = false;
+            out.write(group.string("prefix", "") + "\n");
+            matches(group.list("matches"), out);
+        }
+    }
+
+    /// The symbols one group of results holds.
     public static void matches(List<Json> matches, Writer out) throws IOException {
         for (var match : matches) {
             if (!(match instanceof Json.Object found)) continue;
             var origin = found.string("origin", "");
-            out.write(found.string("symbol", "") + (origin.isEmpty() || origin.equals("project")
+            out.write("  " + found.string("symbol", "") + (origin.isEmpty() || origin.equals("project")
                     ? "" : "  [" + origin + "]") + "\n");
             wrap(summary(found.string("doc", "")), "      ", out);
         }

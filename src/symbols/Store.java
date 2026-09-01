@@ -60,9 +60,21 @@ final class Store implements IndexStore {
     @Override
     public synchronized Optional<Snapshot> inspect(String kind, String location, String stamp) {
         try (var rows = database.query(
-                "select id, stamp, complete from origin where kind = ? and location = ?", kind, location)) {
+                "select id, stamp, complete, attempted, problem from origin where kind = ? and location = ?",
+                kind, location)) {
             if (!rows.next()) return Optional.empty();
-            return Optional.of(new Snapshot(rows.integer(0), rows.text(1).equals(stamp), rows.integer(2) != 0));
+            return Optional.of(new Snapshot(rows.integer(0), rows.text(1).equals(stamp), rows.integer(2) != 0,
+                    rows.text(3).equals(stamp) ? rows.text(4) : ""));
+        }
+    }
+
+    /// What went wrong the last time this origin was refreshed, whatever the
+    /// stamp. A reader without source paths cannot compute a stamp and still
+    /// deserves to know that the rows are the last good ones.
+    synchronized String problem(String kind, String location) {
+        try (var rows = database.query(
+                "select problem from origin where kind = ? and location = ?", kind, location)) {
+            return rows.next() ? rows.text(0) : "";
         }
     }
 
@@ -179,12 +191,35 @@ final class Store implements IndexStore {
     /// for nothing, and is answered with nothing. It is not an error: search
     /// runs as somebody types, so the first keystroke of `.Json` would
     /// otherwise show them a database complaining.
+    ///
+    /// Two words joined are also tried as one: `event stream` names the
+    /// package `eventstream` to anybody who reads it, and a search that only
+    /// found the two words apart would miss the one symbol they name.
     static String query(String typed) {
+        return query(typed, " ");
+    }
+
+    /// The same words, where any one of them is enough. This is the answer
+    /// when nothing holds all of them: a result that matches half a question
+    /// is a lead, and no result is a dead end.
+    static String anyQuery(String typed) {
+        return query(typed, " OR ");
+    }
+
+    private static String query(String typed, String joiner) {
+        var tokens = tokens(typed);
+        if (tokens.isEmpty()) return "";
+        var joined = String.join(joiner, tokens.stream().map(token -> '"' + token + '"').toList());
+        if (tokens.size() == 1) return joined;
+        return "(" + joined + ") OR \"" + String.join("", tokens) + "\"";
+    }
+
+    private static List<String> tokens(String typed) {
         var tokens = new ArrayList<String>();
         for (var token : typed.split("[^\\p{IsAlphabetic}\\p{IsDigit}_]+")) {
-            if (!token.isBlank()) tokens.add('"' + token + '"');
+            if (!token.isBlank()) tokens.add(token);
         }
-        return String.join(" ", tokens);
+        return tokens;
     }
 
     /// Ranked so that the thing somebody named comes first.
@@ -200,7 +235,15 @@ final class Store implements IndexStore {
     /// name, and a package is not something they should have to remember.
     @Override
     public synchronized List<Catalog.Match> search(String text, int limit) {
-        var match = query(text);
+        return search(query(text), text, limit);
+    }
+
+    @Override
+    public synchronized List<Catalog.Match> searchAny(String text, int limit) {
+        return search(anyQuery(text), text, limit);
+    }
+
+    private List<Catalog.Match> search(String match, String text, int limit) {
         if (match.isBlank()) return List.of();
 
         var found = new ArrayList<Catalog.Match>();
@@ -278,12 +321,24 @@ final class Store implements IndexStore {
             });
             database.execute("delete from type where origin = ?", origin);
             database.execute("delete from document where origin = ?", origin);
-            database.execute("update origin set stamp = ?, complete = 0 where id = ?", stamp, origin);
+            database.execute("update origin set stamp = ?, complete = 0, attempted = '', problem = '' where id = ?",
+                    stamp, origin);
             try (var sink = new Sink()) {
                 types.forEach((name, type) -> sink.put(origin, name, type));
             }
             documents(origin, documents);
             database.execute("update origin set complete = 1 where id = ?", origin);
+        });
+    }
+
+    @Override
+    public synchronized void fail(String kind, String location, String stamp, String problem) {
+        database.transaction(() -> {
+            var origin = id(kind, location).orElseGet(() -> {
+                database.execute("insert into origin (kind, location, stamp) values (?, ?, ?)", kind, location, "");
+                return database.lastId();
+            });
+            database.execute("update origin set attempted = ?, problem = ? where id = ?", stamp, problem, origin);
         });
     }
 
@@ -299,7 +354,8 @@ final class Store implements IndexStore {
             if (existing.isPresent() && !storedStamp(origin).equals(stamp)) {
                 database.execute("delete from type where origin = ?", origin);
                 database.execute("delete from document where origin = ?", origin);
-                database.execute("update origin set stamp = ?, complete = 0 where id = ?", stamp, origin);
+                database.execute("update origin set stamp = ?, complete = 0, attempted = '', problem = ''"
+                        + " where id = ?", stamp, origin);
             }
             try (var sink = new Sink()) {
                 types.forEach((name, type) -> sink.put(origin, name, type));

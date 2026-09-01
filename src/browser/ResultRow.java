@@ -92,7 +92,7 @@ public record ResultRow(Router routes, Props props, Json.Object match, Node[] co
     }
 
     private String path(String symbol) {
-        if (List.of("tutorial", "howto", "reference", "guide").contains(match.string("kind", ""))) {
+        if (symbols.Document.KINDS.contains(match.string("kind", ""))) {
             var parts = symbol.split("/", -1);
             if (parts.length == 2) return routes.path(Routes.DOCUMENT_KIND
                     .with(Routes.NAME, parts[0]).with(Routes.KIND, parts[1]));

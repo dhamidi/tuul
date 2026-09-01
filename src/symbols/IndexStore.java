@@ -13,8 +13,20 @@ import java.util.Optional;
 /// [#publish] replaces rows and their stamp in one transaction.
 public interface IndexStore extends AutoCloseable {
 
-    /// The stored state of one origin.
-    record Snapshot(long id, boolean fresh, boolean complete) {}
+    /// The stored state of one origin. `problem` is empty unless the last
+    /// attempt to publish the inspected stamp failed, in which case it says
+    /// why and the rows are those of the stamp before it.
+    record Snapshot(long id, boolean fresh, boolean complete, String problem) {
+
+        public Snapshot(long id, boolean fresh, boolean complete) {
+            this(id, fresh, complete, "");
+        }
+
+        /// Whether the inspected stamp is the one that last failed to publish.
+        public boolean failed() {
+            return !problem.isEmpty();
+        }
+    }
 
     /// Opens the SQLite store at `file`. An unwritable location returns empty
     /// so that an index can continue without persistence.
@@ -42,8 +54,13 @@ public interface IndexStore extends AutoCloseable {
     /// Returns stored names of one kind in name order.
     List<String> names(long origin, TypeInfo.Kind kind);
 
-    /// Returns at most `limit` search matches in rank order.
+    /// Returns at most `limit` matches that contain every word in rank order.
     List<Catalog.Match> search(String text, int limit);
+
+    /// Returns at most `limit` matches that contain any word in rank order.
+    default List<Catalog.Match> searchAny(String text, int limit) {
+        return search(text, limit);
+    }
 
     /// Returns the stored browser root summary.
     default List<Catalog.Root> roots() {
@@ -61,6 +78,11 @@ public interface IndexStore extends AutoCloseable {
 
     /// Replaces the browser root summary.
     default void publishRoots(List<Catalog.Root> roots) {}
+
+    /// Records that `stamp` could not be published and why. The rows and
+    /// stamp of the last complete generation stay as they are. An origin that
+    /// has never been published is created empty so the failure has a row.
+    default void fail(String kind, String location, String stamp, String problem) {}
 
     /// Releases resources held by the store.
     @Override

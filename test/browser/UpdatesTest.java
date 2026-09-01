@@ -114,12 +114,13 @@ public final class UpdatesTest {
         Check.equal("with nothing left in it", "", cleared.state().query());
 
         var matched = Symbols.matched(Found.nothing().asking("json"),
-                Message.of(Symbols.MATCHED).with("matches", Json.Array.of(List.of(match("json.Json")))));
+                Message.of(Symbols.MATCHED).with("groups", Json.Array.of(List.of(Json.Object.of()
+                        .with("prefix", "json").with("matches", Json.Array.of(List.of(match("json.Json"))))))));
         Check.equal("what matched is what the index said", 1, matched.state().matches().size());
         Check.equal("and the question is still the one that was asked", "json", matched.state().query());
 
         var recovered = Symbols.matched(Found.nothing().asking("json").failed("earlier"),
-                Message.of(Symbols.MATCHED).with("matches", Json.Array.of(List.of())));
+                Message.of(Symbols.MATCHED).with("groups", Json.Array.of(List.of())));
         Check.that("an answer clears whatever went wrong before it", recovered.state().problem().isEmpty());
 
         var unsearched = Symbols.unsearched(Found.nothing().asking("json"), Message.error("fts5 said no"));
@@ -164,19 +165,25 @@ public final class UpdatesTest {
 
         var matches = emitted(Symbols.searching(index, 25), Effect.of(Symbols.SEARCH).with("query", "write"));
         Check.equal("searching answers with what matched", Symbols.MATCHED, matches.type());
-        Check.that("which is something", !matches.list("matches").isEmpty());
+        Check.that("which is something", !names(matches).isEmpty());
         Check.equal("and each symbol once, since overloads are one place",
                 names(matches).size(), (int) names(matches).stream().distinct().count());
+        Check.that("grouped under the name the results share",
+                matches.list("groups").getFirst() instanceof Json.Object group
+                        && group.string("prefix", "").startsWith("json"));
+        Check.that("and every word was held", matches.flag("every"));
 
         var nothing = emitted(Symbols.searching(index, 25), Effect.of(Symbols.SEARCH));
-        Check.that("a search for nothing asks the index nothing", nothing.list("matches").isEmpty());
+        Check.that("a search for nothing asks the index nothing", nothing.list("groups").isEmpty());
 
         var limited = emitted(Symbols.searching(index, 1), Effect.of(Symbols.SEARCH).with("query", "write"));
-        Check.that("a page of results is a page", limited.list("matches").size() <= 1);
+        Check.that("a page of results is a page", names(limited).size() <= 1);
     }
 
     private static List<String> names(Message matched) {
-        return matched.list("matches").stream()
+        return matched.list("groups").stream()
+                .filter(Json.Object.class::isInstance)
+                .flatMap(group -> ((Json.Object) group).list("matches").stream())
                 .map(match -> match instanceof Json.Object entry ? entry.string("symbol", "") : "")
                 .toList();
     }

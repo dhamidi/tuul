@@ -25,17 +25,27 @@ final class Schema {
     /// symbols in their own right. Version 5 carries a symbol's modifiers into
     /// search. Version 6 adds package documents and their search rows. Version
     /// 7 stores the root summary that lets a browser start without discovery.
-    static final int VERSION = 7;
+    /// Version 8 files a package's `README.md` as a document and records why
+    /// the last refresh of an origin failed, so a broken build is answered
+    /// from the last good generation instead of being built again.
+    static final int VERSION = 8;
 
     /// The whole format. It stores types, members, parameters, tags, package
     /// documents, and the origin of each stored item.
     private static final String TABLES = """
+            -- `stamp` is the fingerprint of the rows that are here. When a
+            -- refresh for a newer fingerprint fails -- the project does not
+            -- compile -- `attempted` holds that fingerprint and `problem` says
+            -- what went wrong, so the same broken tree is not built twice and
+            -- a reader is told that the answer is the last good one.
             create table origin (
-                id       integer primary key,
-                kind     text    not null check (kind in ('project', 'vendor', 'platform')),
-                location text    not null,
-                stamp    text    not null,
-                complete integer not null default 0,
+                id        integer primary key,
+                kind      text    not null check (kind in ('project', 'vendor', 'platform')),
+                location  text    not null,
+                stamp     text    not null,
+                complete  integer not null default 0,
+                attempted text    not null default '',
+                problem   text    not null default '',
                 unique (kind, location)
             );
 
@@ -119,7 +129,7 @@ final class Schema {
                 id      integer primary key,
                 origin  integer not null references origin (id) on delete cascade,
                 package text    not null,
-                kind    text    not null check (kind in ('tutorial', 'howto', 'reference', 'guide')),
+                kind    text    not null check (kind in ('readme', 'tutorial', 'howto', 'reference', 'guide')),
                 slug    text    not null,
                 title   text    not null,
                 body    text    not null,

@@ -46,6 +46,15 @@ import sqlite3.SqliteException;
 /// compiling the project. A successful generation remains in `index.db` for
 /// later processes.
 ///
+/// Everything the index knows is in `index.db`. A project that does not
+/// compile does not stop it: the failure is written to the project's origin
+/// row, the rows of the last build that did compile keep answering, and
+/// [#problems()] says so. The same broken tree is not compiled twice.
+///
+/// A lookup compiles only when the project could hold the name. A question
+/// about the JDK or a dependency is answered from their rows or archives and
+/// never waits for javac, however stale the project is.
+///
 /// Call [#catalog(Path)] when a caller must only read committed rows. That
 /// catalog has no source paths and cannot start compilation.
 public final class Index implements Catalog {
@@ -83,7 +92,13 @@ public final class Index implements Catalog {
     private final Compiler compiler;
     private Map<String, byte[]> classes;
 
+    /// Why the last compile in this process failed, or empty. It is what an
+    /// index with nowhere to keep rows has instead of the origin's row.
+    private String compileProblem = "";
+
     private List<Document> projectDocuments;
+
+    private String documentProblem = "";
 
     /// Worked out once: the roots do not change while a server is running, and
     /// walking the JDK's modules for every page would be a walk per page.
@@ -145,8 +160,60 @@ public final class Index implements Catalog {
     /// those are asked for last: a type wins a collision, since a package named
     /// after a type is a thing somebody wrote by accident and a type named after
     /// a package is not.
+    ///
+    /// The project is compiled only when it could hold the name: when its last
+    /// generation held it, or held its package, or when nothing else does. A
+    /// question about `java.lang.String` therefore never waits for javac,
+    /// however many project files were edited since the last index.
     public Optional<TypeInfo> lookup(String name) {
-        return project(name).or(() -> vendored(name)).or(() -> platform(name)).or(() -> grouping(name));
+        var current = project(name, false);
+        if (current.isPresent()) return current;
+        if (projectMayHold(name)) {
+            var built = project(name, true);
+            if (built.isPresent()) return built;
+        }
+        var elsewhere = vendored(name).or(() -> platform(name)).or(() -> grouping(name));
+        if (elsewhere.isPresent()) return elsewhere;
+        return project(name, true);
+    }
+
+    /// Whether a name could be the project's, judged from the last generation
+    /// without compiling anything: it held the name, or it held the package
+    /// the name is in. A project that has never been indexed could hold any
+    /// name at all.
+    private boolean projectMayHold(String name) {
+        var origin = snapshot("project", "sources", sourceStamp);
+        if (origin.isEmpty() || !origin.get().complete()) return true;
+        if (kept(origin.get().id(), name).isPresent()) return true;
+        var packageName = name.contains("$") ? packageOf(outer(name)) : packageOf(name);
+        if (packageName.isEmpty()) return false;
+        try {
+            var packages = store.orElseThrow().names(origin.get().id(), TypeInfo.Kind.PACKAGE);
+            return packages.contains(packageName) || packages.contains(name);
+        } catch (SqliteException unavailable) {
+            return true;
+        }
+    }
+
+    /// Why an answer may be out of date. A project that does not compile is
+    /// answered from the last build that did, and this is where that is said.
+    @Override
+    public List<String> problems() {
+        if (store.isEmpty()) return problems(compileProblem, documentProblem);
+        return problems(
+                snapshot("project", "sources", sourceStamp).map(IndexStore.Snapshot::problem).orElse(""),
+                snapshot("project", "documents", documentStamp).map(IndexStore.Snapshot::problem).orElse(""));
+    }
+
+    /// The problem lines a reader is shown, worded once for every catalog.
+    static List<String> problems(String sources, String documents) {
+        var lines = new ArrayList<String>();
+        if (!sources.isEmpty()) {
+            lines.add("the project does not compile, so answers about it come from the last build that did:\n"
+                    + sources.strip().indent(2).stripTrailing());
+        }
+        if (!documents.isEmpty()) lines.add("the package documents could not be indexed: " + documents.strip());
+        return List.copyOf(lines);
     }
 
     @Override
@@ -159,9 +226,11 @@ public final class Index implements Catalog {
         return documents(packageName, "");
     }
 
+    /// The documents of one package. Only the document generation is made
+    /// current for this: a Markdown question never compiles Java.
     @Override
     public List<Document> documents(String packageName, String kind) {
-        ensureCurrent();
+        ensureDocumentsCurrent();
         var origin = snapshot("project", "documents", documentStamp);
         if (origin.isPresent()) {
             try {
@@ -525,6 +594,14 @@ public final class Index implements Catalog {
             }
         }
         indexProject();
+        var refreshed = snapshot("project", "sources", sourceStamp);
+        if (refreshed.isPresent()) {
+            try {
+                return store.orElseThrow().names(refreshed.get().id());
+            } catch (SqliteException unavailable) {
+                // ask javac instead
+            }
+        }
         return List.copyOf(compile().keySet());
     }
 
@@ -535,11 +612,26 @@ public final class Index implements Catalog {
     /// method runs. Exact JDK lookup adds the full type and source details on
     /// demand.
     public List<Catalog.Match> search(String text, int limit) {
+        var kept = searchable();
+        return owned(kept.search(text, limit));
+    }
+
+    @Override
+    public List<Catalog.Match> searchAny(String text, int limit) {
+        var kept = searchable();
+        return owned(kept.searchAny(text, limit));
+    }
+
+    private IndexStore searchable() {
         var kept = store.orElseThrow(() -> new IllegalStateException("there is no index to search"));
         indexProject();
         indexVendor();
         indexPlatform();
-        return kept.search(text, limit).stream().map(match -> match.origin().equals("vendor")
+        return kept;
+    }
+
+    private List<Catalog.Match> owned(List<Catalog.Match> matches) {
+        return matches.stream().map(match -> match.origin().equals("vendor")
                 ? match.withOrigin(vendor.origin(match.source()).orElse("vendor")) : match).toList();
     }
 
@@ -548,16 +640,21 @@ public final class Index implements Catalog {
         store.ifPresent(IndexStore::close);
     }
 
-    private Optional<TypeInfo> project(String name) {
+    /// The project's answer. Without `compiling`, only a generation that is
+    /// current — or the last good one, when the current sources do not build —
+    /// answers, and a stale one answers nothing rather than starting javac.
+    private Optional<TypeInfo> project(String name, boolean compiling) {
         var origin = snapshot("project", "sources", sourceStamp);
-        if (origin.isPresent() && origin.get().fresh()) {
+        if (origin.isPresent() && (origin.get().fresh() || origin.get().failed())) {
             var kept = kept(origin.get().id(), name);
             if (kept.isPresent()) return kept;
             if (origin.get().complete()) return Optional.empty();
         }
+        if (!compiling) return Optional.empty();
         indexProject();
-        return origin.isPresent()
-                ? kept(origin.get().id(), name)
+        var refreshed = snapshot("project", "sources", sourceStamp);
+        return refreshed.isPresent()
+                ? kept(refreshed.get().id(), name)
                 : built(name, this::compiled).map(Found::type);
     }
 
@@ -847,6 +944,13 @@ public final class Index implements Catalog {
             discoveredDocuments();
             return true;
         }
+        var sources = snapshot("project", "sources", sourceStamp);
+        var documents = snapshot("project", "documents", documentStamp);
+        var navigation = snapshot("platform", platformNavigationLocation(), platformStamp());
+        if (settled(sources) && settled(documents) && navigation.isPresent() && navigation.get().fresh()
+                && !store.orElseThrow().roots().isEmpty()) {
+            return false;
+        }
         var key = index.toAbsolutePath().normalize() + "\n" + sourceStamp + "\n" + documentStamp;
         var started = new CompletableFuture<Boolean>();
         var running = BUILDING.putIfAbsent(key, started);
@@ -881,50 +985,97 @@ public final class Index implements Catalog {
         }
     }
 
+    /// Whether an origin needs no work for its stamp: it is current, or this
+    /// stamp was tried and failed, which is not a reason to try it again.
+    private static boolean settled(Optional<IndexStore.Snapshot> origin) {
+        return origin.isPresent() && ((origin.get().fresh() && origin.get().complete()) || origin.get().failed());
+    }
+
+    /// Makes only the package documents current. Reading Markdown must not
+    /// wait for javac, and it does not: the two generations have separate
+    /// stamps and this touches one of them.
+    private void ensureDocumentsCurrent() {
+        if (store.isEmpty()) {
+            discoveredDocuments();
+            return;
+        }
+        if (settled(snapshot("project", "documents", documentStamp))) return;
+        try {
+            locked(this::refreshDocuments);
+        } catch (IOException unlockable) {
+            throw new UncheckedIOException(unlockable);
+        }
+    }
+
     private boolean lockedRefresh() throws IOException {
+        return locked(this::refresh);
+    }
+
+    private boolean locked(Supplier<Boolean> work) throws IOException {
         var lock = index.resolveSibling(index.getFileName() + ".lock");
         if (lock.getParent() != null) Files.createDirectories(lock.getParent());
         try (var channel = FileChannel.open(lock, StandardOpenOption.CREATE, StandardOpenOption.WRITE);
                 var held = channel.lock()) {
-            return refresh();
+            return work.get();
         }
     }
 
     private boolean refresh() {
-        var changed = false;
-        List<String> projectSummary = List.of();
-        var source = snapshot("project", "sources", sourceStamp);
-        if (source.isEmpty() || !source.get().fresh() || !source.get().complete()) {
-            var comments = new HashMap<String, Map<String, Javadoc.Comment>>();
-            var types = new LinkedHashMap<String, TypeInfo>();
-            compile().forEach((name, bytes) -> types.put(name, documented(Classes.inspect(bytes), name, comments)));
-            types.putAll(packagesOf(types));
-            projectSummary = types.values().stream()
-                    .filter(type -> type.kind() == TypeInfo.Kind.PACKAGE).map(TypeInfo::name).sorted().toList();
-            store.orElseThrow().publish("project", "sources", sourceStamp, types, List.of());
-            changed = true;
-        } else {
-            projectSummary = store.orElseThrow().names(source.get().id(), TypeInfo.Kind.PACKAGE);
-        }
-
-        var documents = snapshot("project", "documents", documentStamp);
-        if (documents.isEmpty() || !documents.get().fresh() || !documents.get().complete()) {
-            store.orElseThrow().publish(
-                    "project", "documents", documentStamp, Map.of(), discoveredDocuments());
-            changed = true;
-        }
-
+        var changed = refreshSources();
+        if (refreshDocuments()) changed = true;
         indexPlatformGroups();
 
         if (changed || store.orElseThrow().roots().isEmpty()) {
             var summaries = new ArrayList<Catalog.Root>();
-            add(summaries, new Catalog.Root(PROJECT, "This project", projectSummary));
+            add(summaries, new Catalog.Root(PROJECT, "This project", projectSummary()));
             add(summaries, new Catalog.Root(DEPENDENCIES, "Dependencies", vendor.packages()));
             add(summaries, new Catalog.Root(PLATFORM, "The JDK", platformModules()));
             store.orElseThrow().publishRoots(List.copyOf(summaries));
             groups = List.copyOf(summaries);
         }
         return changed;
+    }
+
+    /// Compiles and publishes the project when its sources changed. A build
+    /// that fails is written down against this stamp and the rows of the last
+    /// good build stay; the same stamp is not built again.
+    private boolean refreshSources() {
+        var source = snapshot("project", "sources", sourceStamp);
+        if (settled(source)) return false;
+        var compiled = compile();
+        if (!compileProblem.isEmpty()) {
+            store.orElseThrow().fail("project", "sources", sourceStamp, compileProblem);
+            return false;
+        }
+        var comments = new HashMap<String, Map<String, Javadoc.Comment>>();
+        var types = new LinkedHashMap<String, TypeInfo>();
+        compiled.forEach((name, bytes) -> types.put(name, documented(Classes.inspect(bytes), name, comments)));
+        types.putAll(packagesOf(types));
+        store.orElseThrow().publish("project", "sources", sourceStamp, types, List.of());
+        return true;
+    }
+
+    /// Publishes the package documents when a Markdown file changed. Two
+    /// files that name one document are a problem written down the same way a
+    /// build failure is, and the last good documents stay.
+    private boolean refreshDocuments() {
+        var documents = snapshot("project", "documents", documentStamp);
+        if (settled(documents)) return false;
+        var found = discoveredDocuments();
+        if (!documentProblem.isEmpty()) {
+            store.orElseThrow().fail("project", "documents", documentStamp, documentProblem);
+            return false;
+        }
+        store.orElseThrow().publish("project", "documents", documentStamp, Map.of(), found);
+        return true;
+    }
+
+    /// The project's packages for the root summary, from whichever generation
+    /// there is.
+    private List<String> projectSummary() {
+        return snapshot("project", "sources", sourceStamp)
+                .map(origin -> store.orElseThrow().names(origin.id(), TypeInfo.Kind.PACKAGE))
+                .orElse(List.of());
     }
 
     private static boolean joined(CompletableFuture<Boolean> running) {
@@ -937,10 +1088,20 @@ public final class Index implements Catalog {
     }
 
     /// Reads each package document as source text. The normalized identity must
-    /// be unique across all source roots.
+    /// be unique across all source roots; a collision is remembered as the
+    /// document problem and answered with no documents at all.
     private List<Document> discoveredDocuments() {
         if (projectDocuments != null) return projectDocuments;
+        try {
+            projectDocuments = discoverDocuments();
+        } catch (IllegalStateException | UncheckedIOException failed) {
+            documentProblem = failed.getMessage() == null ? failed.toString() : failed.getMessage();
+            projectDocuments = List.of();
+        }
+        return projectDocuments;
+    }
 
+    private List<Document> discoverDocuments() {
         var found = new LinkedHashMap<DocumentKey, Document>();
         for (var root : roots) {
             if (!Files.isDirectory(root)) continue;
@@ -968,8 +1129,7 @@ public final class Index implements Catalog {
                 throw new UncheckedIOException(unreadable);
             }
         }
-        projectDocuments = List.copyOf(found.values());
-        return projectDocuments;
+        return List.copyOf(found.values());
     }
 
     private record DocumentKey(String packageName, String kind, String slug) {}
@@ -985,8 +1145,16 @@ public final class Index implements Catalog {
         return read.isEmpty() ? located : Javadoc.attach(located, read, path(name));
     }
 
+    /// The project's class files: what `tuul build` left in `build/classes`
+    /// when it built these exact sources, or javac's answer in memory. Nothing
+    /// is written to disk here — the facts go into the index, and the class
+    /// files are not needed once they are there.
+    ///
+    /// A build that fails is not an exception. It is the answer "no classes"
+    /// with the reason kept in [#compileProblem], asked for once per process.
     private Map<String, byte[]> compile() {
         if (classes != null) return classes;
+        if (!compileProblem.isEmpty()) return Map.of();
         try {
             var sources = Sources.files(roots);
             var module = sources.stream().anyMatch(path -> path.getFileName().toString().equals("module-info.java"));
@@ -1000,24 +1168,10 @@ public final class Index implements Catalog {
                 classes = Sources.read(built);
                 return classes;
             }
-
-            var cached = build.resolve(".tuul/docs").resolve(fingerprint);
-            var complete = cached.resolve("complete");
-            if (Files.isRegularFile(complete)) {
-                classes = Sources.read(cached.resolve("classes"));
-                return classes;
-            }
-
             classes = Sources.compile(roots, vendor.runtime(), compiler);
-            for (var written : classes.entrySet()) {
-                var file = cached.resolve("classes").resolve(written.getKey().replace('.', '/') + ".class");
-                Files.createDirectories(file.getParent());
-                Files.write(file, written.getValue());
-            }
-            Files.createDirectories(cached);
-            Files.writeString(complete, fingerprint);
-        } catch (IOException e) {
-            throw new UncheckedIOException(e);
+        } catch (IOException | UncheckedIOException failed) {
+            compileProblem = failed.getMessage() == null ? failed.toString() : failed.getMessage();
+            return Map.of();
         }
         return classes;
     }

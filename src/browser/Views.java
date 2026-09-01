@@ -237,8 +237,31 @@ public final class Views {
         if (!found.problem().isEmpty()) return problem(found.problem());
         if (!found.asked()) return Ui.blank(text("Type to search the index."));
         if (found.matches().isEmpty()) return Ui.blank(text("Nothing matches " + found.query() + "."));
-        return Ui.items(Props.of().on("divided"),
-                Html.each(found.matches(), match -> row(routes, match)));
+        return Ui.stack(Props.of("gap", "md"),
+                found.every() ? Html.nothing() : Ui.prose(Props.of("tone", "muted"),
+                        text("Nothing holds every word of " + found.query() + ". These hold some of them.")),
+                Html.each(found.groups(), group -> group(routes, group)));
+    }
+
+    /// One group of results: the name its results share, then the results.
+    ///
+    /// The name is a link to its own page unless one of the results already
+    /// is that page, so a list never offers the same place twice — and a
+    /// package the search surfaced only through its members is one click
+    /// away, which is what surfacing it is for.
+    private static Html group(Router routes, Json group) {
+        if (!(group instanceof Json.Object entry)) return Html.nothing();
+        var prefix = entry.string("prefix", "");
+        var matches = entry.list("matches");
+        var listed = matches.stream()
+                .anyMatch(match -> match instanceof Json.Object held && held.string("symbol", "").equals(prefix));
+        var heading = prefix.isEmpty() ? Html.nothing() : Html.element("h2", classes("result-group"),
+                listed || matches.size() < 2
+                        ? Ui.mono(text(prefix))
+                        : Ui.anchor(Props.of("href", symbolPath(routes, prefix), "frame", Turbo.TOP),
+                                Ui.mono(text(prefix))));
+        return Ui.stack(Props.of("gap", "sm"), heading,
+                Ui.items(Props.of().on("divided"), Html.each(matches, match -> row(routes, match))));
     }
 
     /// One result, as the component that is one.
@@ -357,7 +380,7 @@ public final class Views {
 
     private static Html documents(Router routes, Json.Object description) {
         var written = new ArrayList<Html>();
-        for (var kind : List.of("tutorial", "howto", "reference", "guide")) {
+        for (var kind : symbols.Document.KINDS) {
             var documents = objects(description, "documents").stream()
                     .filter(document -> document.string("kind", "").equals(kind))
                     .toList();
@@ -429,6 +452,7 @@ public final class Views {
 
     private static String section(String kind) {
         return switch (kind) {
+            case symbols.Document.README -> "README";
             case "tutorial" -> "Tutorials";
             case "howto" -> "How-tos";
             case "reference" -> "Reference";

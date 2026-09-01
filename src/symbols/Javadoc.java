@@ -132,6 +132,47 @@ public final class Javadoc {
         return docs;
     }
 
+    /// The lines one declaration occupies, comment included.
+    ///
+    /// `path` is the type as it is written inside its file — `TypeInfo.Kind`
+    /// for a nested type — and `member` names a method or a field in it, or is
+    /// empty for the type itself. An overloaded method has one span per
+    /// overload, in source order. A name the file does not declare has none.
+    ///
+    /// javac's start position is the first modifier, so the doc comment above
+    /// it is taken in by walking back over the comment lines: the comment is
+    /// the half of a declaration a reader came for.
+    public static List<Span> spans(String source, String fileName, String path, String member) {
+        var compiler = ToolProvider.getSystemJavaCompiler();
+        if (compiler == null) return List.of();
+        var spans = new ArrayList<Span>();
+        try {
+            var files = compiler.getStandardFileManager(null, null, StandardCharsets.UTF_8);
+            var task = (JavacTask) compiler.getTask(
+                    null, files, diagnostic -> {}, List.of("-proc:none"), null, List.of(new Text(fileName, source)));
+            var trees = DocTrees.instance(task);
+            var lines = source.split("\n", -1);
+            for (var unit : task.parse()) new Spanning(trees, unit, path, member, lines, spans).scan(unit, null);
+        } catch (IOException | RuntimeException unreadable) {
+            return List.of();
+        }
+        return List.copyOf(spans);
+    }
+
+    /// The first and last line of a declaration, both inclusive and counted
+    /// from one.
+    public record Span(int first, int last) {
+
+        /// The declaration's text, taken from the source it was found in.
+        public String of(String source) {
+            var lines = source.split("\n", -1);
+            var from = Math.max(1, first);
+            var to = Math.min(lines.length, last);
+            if (from > to) return "";
+            return String.join("\n", List.of(lines).subList(from - 1, to)) + "\n";
+        }
+    }
+
     /// Puts the comments where they belong. `path` is the type as it is written
     /// inside its file — `TypeInfo.Kind` for a nested type.
     public static TypeInfo attach(TypeInfo type, Map<String, Comment> docs, String path) {
@@ -534,6 +575,92 @@ public final class Javadoc {
                     ? new Comment("", List.of(), parameters, line)
                     : new Comment(flatten(comment.getFullBody()), tags(comment.getBlockTags()), parameters, line);
             if (!doc.empty()) docs.put(key, doc);
+        }
+    }
+
+    /// Finds where one declaration starts and ends, by the same walk that
+    /// finds its comment.
+    private static final class Spanning extends TreePathScanner<Void, Void> {
+
+        private final DocTrees trees;
+        private final CompilationUnitTree unit;
+        private final String path;
+        private final String member;
+        private final String[] lines;
+        private final List<Span> spans;
+        private final Deque<String> enclosing = new ArrayDeque<>();
+
+        private Spanning(DocTrees trees, CompilationUnitTree unit, String path, String member, String[] lines,
+                List<Span> spans) {
+            this.trees = trees;
+            this.unit = unit;
+            this.path = path;
+            this.member = member;
+            this.lines = lines;
+            this.spans = spans;
+        }
+
+        @Override
+        public Void visitClass(ClassTree node, Void ignored) {
+            if (node.getSimpleName().isEmpty()) return null;
+            enclosing.addLast(node.getSimpleName().toString());
+            if (member.isEmpty() && String.join(".", enclosing).equals(path)) {
+                spans.add(span(node));
+                enclosing.removeLast();
+                return null;
+            }
+            var scanned = super.visitClass(node, ignored);
+            enclosing.removeLast();
+            return scanned;
+        }
+
+        @Override
+        public Void visitMethod(MethodTree node, Void ignored) {
+            if (here() && named(node.getName().toString())) spans.add(span(node));
+            return null;
+        }
+
+        @Override
+        public Void visitVariable(VariableTree node, Void ignored) {
+            if (here() && getCurrentPath().getParentPath().getLeaf() instanceof ClassTree
+                    && member.equals(node.getName().toString())) {
+                spans.add(span(node));
+            }
+            return null;
+        }
+
+        private boolean here() {
+            return !member.isEmpty() && String.join(".", enclosing).equals(path);
+        }
+
+        /// A constructor is written with the type's name and parsed as `<init>`.
+        private boolean named(String name) {
+            return member.equals(name) || (name.equals("<init>") && member.equals(enclosing.peekLast()));
+        }
+
+        private Span span(Tree node) {
+            var positions = trees.getSourcePositions();
+            var start = positions.getStartPosition(node);
+            var end = positions.getEndPosition(node);
+            var first = start < 0 ? 1 : (int) unit.getLineMap().getLineNumber(start);
+            var last = end < 0 ? first : (int) unit.getLineMap().getLineNumber(Math.max(start, end - 1));
+            return new Span(commented(first), last);
+        }
+
+        /// The line the comment above a declaration starts on, or the
+        /// declaration's own line when nothing is written above it.
+        private int commented(int first) {
+            var at = first;
+            while (at > 1) {
+                var above = lines[at - 2].strip();
+                if (above.startsWith("///") || above.startsWith("/**") || above.startsWith("*")
+                        || above.startsWith("@")) {
+                    at--;
+                    continue;
+                }
+                break;
+            }
+            return at;
         }
     }
 

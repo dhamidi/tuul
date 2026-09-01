@@ -17,23 +17,22 @@ import java.util.concurrent.TimeUnit;
 import java.util.concurrent.atomic.AtomicBoolean;
 import java.util.concurrent.atomic.AtomicReference;
 import json.Json;
-import symbols.Docs;
 import symbols.Catalog;
 import symbols.CatalogFactory;
+import symbols.Docs;
 import symbols.Index;
+import symbols.Questions;
 
 /// `tuul docs` as an application: which messages it understands, and how the
 /// effects those messages ask for are carried out.
 ///
-/// Compiling or indexing can fail, so each symbol operation is an effect. A
-/// broken project produces an `error` message instead of a stack trace. Search
-/// makes the project, selected dependency, and lightweight JDK generations
-/// current. The writers are bound here, at the edge, and nowhere else.
+/// Every question goes to [Questions], which is also what `tuul browse` asks,
+/// so the command and the page cannot describe a symbol differently. Indexing
+/// happens inside an effect, and a project that does not compile is not an
+/// error here: the catalog answers from its last good generation and says so
+/// on standard error, after the answer. The writers are bound here, at the
+/// edge, and nowhere else.
 public final class App {
-
-    /// How many matches a search answers with. Enough to choose from, few
-    /// enough to read.
-    private static final int MATCHES = 20;
 
     private static final Duration INDEXING_NOTICE = Duration.ofSeconds(5);
 
@@ -56,7 +55,9 @@ public final class App {
                 .on("docs.result", App::result)
                 .on("docs.found", App::found)
                 .on("docs.roots", App::rooted)
+                .on("docs.code", App::coded)
                 .on("docs.missing", App::missing)
+                .on("docs.problem", App::problem)
                 .on(Message.HANDLE_ERROR, App::failed)
                 .effect("symbols.lookup", (effect, emit) -> waiting(err, inactivity,
                         () -> look(effect, emit, catalogs)))
@@ -98,7 +99,9 @@ public final class App {
                 .with("all", asking.all())
                 .with("index", asking.index().toString())
                 .with("members", message.flag("members") || message.flag("recursive"))
-                .with("recursive", message.flag("recursive")));
+                .with("recursive", message.flag("recursive"))
+                .with("documents", message.flag("documents"))
+                .with("code", message.flag("code")));
     }
 
     private static Step<State> result(State state, Message message) {
@@ -108,13 +111,20 @@ public final class App {
                 .with("sections", Json.Array.strings(List.copyOf(state.sections()))));
     }
 
-    /// A search answers with a list rather than a symbol, so it prints as one.
+    /// A search answers with groups rather than a symbol, so it prints as
+    /// them. When nothing held every word, the answer says which words it
+    /// holds instead — after the results, where a reader who scrolled up to
+    /// the top of them will see it last and is not stopped by it.
     private static Step<State> found(State state, Message message) {
-        var matches = message.list("matches");
-        if (matches.isEmpty()) return Step.of(state.failed(), report("nothing matches " + message.string("search", "")));
-        return Step.of(state, Effect.of("docs.print")
-                .with("matches", Json.Array.of(matches))
-                .with("json", state.json()));
+        var groups = message.list("groups");
+        var query = message.string("query", "");
+        if (groups.isEmpty()) return Step.of(state.failed(), report("nothing matches " + query));
+        var effects = new ArrayList<Effect>();
+        effects.add(Effect.of("docs.print").with("results", message.body()).with("json", state.json()));
+        if (!message.flag("every")) {
+            effects.add(report("nothing holds every word of \"" + query + "\"; these hold some of them"));
+        }
+        return Step.of(state, effects.toArray(new Effect[0]));
     }
 
     /// Nobody named anything, so the answer is what there is to name.
@@ -128,8 +138,21 @@ public final class App {
                 .with("json", state.json()));
     }
 
+    /// Source code prints as it was written, whatever else was asked: JSON
+    /// around a file is a file nobody can compile.
+    private static Step<State> coded(State state, Message message) {
+        return Step.of(state, Effect.of("docs.print").with("text", message.string("text", "")));
+    }
+
     private static Step<State> missing(State state, Message message) {
-        return Step.of(state.failed(), report("unknown symbol: " + message.string("symbol", "")));
+        return Step.of(state.failed(), report(message.string("reason", "unknown symbol: " + message.string("symbol", ""))));
+    }
+
+    /// A problem is not a failure. The answer was given from the last good
+    /// index; this says so, on standard error, and leaves the exit status
+    /// alone.
+    private static Step<State> problem(State state, Message message) {
+        return Step.of(state, report("warning: " + message.string("reason", "")));
     }
 
     private static Step<State> failed(State state, Message message) {
@@ -158,94 +181,52 @@ public final class App {
 
     /// Runs a complete selected-set search. The first call can build project,
     /// dependency, and JDK-name generations. Later calls reuse their stamps.
-    /// Each JSON result includes its origin and source location.
     private static void search(Effect effect, Effect.Emitter emit, CatalogFactory catalogs) throws IOException {
         var wanted = effect.string("search", "");
         try (var index = catalog(effect, catalogs)) {
-            var found = index.search(wanted, MATCHES).stream()
-                    .map(match -> (Json) Json.Object.of()
-                            .with("symbol", match.symbol())
-                            .with("kind", match.kind())
-                            .with("doc", match.doc())
-                            .with("origin", match.origin())
-                            .with("source", match.source()))
-                    .toList();
-            emit.emit(Message.of("docs.found").with("search", wanted).with("matches", Json.Array.of(found)));
+            emit.emit(Message.of("docs.found", Questions.search(index, wanted, Questions.MATCHES)));
+            problems(index, emit);
         }
     }
 
     private static void look(Effect effect, Effect.Emitter emit, CatalogFactory catalogs) throws IOException {
         var symbol = effect.string("symbol", "");
-        if (symbol.isEmpty()) {
-            try (var index = catalog(effect, catalogs)) {
-                emit.emit(Message.of("docs.roots", Docs.describe(index.roots())));
-            }
-            return;
-        }
         try (var index = catalog(effect, catalogs)) {
-            var requested = document(symbol);
-            if (requested.isPresent()) {
-                var name = requested.get();
-                var exact = index.document(name.packageName(), name.kind(), name.slug());
-                if (exact.isPresent()) {
-                    emit.emit(Message.of("docs.result", exact.get().describe()));
-                    return;
-                }
-                var documents = name.slug().isEmpty()
-                        ? index.documents(name.packageName(), name.kind()) : List.<symbols.Document>of();
-                if (!documents.isEmpty()) {
-                    emit.emit(Message.of("docs.result", Json.Object.of()
-                            .with("package", name.packageName()).with("kind", name.kind())
-                            .with("documents", Json.Array.of(documents.stream()
-                                    .map(document -> (Json) document.describe().without("doc").without("source"))
-                                    .toList()))));
-                    return;
-                }
-                emit.emit(Message.of("docs.missing").with("symbol", symbol));
+            if (symbol.isEmpty()) {
+                emit.emit(Message.of("docs.roots", Questions.roots(index)));
+                problems(index, emit);
                 return;
             }
-            emit.emit(index.lookup(symbol)
-                    .map(type -> Message.of("docs.result", described(index, type, effect)))
-                    .orElseGet(() -> Message.of("docs.missing").with("symbol", symbol)));
+            var asking = new Questions.Asking(effect.flag("all"), effect.flag("members"), effect.flag("recursive"),
+                    effect.flag("documents"));
+            var answer = Questions.answer(index, symbol, asking);
+            if (answer.isEmpty()) {
+                emit.emit(Message.of("docs.missing").with("symbol", symbol));
+            } else if (!effect.flag("code")) {
+                emit.emit(Message.of("docs.result", answer.get()));
+            } else {
+                emit.emit(Questions.source(index, answer.get())
+                        .map(text -> Message.of("docs.code").with("text", text))
+                        .orElseGet(() -> Message.of("docs.missing").with("symbol", symbol)
+                                .with("reason", "no source for " + symbol + ": "
+                                        + (answer.get().string("source", "").isEmpty()
+                                                ? "the index knows none" : answer.get().string("source", "")))));
+            }
+            problems(index, emit);
         }
     }
 
-    /// One symbol, and what it holds when the caller asked for that.
-    private static Json.Object described(Catalog index, symbols.TypeInfo type, Effect effect) {
-        var documents = type.kind() == symbols.TypeInfo.Kind.PACKAGE
-                ? index.documents(type.name()) : List.<symbols.Document>of();
-        var description = Docs.describe(type, effect.flag("all"), documents);
-        if (!effect.flag("members")) return description;
-        return description.with("members", Json.Array.of(
-                members(index, description, effect.flag("all"), effect.flag("recursive"), new LinkedHashSet<>())));
-    }
-
-    /// Every symbol a package or a type holds, described in the same way it is.
-    ///
-    /// Reading a package took a question per type in it, which is the dominant
-    /// cost of this tool for anybody getting oriented — a person or an agent.
-    /// One question now answers for all of them.
-    ///
-    /// A subpackage is skipped unless `recursive` is set, because `web` holds
-    /// eight of them and a reader who asked about `web` asked about `web`. The
-    /// `seen` set makes a name appear once however many ways it is reached.
-    private static List<Json> members(Catalog index, Json.Object description, boolean all, boolean recursive,
-            Set<String> seen) {
-        var described = new ArrayList<Json>();
-        for (var name : strings(description.list("nested"))) {
-            if (!seen.add(name)) continue;
-            var found = index.lookup(name);
-            if (found.isEmpty()) continue;
-            var member = Docs.describe(found.get(), all);
-            var group = member.string("kind", "").equals("package") || member.string("kind", "").equals("module");
-            if (group && !recursive) continue;
-            described.add(member);
-            if (group) described.addAll(members(index, member, all, true, seen));
-        }
-        return List.copyOf(described);
+    private static void problems(Catalog index, Effect.Emitter emit) {
+        for (var problem : index.problems()) emit.emit(Message.of("docs.problem").with("reason", problem));
     }
 
     private static void print(Effect effect, Writer out) throws IOException {
+        if (effect.get("text") instanceof Json.Str(var text)) {
+            out.write(text);
+            if (!text.isEmpty() && !text.endsWith("\n")) out.write("\n");
+            out.flush();
+            return;
+        }
         if (effect.get("roots") instanceof Json.Object listing) {
             if (effect.flag("json")) {
                 listing.write(out);
@@ -256,39 +237,19 @@ public final class App {
             out.flush();
             return;
         }
-        if (effect.get("matches") instanceof Json.Array(var matches)) {
+        if (effect.get("results") instanceof Json.Object results) {
             if (effect.flag("json")) {
-                Json.Object.of().with("matches", Json.Array.of(matches)).write(out);
+                results.write(out);
                 out.write("\n");
             } else {
-                Docs.matches(matches, out);
+                Docs.groups(results.list("groups"), out);
             }
             out.flush();
             return;
         }
         if (!(effect.get("symbol") instanceof Json.Object description)) return;
-        if (description.get("package") instanceof Json.Str && description.get("documents") instanceof Json.Array
-                && description.get("doc") == null) {
-            if (effect.flag("json")) {
-                description.write(out);
-                out.write("\n");
-            } else {
-                for (var value : description.list("documents")) {
-                    if (!(value instanceof Json.Object document)) continue;
-                    out.write(document.string("title", "") + "\t" + document.string("slug", "") + "\n");
-                }
-            }
-            out.flush();
-            return;
-        }
-        if (description.get("package") instanceof Json.Str && description.get("title") instanceof Json.Str) {
-            if (effect.flag("json")) {
-                description.write(out);
-                out.write("\n");
-            } else {
-                out.write(description.string("doc", ""));
-                if (!description.string("doc", "").endsWith("\n")) out.write("\n");
-            }
+        if (document(description)) {
+            printDocument(description, effect.flag("json"), out);
             out.flush();
             return;
         }
@@ -297,10 +258,12 @@ public final class App {
         var one = description.without("members");
         if (!effect.flag("json")) {
             Docs.text(one, sections, out);
+            Docs.documents(one.list("documents"), out);
             for (var member : members) {
                 if (!(member instanceof Json.Object held)) continue;
                 out.write("\n");
                 Docs.text(held, sections, out);
+                Docs.documents(held.list("documents"), out);
             }
         } else {
             var selected = Docs.select(one, sections);
@@ -314,16 +277,31 @@ public final class App {
         out.flush();
     }
 
-    private record DocumentName(String packageName, String kind, String slug) {}
+    /// A document, or the list of a kind's documents, is told from a symbol
+    /// by carrying a package and a title rather than a class.
+    private static boolean document(Json.Object description) {
+        return description.get("package") instanceof Json.Str && description.get("title") instanceof Json.Str;
+    }
 
-    private static java.util.Optional<DocumentName> document(String symbol) {
-        var parts = symbol.split("/", -1);
-        if (parts.length < 2 || parts.length > 3 || parts[0].isBlank()) return java.util.Optional.empty();
-        var kind = parts[1];
-        if (!List.of("tutorial", "howto", "reference", "guide").contains(kind)) {
-            return java.util.Optional.empty();
+    /// A document prints as the Markdown it was written in. A kind with no
+    /// introduction prints the names of the documents it has, each of which
+    /// can be asked for next.
+    private static void printDocument(Json.Object description, boolean json, Writer out) throws IOException {
+        if (json) {
+            (description.get("doc") instanceof Json.Str ? description.without("documents") : description)
+                    .without("links").write(out);
+            out.write("\n");
+            return;
         }
-        return java.util.Optional.of(new DocumentName(parts[0], kind, parts.length == 3 ? parts[2] : ""));
+        if (description.get("doc") instanceof Json.Str(var body)) {
+            out.write(body);
+            if (!body.endsWith("\n")) out.write("\n");
+            return;
+        }
+        for (var value : description.list("documents")) {
+            if (!(value instanceof Json.Object document)) continue;
+            out.write(document.string("symbol", "") + "  " + document.string("title", "") + "\n");
+        }
     }
 
     private static void report(Effect effect, Writer err) throws IOException {

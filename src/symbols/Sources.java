@@ -91,6 +91,35 @@ public final class Sources {
         return Map.copyOf(classes);
     }
 
+    /// Reads the text at a source location the index recorded.
+    ///
+    /// A location is one of three shapes, and this reads all of them: a file
+    /// such as `src/a/B.java`, an entry in an archive such as
+    /// `vendor/x/x-sources.jar!/a/B.java` or `.../lib/src.zip!/java.base/java/lang/String.java`,
+    /// and `jrt:/...`, which names a class file and holds no source at all.
+    public static java.util.Optional<String> text(String location) {
+        if (location.isEmpty() || location.startsWith("jrt:")) return java.util.Optional.empty();
+        try {
+            var bang = location.indexOf("!/");
+            if (bang < 0) {
+                var file = Path.of(location);
+                return Files.isRegularFile(file) ? java.util.Optional.of(Files.readString(file)) : java.util.Optional.empty();
+            }
+            return Archives.of(Path.of(location.substring(0, bang)))
+                    .map(archive -> archive.getPath("/" + location.substring(bang + 2)))
+                    .filter(Files::isRegularFile)
+                    .map(entry -> {
+                        try {
+                            return Files.readString(entry);
+                        } catch (IOException unreadable) {
+                            return null;
+                        }
+                    });
+        } catch (IOException | RuntimeException unreadable) {
+            return java.util.Optional.empty();
+        }
+    }
+
     /// Whether this file holds symbols worth compiling: Java, and not an
     /// entrypoint.
     private static boolean documentable(Path path) {

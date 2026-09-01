@@ -49,10 +49,12 @@ static Command tuul() {
             .flag("all", "include non-public members")
             .flag("members", "describe everything the symbol holds, not only the symbol")
             .flag("recursive", "as --members, and into subpackages too")
+            .flag("documents", "print every document of a package in full, README included")
+            .flag("code", "print the source code of the symbol, member or document")
             .value("search", "search the project and selected dependencies; first use builds the index")
             .repeated("source-path", "where to look for sources (default: src)")
             .repeated("vendor", "where to look for jars (default: vendor)")
-            .optional("symbol", "the type to describe");
+            .optional("symbol", "what to describe: a.b.Type, a.b.Type#member, a.b or a.b/tutorial");
     for (var section : Docs.SECTIONS) docs = docs.flag(section, "print only the " + section + " section");
 
     return Command.named("tuul", "a toolchain for modern Java")
@@ -176,6 +178,8 @@ static Message docs(Json.Object values) {
             .with("all", values.flag("all"))
             .with("members", values.flag("members"))
             .with("recursive", values.flag("recursive"))
+            .with("documents", values.flag("documents"))
+            .with("code", values.flag("code"))
             .with("sections", Json.Array.of(sections))
             .with("sourcePath", Json.Array.of(values.list("source-path")))
             .with("vendorPath", Json.Array.of(values.list("vendor")));

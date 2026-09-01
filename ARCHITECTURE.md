@@ -59,7 +59,10 @@ browser. One consequence is not hidden by the proxy: an event stream holds a
 connection per client, and browsers allow about six per origin over HTTP/1.1.
 
 The application tuul dogfoods this with is a fast, interactive browser for a
-symbol index — the one `tuul docs` already builds.
+symbol index — the one `tuul docs` already builds. Both ask `symbols.Questions`,
+so the command line and the browser answer a name with one description, and
+both read `build/index.db`, which holds everything the index knows — including
+why a project that does not compile is answered from its last good build.
 
 These are all plain Java libraries. They are packages in one Java module,
 named `tuul`.

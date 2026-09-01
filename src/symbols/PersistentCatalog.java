@@ -83,6 +83,18 @@ final class PersistentCatalog implements Catalog {
         return store().map(kept -> kept.search(text, limit)).orElse(List.of());
     }
 
+    @Override
+    public synchronized List<Match> searchAny(String text, int limit) {
+        return store().map(kept -> kept.searchAny(text, limit)).orElse(List.of());
+    }
+
+    @Override
+    public synchronized List<String> problems() {
+        var kept = store();
+        if (kept.isEmpty()) return List.of();
+        return Index.problems(kept.get().problem("project", "sources"), kept.get().problem("project", "documents"));
+    }
+
     private List<Long> origins(Store kept) {
         var found = new ArrayList<Long>();
         kept.complete("project", "sources").ifPresent(found::add);

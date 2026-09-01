@@ -54,6 +54,27 @@ public final class ViewsTest {
         var failed = markup(Views.results(routes, Found.nothing().asking("...").failed("the index said no")));
         Check.that("a failure is a panel as well, so the page still works",
                 failed.startsWith("<turbo-frame id=\"results\""));
+
+        var grouped = markup(Views.results(routes, Found.nothing().asking("event stream").matching(List.of(
+                group("eventstream", List.of(match("eventstream.Parser", "CLASS"), match("eventstream.Event", "RECORD"))),
+                group("json.Json", List.of(match("json.Json#parse", "method")))), true)));
+        Check.equal("a group is named by what its results share", 2, count(grouped, "class=\"result-group\""));
+        Check.that("and the name is a link to its own page when no result is that page",
+                grouped.contains("href=\"/symbols/eventstream\""));
+        Check.that("but not when the group holds one result, which is the only place it offers",
+                !grouped.contains("href=\"/symbols/json.Json\"") && grouped.contains(">json.Json<"));
+        Check.equal("every result is still a result", 3, count(grouped, "itemtype=\"/Symbol\""));
+
+        var partial = markup(Views.results(routes, Found.nothing().asking("event stream").matching(List.of(
+                group("eventstream", List.of(match("eventstream.Parser", "CLASS")))), false)));
+        Check.that("an answer that holds only some of the words says so",
+                partial.contains("Nothing holds every word of event stream"));
+        Check.that("where an answer that holds every word says nothing",
+                !grouped.contains("Nothing holds every word"));
+    }
+
+    private static Json group(String prefix, List<Json> matches) {
+        return Json.Object.of().with("prefix", prefix).with("matches", Json.Array.of(matches));
     }
 
     /// Where a result goes, which is the only reason a result exists.

@@ -65,8 +65,28 @@ public interface Catalog extends AutoCloseable {
     /// Returns each non-empty source of symbols in display order.
     List<Root> roots();
 
-    /// Returns at most `limit` indexed matches in rank order.
+    /// Returns at most `limit` matches that hold every word, in rank order.
     List<Match> search(String text, int limit);
+
+    /// Returns at most `limit` matches that hold any of the words, in rank
+    /// order. A catalog that cannot tell the two apart answers [#search].
+    default List<Match> searchAny(String text, int limit) {
+        return search(text, limit);
+    }
+
+    /// Why an answer from this catalog may be out of date: one line per
+    /// origin whose last refresh failed, such as a project that does not
+    /// compile. Empty when every answer is current.
+    default List<String> problems() {
+        return List.of();
+    }
+
+    /// Reads the source text at a location a symbol names: a file, or an entry
+    /// inside an archive written as `archive!/entry`. Empty when there is no
+    /// source to read there.
+    default Optional<String> source(String location) {
+        return Sources.text(location);
+    }
 
     /// Releases resources held by the catalog. A catalog with no resources can
     /// keep this default.

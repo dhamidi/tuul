@@ -9,14 +9,26 @@ import json.Json;
 import markdown.Markdown;
 import markdown.Outline;
 
-/// One Diataxis document that belongs to a project package.
+/// One Markdown document that belongs to a project package: a Diataxis
+/// document, or the package's `README.md`.
 ///
 /// The filename supplies the kind, slug, and order. The first line supplies
 /// the title when it starts with `# `. The body stays as Markdown source.
 public record Document(String packageName, String kind, String slug, String title, String body, String source) {
 
+    /// The kind a package's `README.md` is filed under. A README is the long
+    /// overview of a package, so it comes first in a listing and has no slug.
+    public static final String README = "readme";
+
+    /// Every kind a document can be, in the order a package lists them. A name
+    /// such as `web/tutorial/first` is a document name only when its second
+    /// segment is one of these.
+    public static final List<String> KINDS = List.of(README, "tutorial", "howto", "reference", "guide");
+
     private static final Pattern NAME =
             Pattern.compile("^(tutorial|howto|reference|guide|explanation)(?:-(.+))?\\.md$");
+
+    private static final String README_FILE = "README.md";
 
     private static final Pattern ORDERED = Pattern.compile("^\\d+-(.+)$");
 
@@ -24,6 +36,7 @@ public record Document(String packageName, String kind, String slug, String titl
     /// filename that is not a package document.
     public static Optional<Name> name(Path path) {
         var filename = path.getFileName().toString();
+        if (filename.equals(README_FILE)) return Optional.of(new Name(README, "", filename));
         var matched = NAME.matcher(filename);
         if (!matched.matches()) return Optional.empty();
 
@@ -47,6 +60,7 @@ public record Document(String packageName, String kind, String slug, String titl
         if (!slug.isEmpty()) return slug.replace('-', ' ');
         return switch (kind) {
             case "howto" -> "How-to";
+            case README -> "README";
             default -> kind.substring(0, 1).toUpperCase(Locale.ROOT) + kind.substring(1);
         };
     }
@@ -80,8 +94,10 @@ public record Document(String packageName, String kind, String slug, String titl
     public record Section(String title, String anchor) {}
 
     /// Returns the object that `tuul docs --json` and the browser serve.
+    /// `symbol` is the name that asks for this document again.
     public Json.Object describe() {
         return Json.Object.of()
+                .with("symbol", symbol())
                 .with("kind", kind)
                 .with("package", packageName)
                 .with("slug", slug)
@@ -94,4 +110,25 @@ public record Document(String packageName, String kind, String slug, String titl
     public String symbol() {
         return packageName + "/" + kind + (slug.isEmpty() ? "" : "/" + slug);
     }
+
+    /// The Markdown after the title, from the first paragraph and no further.
+    /// A package without a `package-info.java` says what it is for here.
+    public String summary() {
+        var text = content().strip();
+        var end = text.indexOf("\n\n");
+        return end < 0 ? text : text.substring(0, end).strip();
+    }
+
+    /// Reads a document name written as `package/kind` or `package/kind/slug`.
+    /// Any other text, including a type name, returns empty.
+    public static Optional<Reference> reference(String symbol) {
+        var parts = symbol.split("/", -1);
+        if (parts.length < 2 || parts.length > 3 || parts[0].isBlank()) return Optional.empty();
+        if (!KINDS.contains(parts[1])) return Optional.empty();
+        return Optional.of(new Reference(parts[0], parts[1], parts.length == 3 ? parts[2] : ""));
+    }
+
+    /// A document named from outside: the package, the kind, and the slug,
+    /// which is empty for the introduction of a kind.
+    public record Reference(String packageName, String kind, String slug) {}
 }

@@ -18,8 +18,10 @@ public final class StoreTest {
         roundTrip();
         documents();
         staleness();
+        failures();
         publication();
         searching();
+        anyWord();
         constraints();
         rebuilds();
     }
@@ -138,6 +140,35 @@ public final class StoreTest {
         }
     }
 
+    /// A build that fails is written down against the stamp that failed, and
+    /// the rows of the last build that did not fail stay where they are.
+    private static void failures() throws IOException {
+        try (var store = Store.open(index("failures")).orElseThrow()) {
+            store.publish("project", "sources", "one", Map.of("invoicing.Invoice", invoice()), List.of());
+            store.fail("project", "sources", "two", "Invoice.java:3 ';' expected");
+
+            var failed = store.inspect("project", "sources", "two").orElseThrow();
+            Check.that("the stamp that failed is not fresh", !failed.fresh());
+            Check.that("but is known to have failed", failed.failed());
+            Check.equal("and why", "Invoice.java:3 ';' expected", failed.problem());
+            Check.that("the last good generation is still complete", failed.complete());
+            Check.that("and still answers", store.type(failed.id(), "invoicing.Invoice").isPresent());
+            Check.that("a third stamp has not failed, so it is worth trying",
+                    !store.inspect("project", "sources", "three").orElseThrow().failed());
+            Check.equal("a reader without a stamp can still read the problem",
+                    "Invoice.java:3 ';' expected", store.problem("project", "sources"));
+
+            store.publish("project", "sources", "two", Map.of("invoicing.Ledger", invoice()), List.of());
+            Check.that("a build that works forgets the failure",
+                    !store.inspect("project", "sources", "two").orElseThrow().failed()
+                            && store.problem("project", "sources").isEmpty());
+
+            store.fail("project", "documents", "one", "two files name one document");
+            Check.that("an origin that never published can still fail, so the failure has a row",
+                    store.inspect("project", "documents", "one").orElseThrow().failed());
+        }
+    }
+
     /// A freshness check is not publication. Readers keep the old complete
     /// generation until all replacement rows and their stamp commit together.
     private static void publication() throws IOException {
@@ -202,6 +233,37 @@ public final class StoreTest {
             store.publish("project", "sources", "two", Map.of(), List.of());
             Check.that("and forgetting a type forgets it from the search as well",
                     store.search("fixed amount", 5).isEmpty());
+        }
+    }
+
+    /// Every word, or failing that any word — and two words that name one
+    /// symbol when they are written together.
+    private static void anyWord() throws IOException {
+        try (var store = Store.open(index("any-word")).orElseThrow()) {
+            var parser = new TypeInfo("eventstream.Parser", TypeInfo.Kind.CLASS, List.of("public"), List.of(), "",
+                    List.of(), List.of(), List.of(), List.of(), List.of(), "Reads events.", List.of(),
+                    "src/eventstream/Parser.java", 3);
+            store.publish("project", "sources", "one",
+                    Map.of("invoicing.Invoice", invoice(), "eventstream.Parser", parser), List.of());
+            Check.that("every word has to be there", store.search("invoice kubernetes", 5).isEmpty());
+            Check.equal("unless any word is asked for",
+                    "invoicing.Invoice", store.searchAny("invoice kubernetes", 5).getFirst().symbol());
+            Check.that("and any word still finds nothing when no word is there",
+                    store.searchAny("kubernetes", 5).isEmpty());
+            Check.equal("two words written together name the symbol they spell",
+                    "eventstream.Parser", store.search("event stream", 5).getFirst().symbol());
+            Check.equal("every word is the tokens and the tokens joined",
+                    "(\"event\" \"stream\") OR \"eventstream\"", Store.query("event stream"));
+            Check.equal("any word is the same with OR between them",
+                    "(\"event\" OR \"stream\") OR \"eventstream\"", Store.anyQuery("event stream"));
+            Check.equal("and one word is one word", "\"event\"", Store.query("event"));
+
+            var readme = new Document("invoicing", Document.README, "", "Invoicing",
+                    "# Invoicing\n\nMoney owed.\n", "src/invoicing/README.md");
+            store.publish("project", "documents", "one", Map.of(), List.of(readme));
+            var origin = store.inspect("project", "documents", "one").orElseThrow();
+            Check.equal("a README is a document the schema takes", readme,
+                    store.document(origin.id(), "invoicing", Document.README, "").orElseThrow());
         }
     }
 

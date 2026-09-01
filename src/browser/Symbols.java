@@ -6,8 +6,8 @@ import application.Step;
 import java.util.List;
 import json.Json;
 import json.Pointer;
-import symbols.Docs;
 import symbols.Catalog;
+import symbols.Questions;
 
 /// What the browser knows while it answers one request, and how it comes to
 /// know it.
@@ -64,28 +64,44 @@ public final class Symbols {
         }
     }
 
-    /// What the browser knows about a search: what was typed, what matched, and
-    /// what went wrong.
-    public record Found(String query, List<Json> matches, String problem) {
+    /// What the browser knows about a search: what was typed, what matched
+    /// grouped the way [Questions#search] groups it, whether every word was
+    /// held, and what went wrong.
+    public record Found(String query, List<Json> groups, boolean every, String problem) {
 
         public static Found nothing() {
-            return new Found("", List.of(), "");
+            return new Found("", List.of(), true, "");
         }
 
         public boolean asked() {
             return !query.isBlank();
         }
 
+        /// Every match, in rank order across the groups.
+        public List<Json> matches() {
+            return groups.stream()
+                    .filter(Json.Object.class::isInstance)
+                    .flatMap(group -> ((Json.Object) group).list("matches").stream())
+                    .toList();
+        }
+
+        public Found matching(List<Json> groups, boolean every) {
+            return new Found(query, groups, every, "");
+        }
+
+        /// Matches with nothing to group them by: one unnamed group, which is
+        /// what a test that only cares about rows hands in.
         public Found matching(List<Json> matches) {
-            return new Found(query, matches, "");
+            if (matches.isEmpty()) return matching(List.of(), true);
+            return matching(List.of(Json.Object.of().with("prefix", "").with("matches", Json.Array.of(matches))), true);
         }
 
         public Found asking(String query) {
-            return new Found(query, List.of(), problem);
+            return new Found(query, List.of(), true, problem);
         }
 
         public Found failed(String problem) {
-            return new Found(query, List.of(), problem);
+            return new Found(query, List.of(), true, problem);
         }
     }
 
@@ -118,7 +134,7 @@ public final class Symbols {
     }
 
     public static Step<Found> matched(Found state, Message message) {
-        return Step.of(state.matching(message.body().find("/matches").map(Json::list).orElse(List.of())));
+        return Step.of(state.matching(message.list("groups"), message.body().get("every") == null || message.flag("every")));
     }
 
     public static Step<Found> unsearched(Found state, Message message) {
@@ -134,40 +150,27 @@ public final class Symbols {
                 emit.emit(Message.error("documentation is being indexed"));
                 return;
             }
-            emit.emit(index.lookup(name)
-                    .map(type -> Message.of(FOUND, Docs.describe(type, false,
-                            type.kind() == symbols.TypeInfo.Kind.PACKAGE ? index.documents(type.name()) : List.of())))
+            emit.emit(Questions.symbol(index, name, Questions.Asking.SYMBOL)
+                    .map(description -> Message.of(FOUND, description))
                     .orElseGet(() -> Message.of(MISSING).with("symbol", name)));
         };
     }
 
-    /// Searches the index, and answers each symbol once.
-    ///
-    /// Three overloads of `of` are three members and one place: a result names
-    /// a symbol and links to where it is written, and the index knows nothing
-    /// about parameters, so three rows would render as the same line three
-    /// times pointing at the same anchor.
+    /// Searches the index the way `tuul docs --search` does: each symbol
+    /// once, grouped by what it belongs to, and any word when every word
+    /// finds nothing.
     public static Effect.Handler searching(Catalog index, int limit) {
         return (effect, emit) -> {
             var query = effect.string("query", "");
             if (query.isEmpty()) {
-                emit.emit(Message.of(MATCHED).with("matches", Json.Array.of(List.of())));
+                emit.emit(Message.of(MATCHED).with("groups", Json.Array.of(List.of())).with("every", true));
                 return;
             }
             if (!index.ready()) {
                 emit.emit(Message.error("documentation is being indexed"));
                 return;
             }
-            var seen = new java.util.LinkedHashSet<String>();
-            var matches = index.search(query, limit).stream()
-                    .filter(match -> seen.add(match.symbol()))
-                    .map(match -> (Json) Json.Object.of()
-                            .with("symbol", match.symbol())
-                            .with("kind", match.kind())
-                            .with("modifiers", match.modifiers())
-                            .with("doc", match.doc()))
-                    .toList();
-            emit.emit(Message.of(MATCHED).with("matches", Json.Array.of(matches)));
+            emit.emit(Message.of(MATCHED, Questions.search(index, query, limit)));
         };
     }
 

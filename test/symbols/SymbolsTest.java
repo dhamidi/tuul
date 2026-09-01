@@ -22,6 +22,7 @@ public final class SymbolsTest {
 
     public static void run() throws IOException {
         documentNames();
+        spans();
         controlledCompilation();
         joinsCompilation();
         markdownDoesNotCompile();
@@ -35,7 +36,16 @@ public final class SymbolsTest {
         Check.equal("an order prefix is not part of a document slug", "first-script",
                 Document.name(Path.of("tutorial-01-first-script.md")).orElseThrow().slug());
         Check.that("an unrelated or uppercase Markdown file is not a package document",
-                Document.name(Path.of("README.md")).isEmpty() && Document.name(Path.of("Tutorial.md")).isEmpty());
+                Document.name(Path.of("NOTES.md")).isEmpty() && Document.name(Path.of("Tutorial.md")).isEmpty());
+        Check.equal("a README is the package's readme document, with no slug",
+                new Document.Name(Document.README, "", "README.md"), Document.name(Path.of("README.md")).orElseThrow());
+        Check.that("spelled that way and no other", Document.name(Path.of("Readme.md")).isEmpty());
+        Check.equal("a document name asks for a document", new Document.Reference("web", "tutorial", "first"),
+                Document.reference("web/tutorial/first").orElseThrow());
+        Check.that("and a type name does not", Document.reference("web.ui.Html").isEmpty()
+                && Document.reference("web/Html").isEmpty());
+        Check.equal("a README summarises itself with its first paragraph", "Money owed.",
+                new Document("a", Document.README, "", "A", "# A\n\nMoney owed.\n\nMore.\n", "").summary());
         Check.equal("line 1 supplies a document title", "First script",
                 Document.title("# First script\n\nStart here.\n", "tutorial", "first-script"));
         Check.equal("a slug supplies a missing title", "first script",
@@ -46,6 +56,31 @@ public final class SymbolsTest {
                 List.of(new Document.Section("Start here", "start-here")), document.sections());
         Check.that("a document title is not part of its rendered content",
                 document.content().startsWith("\n## Start here"));
+    }
+
+    /// Where a declaration is written, line by line, so `--code` can print it.
+    private static void spans() {
+        var source = """
+                package a;
+                /// A thing.
+                public class Thing {
+                    /// Counts.
+                    public int count() { return 1; }
+                    public int count(int by) { return by; }
+                    public static class Inner { public int x; }
+                }
+                """;
+        Check.equal("a member's span starts at its comment and ends at its body",
+                List.of(new Javadoc.Span(4, 5), new Javadoc.Span(6, 6)),
+                Javadoc.spans(source, "Thing.java", "Thing", "count"));
+        Check.equal("a nested type has a span of its own",
+                List.of(new Javadoc.Span(7, 7)), Javadoc.spans(source, "Thing.java", "Thing.Inner", ""));
+        Check.equal("and so does the type, comment included",
+                List.of(new Javadoc.Span(2, 8)), Javadoc.spans(source, "Thing.java", "Thing", ""));
+        Check.that("a name the file does not declare has none",
+                Javadoc.spans(source, "Thing.java", "Thing", "nothing").isEmpty());
+        Check.equal("a span reads its lines back out of the source",
+                "    /// Counts.\n    public int count() { return 1; }\n", new Javadoc.Span(4, 5).of(source));
     }
 
     public static void integration() throws IOException {
@@ -64,6 +99,8 @@ public final class SymbolsTest {
         vendored();
         dependencySearch();
         remembers();
+        broken();
+        stale();
         documentCollisions();
         documentStamp();
         entrypoints();
@@ -94,8 +131,9 @@ public final class SymbolsTest {
                     index.lookup("symbols.SymbolsTest.Fixture").isPresent());
             Check.that("the catalog compiles its project once", index.names().contains("symbols.SymbolsTest$Fixture"));
             Check.equal("the injected compiler ran once", 1, calls.get());
-            Check.equal("the index discovers only package documents", List.of("first"),
-                    index.documents("symbols").stream().map(Document::slug).toList());
+            Check.equal("the index discovers package documents, the README first",
+                    List.of(Document.README, "tutorial"),
+                    index.documents("symbols").stream().map(Document::kind).toList());
         }
     }
 
@@ -254,8 +292,8 @@ public final class SymbolsTest {
     }
 
     private static void documents(Index index) {
-        Check.equal("a package keeps its documents in filename order",
-                List.of("guide", "tutorial"),
+        Check.equal("a package keeps its documents in filename order, the README first",
+                List.of(Document.README, "guide", "tutorial"),
                 index.documents("invoicing").stream().map(Document::kind).toList());
         Check.equal("an ordered filename loses its order prefix", "reasons",
                 index.document("invoicing", "guide", "reasons").orElseThrow().slug());
@@ -273,11 +311,12 @@ public final class SymbolsTest {
         Files.writeString(source.resolve("guide.md"), "# Guide\n");
         Files.writeString(source.resolve("explanation.md"), "# Explanation\n");
         try (var index = Index.of(List.of(root), List.of(), kept())) {
-            index.documents("collision");
-            Check.that("two document files cannot normalize to one identity", false);
-        } catch (IllegalStateException collision) {
-            Check.that("a document collision names both source files",
-                    collision.getMessage().contains("guide.md") && collision.getMessage().contains("explanation.md"));
+            Check.that("two document files that normalize to one identity are no documents at all",
+                    index.documents("collision").isEmpty());
+            Check.that("and the types are still answered", index.lookup("collision.One").isPresent());
+            var problem = String.join("\n", index.problems());
+            Check.that("the collision is a problem the reader is told about, naming both files",
+                    problem.contains("guide.md") && problem.contains("explanation.md"));
         }
     }
 
@@ -551,6 +590,77 @@ public final class SymbolsTest {
         try (var index = Index.of(List.of(root), List.of(), kept)) {
             Check.that("and a source that is gone takes its symbols with it",
                     index.lookup("invoicing.Invoice").isEmpty());
+        }
+    }
+
+    /// A project that does not compile is answered from the last build that
+    /// did, and the same broken tree is not compiled twice.
+    private static void broken() throws IOException {
+        var root = sources();
+        var file = root.resolve("invoicing/Invoice.java");
+        var indexFile = root.resolve("build/index.db");
+        var calls = new AtomicInteger();
+        Compiler compiler = (request, classes) -> {
+            calls.incrementAndGet();
+            return Compiler.system().compile(request, classes);
+        };
+        try (var index = Index.of(List.of(root), List.of(), indexFile, compiler)) {
+            Check.that("a first lookup indexes the project", index.lookup("invoicing.Invoice").isPresent());
+            Check.that("and nothing was written beside the index to do it",
+                    Files.notExists(root.resolve("build/.tuul/docs")));
+        }
+        Files.writeString(file, Files.readString(file) + "\nthis is not java\n");
+        try (var index = Index.of(List.of(root), List.of(), indexFile, compiler)) {
+            Check.that("a project that does not compile still answers about itself",
+                    index.lookup("invoicing.Invoice").isPresent());
+            Check.that("and about the JDK", index.lookup("java.lang.String").isPresent());
+            Check.that("and its packages", index.lookup("invoicing").isPresent());
+            Check.that("and its roots", !index.roots().isEmpty());
+            Check.that("and to a search", !index.search("invoice", 5).isEmpty());
+            Check.that("and says that the answers are the last good ones",
+                    index.problems().size() == 1 && index.problems().getFirst().contains("does not compile"));
+            Check.that("with javac's words", index.problems().getFirst().contains("Invoice.java"));
+            Check.equal("having tried javac once", 2, calls.get());
+        }
+        try (var index = Index.of(List.of(root), List.of(), indexFile, compiler)) {
+            index.lookup("invoicing.Invoice");
+            Check.equal("the same broken tree is not compiled again", 2, calls.get());
+            Check.that("and the problem is still reported", !index.problems().isEmpty());
+        }
+        try (var catalog = Index.catalog(indexFile)) {
+            Check.that("a reader with no sources sees the same problem",
+                    !catalog.problems().isEmpty() && catalog.lookup("invoicing.Invoice").isPresent());
+        }
+        Files.writeString(file, Files.readString(file).replace("\nthis is not java\n", "\n// fixed\n"));
+        try (var index = Index.of(List.of(root), List.of(), indexFile, compiler)) {
+            Check.that("a fix is compiled", index.lookup("invoicing.Invoice").isPresent());
+            Check.equal("once", 3, calls.get());
+            Check.that("and the problem is gone", index.problems().isEmpty());
+        }
+    }
+
+    /// A question about a name the project cannot hold never waits for javac,
+    /// however stale the project is.
+    private static void stale() throws IOException {
+        var root = sources();
+        var indexFile = root.resolve("build/index.db");
+        var calls = new AtomicInteger();
+        Compiler compiler = (request, classes) -> {
+            calls.incrementAndGet();
+            return Compiler.system().compile(request, classes);
+        };
+        try (var index = Index.of(List.of(root), List.of(), indexFile, compiler)) {
+            index.lookup("invoicing.Invoice");
+        }
+        var file = root.resolve("invoicing/Invoice.java");
+        Files.writeString(file, Files.readString(file) + "\n// edited\n");
+        try (var index = Index.of(List.of(root), List.of(), indexFile, compiler)) {
+            Check.that("a JDK symbol is answered", index.lookup("java.lang.String").isPresent());
+            Check.equal("without compiling the edited project", 1, calls.get());
+            Check.that("and a name nobody has is answered", index.lookup("nowhere.Nothing").isEmpty());
+            Check.equal("by compiling, since the project could have added it", 2, calls.get());
+            Check.that("a project symbol is current", index.lookup("invoicing.Invoice").isPresent());
+            Check.equal("from that same compile", 2, calls.get());
         }
     }
 
@@ -927,54 +1037,72 @@ public final class SymbolsTest {
 
     private static final class Fixture {}
 
+    /// A store that keeps its generations apart the way the real one does:
+    /// one set of rows per origin, each with its own stamp.
     private static final class MemoryStore implements IndexStore {
 
-        private final Map<String, TypeInfo> types = new LinkedHashMap<>();
-        private final List<symbols.Document> documents = new java.util.ArrayList<>();
-        private String sourceStamp = "";
-        private String documentStamp = "";
-        private boolean sourceComplete;
-        private boolean documentComplete;
+        private final Map<String, Generation> origins = new LinkedHashMap<>();
+
+        private static final class Generation {
+            private final long id;
+            private String stamp = "";
+            private boolean complete;
+            private String attempted = "";
+            private String problem = "";
+            private final Map<String, TypeInfo> types = new LinkedHashMap<>();
+            private final List<symbols.Document> documents = new java.util.ArrayList<>();
+
+            private Generation(long id) {
+                this.id = id;
+            }
+        }
+
+        private Generation origin(String kind, String location) {
+            return origins.computeIfAbsent(kind + "\n" + location, key -> new Generation(origins.size() + 1));
+        }
+
+        private java.util.Optional<Generation> held(long origin) {
+            return origins.values().stream().filter(generation -> generation.id == origin).findFirst();
+        }
 
         @Override
         public java.util.Optional<Snapshot> inspect(String kind, String location, String current) {
-            var kept = location.equals("documents") ? documentStamp : sourceStamp;
-            if (kept.isEmpty()) return java.util.Optional.empty();
-            var done = location.equals("documents") ? documentComplete : sourceComplete;
-            return java.util.Optional.of(new Snapshot(1, kept.equals(current), done));
+            var found = origins.get(kind + "\n" + location);
+            if (found == null) return java.util.Optional.empty();
+            return java.util.Optional.of(new Snapshot(found.id, found.stamp.equals(current), found.complete,
+                    found.attempted.equals(current) ? found.problem : ""));
         }
 
         @Override
         public java.util.Optional<TypeInfo> type(long origin, String name) {
-            return java.util.Optional.ofNullable(types.get(name));
+            return held(origin).map(generation -> generation.types.get(name));
         }
 
         @Override
         public java.util.Optional<symbols.Document> document(
                 long origin, String packageName, String kind, String slug) {
-            return documents.stream()
-                    .filter(document -> document.packageName().equals(packageName))
-                    .filter(document -> document.kind().equals(kind))
+            return documents(origin, packageName, kind).stream()
                     .filter(document -> document.slug().equals(slug))
                     .findFirst();
         }
 
         @Override
         public List<symbols.Document> documents(long origin, String packageName, String kind) {
-            return documents.stream()
+            return held(origin).map(generation -> generation.documents.stream()
                     .filter(document -> document.packageName().equals(packageName))
                     .filter(document -> kind.isEmpty() || document.kind().equals(kind))
-                    .toList();
+                    .toList()).orElse(List.of());
         }
 
         @Override
         public List<String> names(long origin) {
-            return List.copyOf(types.keySet());
+            return held(origin).map(generation -> List.copyOf(generation.types.keySet())).orElse(List.of());
         }
 
         @Override
         public List<String> names(long origin, TypeInfo.Kind kind) {
-            return types.values().stream().filter(type -> type.kind() == kind).map(TypeInfo::name).sorted().toList();
+            return held(origin).map(generation -> generation.types.values().stream()
+                    .filter(type -> type.kind() == kind).map(TypeInfo::name).sorted().toList()).orElse(List.of());
         }
 
         @Override
@@ -985,22 +1113,34 @@ public final class SymbolsTest {
         @Override
         public void publish(String kind, String location, String current,
                 Map<String, TypeInfo> written, List<symbols.Document> found) {
-            if (location.equals("documents")) {
-                documentStamp = current;
-                documents.clear();
-                documents.addAll(found);
-                documentComplete = true;
-                return;
-            }
-            sourceStamp = current;
-            types.clear();
-            types.putAll(written);
-            sourceComplete = true;
+            var generation = origin(kind, location);
+            generation.stamp = current;
+            generation.attempted = "";
+            generation.problem = "";
+            generation.types.clear();
+            generation.types.putAll(written);
+            generation.documents.clear();
+            generation.documents.addAll(found);
+            generation.complete = true;
         }
 
         @Override
         public void publishIncremental(String kind, String location, String current, Map<String, TypeInfo> written) {
-            types.putAll(written);
+            var generation = origin(kind, location);
+            if (!generation.stamp.equals(current)) {
+                generation.types.clear();
+                generation.documents.clear();
+                generation.stamp = current;
+                generation.complete = false;
+            }
+            generation.types.putAll(written);
+        }
+
+        @Override
+        public void fail(String kind, String location, String current, String problem) {
+            var generation = origin(kind, location);
+            generation.attempted = current;
+            generation.problem = problem;
         }
 
         @Override
