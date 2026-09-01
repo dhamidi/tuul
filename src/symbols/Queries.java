@@ -9,34 +9,36 @@ import java.util.Optional;
 import java.util.Set;
 import json.Json;
 
-/// The questions `tuul docs` and `tuul browse` both answer, answered once.
+/// Answers the questions `tuul docs` and `tuul browse` both need to answer.
 ///
-/// A name a reader writes is one of four things: a symbol such as
-/// `json.Json`, a member of one such as `json.Json#parse`, a package document
-/// such as `web/tutorial`, or nothing at all. The command line and the browser
-/// used to tell them apart separately and describe them separately, and two
-/// descriptions of one thing drift. This is the one place that reads a name,
-/// asks the [Catalog], and builds the JSON both of them print.
+/// A name a reader writes is a symbol such as `json.Json`, a member such as
+/// `json.Json#parse`, a package document such as `web/tutorial`, or nothing
+/// the catalog knows. The command line and the browser used to parse and
+/// describe a name separately, and their two descriptions of the same name
+/// could drift apart. This class reads a name, asks the [Catalog], and
+/// builds the JSON that both of them print.
 ///
-/// Every answer is a [Json.Object] because a message is JSON, and because it
-/// is the same object `--json` prints: the text and the page are renderings of
-/// it and cannot add a fact it does not hold.
-public final class Questions {
+/// Every answer is a [Json.Object]. A message is JSON, and `--json` prints
+/// this same object. The text output and the browser page both render it,
+/// so neither can show a fact this object does not hold.
+public final class Queries {
 
-    /// The search results one page or one command answers with.
+    /// The default limit on how many matches [#search] returns.
     public static final int MATCHES = 25;
 
-    private Questions() {}
+    private Queries() {}
 
-    /// What a caller wants to see with a symbol beyond the symbol itself.
+    /// What a caller wants to see with a symbol, beyond the symbol itself.
     ///
     /// `all` includes private members. `members` describes everything a
-    /// package or a type holds. `recursive` goes into subpackages as well.
-    /// `documents` carries the body of every package document rather than its
-    /// title, which is what a reader who wants to read the package asks for.
+    /// package or a type holds. `documents` carries the full body of each
+    /// package document instead of just its title.
+    ///
+    /// `recursive` also asks into subpackages. Setting `recursive` sets
+    /// `members` too, since there is nothing to recurse into otherwise.
     public record Asking(boolean all, boolean members, boolean recursive, boolean documents) {
 
-        /// The symbol and nothing more, which is what a page shows.
+        /// Asks for the symbol alone, the way a page shows it.
         public static final Asking SYMBOL = new Asking(false, false, false, false);
 
         public Asking {
@@ -44,8 +46,11 @@ public final class Questions {
         }
     }
 
-    /// Answers a name of any shape, or empty when the catalog has nothing by
-    /// that name.
+    /// Answers a name of any shape: a package document, a member, or a
+    /// symbol.
+    ///
+    /// This method tries each shape in that order and returns the first
+    /// match. It returns empty when the catalog has nothing by that name.
     public static Optional<Json.Object> answer(Catalog index, String name, Asking asking) {
         var document = Document.reference(name);
         if (document.isPresent()) return document(index, document.get());
@@ -54,14 +59,20 @@ public final class Questions {
         return symbol(index, name, asking);
     }
 
-    /// One symbol: a type, a package, or a module, with what was asked for.
+    /// Answers one symbol: a type, a package, or a module.
+    ///
+    /// The result includes what `asking` asked for beyond the symbol itself.
     public static Optional<Json.Object> symbol(Catalog index, String name, Asking asking) {
         return index.lookup(name).map(type -> describe(index, type, asking, new LinkedHashSet<>()));
     }
 
-    /// The members of one type that share a name: every overload of a method,
-    /// or a field. The answer is the type's description holding only them and
-    /// naming the member, so a renderer knows what was asked.
+    /// Answers the members of one type that share a name: every overload of
+    /// a method, or a field.
+    ///
+    /// The result is the type's description holding only those members, with
+    /// `member` set to the name asked for. A renderer reads `member` to know
+    /// what was asked. Returns empty when `member` is blank, when the type
+    /// does not exist, or when the type has no member by that name.
     public static Optional<Json.Object> member(Catalog index, String typeName, String member, boolean all) {
         if (member.isEmpty()) return Optional.empty();
         var found = index.lookup(typeName);
@@ -82,20 +93,24 @@ public final class Questions {
                 .toList();
     }
 
-    /// One package document, or the introduction of a kind.
+    /// Answers one package document, or the introduction of a kind when the
+    /// caller asked for a kind with no slug.
     ///
-    /// A kind without an introduction answers with the list of the documents
-    /// of that kind, so `web/reference` is never a dead end when there are
-    /// reference documents. The answer names its siblings under `documents`
-    /// and every document of the package under `links`, which is what a page
-    /// needs to resolve a relative link to another file in the package.
+    /// A kind with no document of its own still answers, with a synthesized
+    /// title and the list of documents of that kind under `documents`, so
+    /// `web/reference` is never a dead end when reference documents exist.
+    /// `links` holds every document of the package, which a page needs to
+    /// resolve a relative link to another file in the package.
+    ///
+    /// Returns empty when the reference names a slug that does not exist, or
+    /// when the kind has no documents at all.
     public static Optional<Json.Object> document(Catalog index, Document.Reference reference) {
         var page = index.documentPage(reference.packageName(), reference.kind(), reference.slug());
         var siblings = page.documents().stream().filter(document -> document.kind().equals(reference.kind())).toList();
         var selected = page.selected();
         if (selected.isEmpty() && (!reference.slug().isEmpty() || siblings.isEmpty())) return Optional.empty();
-        var listed = Json.Array.of(siblings.stream().map(Questions::linked).toList());
-        var links = Json.Array.of(page.documents().stream().map(Questions::linked).toList());
+        var listed = Json.Array.of(siblings.stream().map(Queries::linked).toList());
+        var links = Json.Array.of(page.documents().stream().map(Queries::linked).toList());
         return Optional.of(selected
                 .map(document -> document.describe().with("documents", listed).with("links", links))
                 .orElseGet(() -> Json.Object.of()
@@ -108,25 +123,37 @@ public final class Questions {
                         .with("links", links)));
     }
 
-    /// A document as a link to it: its identity and its file name, without
-    /// its body.
+    /// Describes a document as a link to it.
+    ///
+    /// The result holds the document's identity and file name, and drops
+    /// the body.
     private static Json linked(Document document) {
         return document.describe().without("doc").without("source")
                 .with("file", java.nio.file.Path.of(document.source()).getFileName().toString());
     }
 
-    /// What there is, before anything has been named.
+    /// Answers what there is, before a caller has named anything: every root
+    /// and what it holds.
     public static Json.Object roots(Catalog index) {
         return Docs.describe(index.roots());
     }
 
-    /// The source text of what a description describes.
+    /// Returns the source text that a description describes.
     ///
-    /// A type is answered with its whole file, because the imports are part of
-    /// reading it; a nested type or a member with its own declaration and the
-    /// comment above it; a package with its `package-info.java`; a document
-    /// with its Markdown. Empty when the catalog knows no source, which is the
-    /// case for a jar that shipped without one.
+    /// A document description returns its own `doc` field, since a
+    /// document's source is the Markdown already inside the description. A
+    /// package or a module returns the whole text of its file. A top-level
+    /// type with no member asked for also returns its whole file, because
+    /// the imports are part of reading it.
+    ///
+    /// A nested type, or a member, returns only its own declaration and the
+    /// comment above it. When a member has more than one overload, each
+    /// overload's span joins the others with a newline between them.
+    ///
+    /// Returns empty when the catalog knows no source for the location,
+    /// which is the case for a jar that shipped without one. Returns empty
+    /// when a member was asked for and the catalog finds no declaration for
+    /// it.
     public static Optional<String> source(Catalog index, Json.Object description) {
         if (description.get("doc") instanceof Json.Str(var body) && description.get("package") instanceof Json.Str
                 && description.get("title") instanceof Json.Str) {
@@ -151,9 +178,10 @@ public final class Questions {
         return Optional.of(out.toString());
     }
 
-    /// The type as it is written inside its file — `Json.Object` for
-    /// `json.Json.Object` in `Json.java`. The file says where the package
-    /// ends, which the dotted name alone cannot.
+    /// Returns the type as it is written inside its file.
+    ///
+    /// `json.Json.Object` becomes `Json.Object` in `Json.java`. The filename
+    /// says where the package ends, which the dotted name alone cannot say.
     private static String written(String name, String location) {
         var file = file(location);
         var outer = file.endsWith(".java") ? file.substring(0, file.length() - ".java".length()) : file;
@@ -168,18 +196,19 @@ public final class Questions {
         return slash < 0 ? location : location.substring(slash + 1);
     }
 
-    /// What matches some words, grouped by what it belongs to.
+    /// Answers what matches some words, grouped by what each match belongs
+    /// to.
     ///
-    /// Every word must match. When nothing holds all of them, whatever holds
-    /// any of them answers instead and `every` says so: a lead beats a dead
-    /// end. Each symbol appears once, since overloads are one place.
+    /// Every word must match by default. When nothing matches every word,
+    /// this method answers with whatever matches any word instead, and sets
+    /// `every` to false to say so. Each symbol appears once, even when it
+    /// matches through more than one overload.
     ///
-    /// The matches are grouped by the package they are filed under, in the
-    /// order the best match of each group ranks, and a group is named by the
-    /// longest prefix its matches share. Searching for `event stream` then
-    /// shows `eventstream` above the types and members that mention it — a
-    /// name a reader can ask about next, which a flat list of members never
-    /// offered.
+    /// Matches are grouped by the package they are filed under. Groups
+    /// appear in the order their best match ranks. A group's name is the
+    /// longest prefix its matches' pages share. Searching for `event
+    /// stream` shows `eventstream` as a group name above the types and
+    /// members that mention it, a name the reader can search next.
     public static Json.Object search(Catalog index, String text, int limit) {
         var every = true;
         var matches = distinct(index.search(text, limit));
@@ -204,13 +233,16 @@ public final class Questions {
         var groups = new ArrayList<Json>();
         grouped.forEach((packageName, held) -> groups.add(Json.Object.of()
                 .with("prefix", prefix(held))
-                .with("matches", Json.Array.of(held.stream().map(Questions::describe).toList()))));
+                .with("matches", Json.Array.of(held.stream().map(Queries::describe).toList()))));
         return groups;
     }
 
-    /// The package a match is filed under. A document names it; a symbol's
-    /// leading lowercase segments are it, which is the convention every Java
-    /// package on disk follows.
+    /// Returns the package a match is filed under.
+    ///
+    /// A document's symbol already names its package. A type or a member
+    /// has no separate package field, so this method takes the leading
+    /// lowercase segments of its symbol, following the convention every
+    /// Java package uses on disk.
     static String packageOf(Catalog.Match match) {
         var page = page(match.symbol());
         if (match.symbol().contains("/")) return page;
@@ -222,8 +254,8 @@ public final class Questions {
         return String.join(".", kept);
     }
 
-    /// The symbol that has a page: the type of a member, the package of a
-    /// document, and the symbol itself otherwise.
+    /// Returns the symbol that owns a page: the type of a member, the
+    /// package of a document, or the symbol itself otherwise.
     private static String page(String symbol) {
         var slash = symbol.indexOf('/');
         if (slash >= 0) return symbol.substring(0, slash);
@@ -231,9 +263,12 @@ public final class Questions {
         return hash < 0 ? symbol : symbol.substring(0, hash);
     }
 
-    /// The name a group is filed under: the longest dotted prefix its pages
-    /// share, or the package when they are all one page — a lone type is
-    /// better introduced by its package than by itself.
+    /// Returns the name a group is filed under.
+    ///
+    /// The name is the longest dotted prefix that the matches' pages share.
+    /// When every match shares one page, the name is that page's package
+    /// instead, since a package introduces a lone type better than the type
+    /// introduces itself.
     static String prefix(List<Catalog.Match> matches) {
         var pages = new LinkedHashSet<String>();
         for (var match : matches) pages.add(page(match.symbol()));
@@ -264,7 +299,7 @@ public final class Questions {
                 .with("source", match.source());
     }
 
-    /// One symbol, and what it holds when the caller asked for that.
+    /// Describes one symbol, with its members when `asking` asked for them.
     private static Json.Object describe(Catalog index, TypeInfo type, Asking asking, Set<String> seen) {
         var documents = type.kind() == TypeInfo.Kind.PACKAGE ? index.documents(type.name()) : List.<Document>of();
         var description = Docs.describe(type, asking.all(), documents);
@@ -277,15 +312,13 @@ public final class Questions {
         return description.with("members", Json.Array.of(members(index, description, asking, seen)));
     }
 
-    /// Every symbol a package or a type holds, described the same way it is.
+    /// Describes every symbol a package or a type holds.
     ///
-    /// Reading a package took a question per type in it, which is the dominant
-    /// cost of this tool for anybody getting oriented — a person or an agent.
-    /// One question answers for all of them.
-    ///
-    /// A subpackage is skipped unless `recursive` is set, because `web` holds
-    /// eight of them and a reader who asked about `web` asked about `web`. The
-    /// `seen` set makes a name appear once however many ways it is reached.
+    /// Each member gets the same description a direct lookup would give it.
+    /// A subpackage is skipped unless `recursive` is set. `web` holds eight
+    /// subpackages, and a caller who asks about `web` does not also want
+    /// all of them expanded by default. The `seen` set makes a name appear
+    /// once, however many ways this method reaches it.
     private static List<Json> members(Catalog index, Json.Object description, Asking asking, Set<String> seen) {
         var described = new ArrayList<Json>();
         for (var value : description.list("nested")) {

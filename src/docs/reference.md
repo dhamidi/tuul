@@ -7,9 +7,9 @@ tuul docs [symbol] [flags]
 tuul docs --search <text> [--json]
 ```
 
-`tuul docs` with no symbol lists the roots: the project's packages, the
-packages of the selected dependencies, and the JDK modules that export
-something. Each name in the list is a name you can ask for.
+`tuul docs` with no symbol lists the roots. The roots are the project's
+packages, the packages of the selected dependencies, and the JDK modules
+that export something. Each name in the list is a name you can ask for.
 
 ## Name shapes
 
@@ -45,7 +45,7 @@ A document name is `package/kind` or `package/kind/slug`. The kinds are
 
 ## Source code
 
-`--code` prints source text and nothing else, so the output compiles or
+`--code` prints source text and nothing else. The output then compiles or
 renders as it was written.
 
 | Asked for | Printed |
@@ -59,13 +59,13 @@ renders as it was written.
 The source of a project type is the file under `src/`. The source of a
 dependency type is an entry in its `-sources.jar`. The source of a JDK type
 is an entry in `lib/src.zip`. A jar with no source archive has no source to
-print. The command then exits with status 1 and says `no source for <name>`.
+print. The command then exits with status 1. It prints `no source for <name>`.
 
 ## Search
 
 `tuul docs --search <text>` splits the text into words. It finds symbols and
 documents whose name or comment holds every word. When nothing holds every
-word, it finds what holds any word, and it says so on standard error:
+word, it finds what holds any word. It then says so on standard error:
 
 ```
 nothing holds every word of "event stream"; these hold some of them
@@ -75,9 +75,9 @@ Two words are also tried as one word. A search for `event stream` finds the
 package `eventstream`.
 
 The results are grouped. Each group is named by the longest prefix its
-results share, which is a package or a type. The name of a group is a name
-you can ask for. Groups come in the order of their best result. A symbol
-appears once, so overloads are one result.
+results share. That prefix is a package or a type. The name of a group is a
+name you can ask for. Groups come in the order of their best result. A
+symbol appears once. Overloads are one result.
 
 ```
 eventstream
@@ -110,8 +110,8 @@ list of the same objects. Section flags keep only the named fields.
 `--documents`, each entry also carries `doc`, the Markdown body, and
 `source`, the file.
 
-A member answers with the type's object, with `member` set to the name and
-`methods` and `fields` holding only the members with that name.
+A member answers with the type's object. In that object, `member` holds the
+name. `methods` and `fields` hold only the members with that name.
 
 A document answers with:
 
@@ -147,8 +147,7 @@ The roots answer with:
 
 A line that starts with `warning:` on standard error means the answer came
 from the last good index. The line names the reason, such as a project that
-does not compile, followed by the compiler's messages. The exit status stays
-0.
+does not compile. The compiler's messages follow. The exit status stays 0.
 
 `indexing...` on standard error means the index has worked for five seconds
 without answering. The first search over a large dependency set can take
@@ -170,8 +169,8 @@ The command refreshes the index when it needs to:
   JDK names complete.
 
 When the project does not compile, the index keeps the rows of the last
-build that compiled and records the failure against the current sources.
+build that compiled. It records the failure against the current sources.
 The same broken sources are not compiled again until they change.
 
-`tuul build` and `tuul docs` share class files: when `build/classes` matches
+`tuul build` and `tuul docs` share class files. When `build/classes` matches
 the current sources, the index reads it instead of running the compiler.

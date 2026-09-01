@@ -69,8 +69,9 @@ final class Store implements IndexStore {
     }
 
     /// What went wrong the last time this origin was refreshed, whatever the
-    /// stamp. A reader without source paths cannot compute a stamp and still
-    /// deserves to know that the rows are the last good ones.
+    /// stamp was. A reader without source paths cannot compute a stamp. That
+    /// reader still needs to know that the rows on hand are the last good
+    /// ones.
     synchronized String problem(String kind, String location) {
         try (var rows = database.query(
                 "select problem from origin where kind = ? and location = ?", kind, location)) {
@@ -192,16 +193,16 @@ final class Store implements IndexStore {
     /// runs as somebody types, so the first keystroke of `.Json` would
     /// otherwise show them a database complaining.
     ///
-    /// Two words joined are also tried as one: `event stream` names the
-    /// package `eventstream` to anybody who reads it, and a search that only
-    /// found the two words apart would miss the one symbol they name.
+    /// Two words joined are also tried as one. `event stream` names the
+    /// package `eventstream` to a reader, though the words are typed apart.
+    /// A search that only matched the words apart would miss that symbol.
     static String query(String typed) {
         return query(typed, " ");
     }
 
-    /// The same words, where any one of them is enough. This is the answer
-    /// when nothing holds all of them: a result that matches half a question
-    /// is a lead, and no result is a dead end.
+    /// The same words, where matching any one of them is enough. A caller uses
+    /// this when nothing matches every word. A result that matches half the
+    /// words is a lead. No result is a dead end.
     static String anyQuery(String typed) {
         return query(typed, " OR ");
     }

@@ -7,7 +7,7 @@ import java.util.List;
 import json.Json;
 import json.Pointer;
 import symbols.Catalog;
-import symbols.Questions;
+import symbols.Queries;
 
 /// What the browser knows while it answers one request, and how it comes to
 /// know it.
@@ -64,8 +64,8 @@ public final class Symbols {
         }
     }
 
-    /// What the browser knows about a search: what was typed, what matched
-    /// grouped the way [Questions#search] groups it, whether every word was
+    /// What the browser knows about a search: what was typed, the matches
+    /// grouped the way [Queries#search] groups them, whether every word was
     /// held, and what went wrong.
     public record Found(String query, List<Json> groups, boolean every, String problem) {
 
@@ -150,15 +150,15 @@ public final class Symbols {
                 emit.emit(Message.error("documentation is being indexed"));
                 return;
             }
-            emit.emit(Questions.symbol(index, name, Questions.Asking.SYMBOL)
+            emit.emit(Queries.symbol(index, name, Queries.Asking.SYMBOL)
                     .map(description -> Message.of(FOUND, description))
                     .orElseGet(() -> Message.of(MISSING).with("symbol", name)));
         };
     }
 
     /// Searches the index the way `tuul docs --search` does: each symbol
-    /// once, grouped by what it belongs to, and any word when every word
-    /// finds nothing.
+    /// once, grouped by what it belongs to, and matched on any word when no
+    /// result holds every word.
     public static Effect.Handler searching(Catalog index, int limit) {
         return (effect, emit) -> {
             var query = effect.string("query", "");
@@ -170,7 +170,7 @@ public final class Symbols {
                 emit.emit(Message.error("documentation is being indexed"));
                 return;
             }
-            emit.emit(Message.of(MATCHED, Questions.search(index, query, limit)));
+            emit.emit(Message.of(MATCHED, Queries.search(index, query, limit)));
         };
     }
 

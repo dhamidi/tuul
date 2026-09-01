@@ -13,8 +13,8 @@
 /// discovers sources, or writes the index. An HTML page costs index queries and
 /// a streamed render. A cold browser shows an indexing state until the
 /// background coordinator publishes a complete generation. A project that
-/// does not compile is served from the last generation that did; the
-/// catalog's [symbols.Catalog#problems()] says so.
+/// does not compile is served from the last generation that compiled.
+/// [symbols.Catalog#problems()] names the reason.
 ///
 /// The application uses the same message flow for search, symbols, and package
 /// documents:
@@ -25,10 +25,11 @@
 /// 4. The effect emits a JSON description.
 /// 5. [browser.Views] writes HTML from that description.
 ///
-/// The command `tuul docs --json` uses the same descriptions: both ask
-/// [symbols.Questions], which reads a name, asks the catalog, and builds the
-/// one JSON object the command prints and the page renders. The HTML view
-/// must not add facts that the JSON description does not contain.
+/// The command `tuul docs --json` uses the same descriptions. Both the
+/// command and the browser ask [symbols.Queries], which reads a name, asks
+/// the catalog, and builds the one JSON object the command prints and the
+/// page renders. The HTML view must not add a fact that the JSON
+/// description does not contain.
 ///
 /// [browser.Search] renders the search form. [browser.Symbols] owns symbol and
 /// search state. [browser.Documents] owns package-document state. [browser.Views]
@@ -47,8 +48,9 @@
 ///
 /// - The overview is the comment in `package-info.java`. It answers what the
 ///   package is. A package's `README.md` is the long overview, indexed as
-///   the `readme` document; a package with no `package-info.java` summarises
-///   itself with the README's first paragraph.
+///   the [symbols.Document#README] document. A package with no
+///   `package-info.java` summarises itself with
+///   [symbols.Document#summary()].
 /// - API comments are on Java types and members. They answer what a Java name
 ///   does.
 /// - Diataxis documents are Markdown files beside the package source. They
@@ -77,7 +79,8 @@
 ///
 /// The supported kinds are:
 ///
-/// - `readme` is the package's `README.md`, spelled exactly so.
+/// - [symbols.Document#README] is the package's `README.md`. Its filename
+///   is fixed, not a `<kind>.md` pattern.
 /// - `tutorial` teaches through a first working result.
 /// - `howto` gives steps for one task.
 /// - `reference` states facts, tables, and rules.
@@ -95,9 +98,10 @@
 /// `tutorial-01-first-script.md` has the route
 /// `/symbols/tcl/tutorial/first-script`.
 ///
-/// Names are lowercase, except `README.md`. The index ignores `Tutorial.md`.
-/// It also ignores `ORIGIN.md`, `AGENTS.md`, tool instruction files, notes,
-/// and Markdown files without a supported prefix.
+/// Names are lowercase, except `README.md`, which keeps the filename other
+/// tools expect. The index ignores `Tutorial.md`. It also ignores
+/// `ORIGIN.md`, `AGENTS.md`, tool instruction files, notes, and Markdown
+/// files without a supported prefix.
 ///
 /// Keep document files in the Java package directory. Do not create a
 /// `tutorial/`, `howto/`, `reference/`, or `guide/` directory. Java tools can

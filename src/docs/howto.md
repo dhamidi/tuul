@@ -3,7 +3,7 @@
 ## Find a symbol when you know only a word
 
 Search for the word. Read the group names first. A group name is a package
-or a type, and you can ask for it next.
+or a type. You can ask for it next.
 
 ```sh
 $ tuul docs --search "event stream"
@@ -14,7 +14,7 @@ $ tuul docs eventstream
 ```
 
 Search for two or more words to narrow the answer. When no symbol holds
-every word, the command shows the symbols that hold some of them and says
+every word, the command shows the symbols that hold some of them. It says
 so on standard error.
 
 ## Read a package
@@ -83,9 +83,9 @@ $ tuul docs --search parse --json
 
 ## Ask when the project does not compile
 
-Ask as usual. The answer comes from the last index that compiled, and a
+Ask as usual. The answer comes from the last index that compiled. A
 `warning:` line on standard error shows the compiler's messages. Fix the
-sources; the next question compiles them again.
+sources. The next question compiles them again.
 
 ## Ask about a project in another directory
 

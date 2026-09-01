@@ -16,13 +16,16 @@ import markdown.Outline;
 /// the title when it starts with `# `. The body stays as Markdown source.
 public record Document(String packageName, String kind, String slug, String title, String body, String source) {
 
-    /// The kind a package's `README.md` is filed under. A README is the long
-    /// overview of a package, so it comes first in a listing and has no slug.
+    /// The kind a package's `README.md` is filed under.
+    ///
+    /// A README is the long overview of a package. It comes first in a
+    /// document listing and carries no slug.
     public static final String README = "readme";
 
-    /// Every kind a document can be, in the order a package lists them. A name
-    /// such as `web/tutorial/first` is a document name only when its second
-    /// segment is one of these.
+    /// Every kind a document can be, in the order a package lists them.
+    ///
+    /// A name such as `web/tutorial/first` is a document name only when its
+    /// second segment is one of these kinds.
     public static final List<String> KINDS = List.of(README, "tutorial", "howto", "reference", "guide");
 
     private static final Pattern NAME =
@@ -94,7 +97,8 @@ public record Document(String packageName, String kind, String slug, String titl
     public record Section(String title, String anchor) {}
 
     /// Returns the object that `tuul docs --json` and the browser serve.
-    /// `symbol` is the name that asks for this document again.
+    ///
+    /// The `symbol` field holds the name that asks for this document again.
     public Json.Object describe() {
         return Json.Object.of()
                 .with("symbol", symbol())
@@ -111,8 +115,10 @@ public record Document(String packageName, String kind, String slug, String titl
         return packageName + "/" + kind + (slug.isEmpty() ? "" : "/" + slug);
     }
 
-    /// The Markdown after the title, from the first paragraph and no further.
-    /// A package without a `package-info.java` says what it is for here.
+    /// Returns the first paragraph of the Markdown after the title.
+    ///
+    /// A package with no doc comment in its `package-info.java` states its
+    /// purpose here instead.
     public String summary() {
         var text = content().strip();
         var end = text.indexOf("\n\n");
@@ -120,7 +126,9 @@ public record Document(String packageName, String kind, String slug, String titl
     }
 
     /// Reads a document name written as `package/kind` or `package/kind/slug`.
-    /// Any other text, including a type name, returns empty.
+    ///
+    /// The middle segment must be one of [#KINDS]. Any other text, including
+    /// a type name, returns empty.
     public static Optional<Reference> reference(String symbol) {
         var parts = symbol.split("/", -1);
         if (parts.length < 2 || parts.length > 3 || parts[0].isBlank()) return Optional.empty();
@@ -128,7 +136,9 @@ public record Document(String packageName, String kind, String slug, String titl
         return Optional.of(new Reference(parts[0], parts[1], parts.length == 3 ? parts[2] : ""));
     }
 
-    /// A document named from outside: the package, the kind, and the slug,
-    /// which is empty for the introduction of a kind.
+    /// A document name read from outside: the package, the kind, and the
+    /// slug.
+    ///
+    /// The slug is empty for the introduction of a kind.
     public record Reference(String packageName, String kind, String slug) {}
 }

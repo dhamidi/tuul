@@ -14,8 +14,9 @@ import java.util.Optional;
 public interface IndexStore extends AutoCloseable {
 
     /// The stored state of one origin. `problem` is empty unless the last
-    /// attempt to publish the inspected stamp failed, in which case it says
-    /// why and the rows are those of the stamp before it.
+    /// attempt to publish the inspected stamp failed. When it failed,
+    /// `problem` says why. The stored rows are then still those of the stamp
+    /// before the failed attempt.
     record Snapshot(long id, boolean fresh, boolean complete, String problem) {
 
         public Snapshot(long id, boolean fresh, boolean complete) {

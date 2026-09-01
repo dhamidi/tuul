@@ -44,13 +44,14 @@ public final class Docs {
 
     /// Describes one symbol and lists its package documents.
     ///
-    /// Each list item names the document — `web/tutorial`, which asks for it
-    /// again — with its title and its level-two outline. Call
-    /// [Catalog#document] to read a body.
+    /// Each list item holds the document's name, its title, and its
+    /// level-two outline. A caller passes the name back to
+    /// [Catalog#document] to read the body.
     ///
-    /// A package with no `package-info.java` and a `README.md` says what it is
-    /// for in the README's first paragraph, so the summary line is not blank
-    /// for the packages that wrote their overview in Markdown.
+    /// When the package has no doc comment, this method takes the summary
+    /// from its `README.md` instead, using the first paragraph after the
+    /// title. That keeps the summary line filled for a package whose
+    /// overview lives in Markdown rather than in `package-info.java`.
     public static Json.Object describe(TypeInfo type, boolean all, List<Document> documents) {
         var description = describe(type, all);
         if (type.kind() != TypeInfo.Kind.PACKAGE || documents.isEmpty()) return description;
@@ -117,9 +118,11 @@ public final class Docs {
         members(description, "fields", out);
     }
 
-    /// One member, asked for by name: every overload, each with the whole of
-    /// its comment rather than the first sentence, because the member was
-    /// what the reader came for.
+    /// Writes one member, found by name, with every overload in full.
+    ///
+    /// This method prints the whole comment for each overload, not just its
+    /// first sentence. The reader asked for this member by name, so the
+    /// reader wants all of it.
     private static void member(Json.Object description, Writer out) throws IOException {
         out.write(description.string("class", "?") + "#" + description.string("member", "") + "\n");
         where(description, out);
@@ -137,9 +140,11 @@ public final class Docs {
         }
     }
 
-    /// The package documents in full, one after another, each under a line
-    /// that names it and says which file it is. `--documents` prints this so
-    /// that reading a package is one question rather than one per document.
+    /// Writes the package documents in full, one after another.
+    ///
+    /// Each document starts with a line that names it and gives its source
+    /// file. The `--documents` flag prints this, so reading a package takes
+    /// one question instead of one question per document.
     public static void documents(List<Json> documents, Writer out) throws IOException {
         for (var value : documents) {
             if (!(value instanceof Json.Object document) || !(document.get("doc") instanceof Json.Str(var body))) {
@@ -173,9 +178,11 @@ public final class Docs {
         for (var name : held) out.write("  " + name + "\n");
     }
 
-    /// The documents a package has, each as the name that asks for it and
-    /// its title. The name comes first for the reason the roots listing is
-    /// unshortened: it is what gets handed back.
+    /// Lists the documents of a package, one line per document.
+    ///
+    /// Each line holds the document's symbol, then its title. The symbol
+    /// comes first because a reader passes it back to ask for that document
+    /// again.
     private static void documents(Json.Object description, Writer out) throws IOException {
         var documents = description.list("documents");
         if (documents.isEmpty()) return;
@@ -271,9 +278,10 @@ public final class Docs {
         return text.isEmpty() ? head : head + " " + text;
     }
 
-    /// What a search found, group by group: the name the group shares, then
-    /// each symbol and the first thing it says about itself. A list of names
-    /// with no summaries is a list nobody can choose from.
+    /// Writes what a search found, one group at a time.
+    ///
+    /// Each group starts with the name its matches share, then lists them
+    /// with [#matches]. A blank line separates one group from the next.
     public static void groups(List<Json> groups, Writer out) throws IOException {
         var first = true;
         for (var value : groups) {
@@ -285,7 +293,10 @@ public final class Docs {
         }
     }
 
-    /// The symbols one group of results holds.
+    /// Writes the symbols in one search group, each with its summary.
+    ///
+    /// A symbol from a dependency or a platform library gets its origin in
+    /// brackets after the name. A symbol from the project does not.
     public static void matches(List<Json> matches, Writer out) throws IOException {
         for (var match : matches) {
             if (!(match instanceof Json.Object found)) continue;

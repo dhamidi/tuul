@@ -245,10 +245,10 @@ public final class Views {
 
     /// One group of results: the name its results share, then the results.
     ///
-    /// The name is a link to its own page unless one of the results already
-    /// is that page, so a list never offers the same place twice — and a
-    /// package the search surfaced only through its members is one click
-    /// away, which is what surfacing it is for.
+    /// The name links to its own page. It does not link when one of the
+    /// results already is that page, so a list never repeats a place. A
+    /// package that the search surfaced only through its members still
+    /// reaches its own page, one click away.
     private static Html group(Router routes, Json group) {
         if (!(group instanceof Json.Object entry)) return Html.nothing();
         var prefix = entry.string("prefix", "");

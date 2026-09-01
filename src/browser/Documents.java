@@ -8,7 +8,7 @@ import json.Json;
 import json.Pointer;
 import symbols.Catalog;
 import symbols.Document;
-import symbols.Questions;
+import symbols.Queries;
 
 /// The state and effects for one package-document request.
 public final class Documents {
@@ -78,7 +78,7 @@ public final class Documents {
                 emit.emit(Message.error("documentation is being indexed"));
                 return;
             }
-            emit.emit(Questions.document(index, new Document.Reference(packageName, kind, slug))
+            emit.emit(Queries.document(index, new Document.Reference(packageName, kind, slug))
                     .map(description -> Message.of(FOUND, description))
                     .orElseGet(() -> Message.of(MISSING).with("document", path(packageName, kind, slug))));
         };

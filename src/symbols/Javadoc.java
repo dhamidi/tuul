@@ -134,14 +134,16 @@ public final class Javadoc {
 
     /// The lines one declaration occupies, comment included.
     ///
-    /// `path` is the type as it is written inside its file — `TypeInfo.Kind`
-    /// for a nested type — and `member` names a method or a field in it, or is
-    /// empty for the type itself. An overloaded method has one span per
-    /// overload, in source order. A name the file does not declare has none.
+    /// `path` is the type as it is written inside its file. For a nested type
+    /// that is `TypeInfo.Kind`. `member` names a method or a field on that
+    /// type, or is empty to name the type itself. An overloaded method has
+    /// one span per overload, in source order. A name the file does not
+    /// declare has no span.
     ///
-    /// javac's start position is the first modifier, so the doc comment above
-    /// it is taken in by walking back over the comment lines: the comment is
-    /// the half of a declaration a reader came for.
+    /// javac reports a declaration's start position at its first modifier,
+    /// which skips the doc comment above it. This method walks back over the
+    /// comment lines to include them, because the comment is the half of a
+    /// declaration a reader came for.
     public static List<Span> spans(String source, String fileName, String path, String member) {
         var compiler = ToolProvider.getSystemJavaCompiler();
         if (compiler == null) return List.of();

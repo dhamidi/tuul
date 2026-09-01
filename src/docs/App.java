@@ -21,17 +21,17 @@ import symbols.Catalog;
 import symbols.CatalogFactory;
 import symbols.Docs;
 import symbols.Index;
-import symbols.Questions;
+import symbols.Queries;
 
-/// `tuul docs` as an application: which messages it understands, and how the
-/// effects those messages ask for are carried out.
+/// `tuul docs` as an application: which messages it understands, and how it
+/// carries out the effects those messages request.
 ///
-/// Every question goes to [Questions], which is also what `tuul browse` asks,
-/// so the command and the page cannot describe a symbol differently. Indexing
-/// happens inside an effect, and a project that does not compile is not an
-/// error here: the catalog answers from its last good generation and says so
-/// on standard error, after the answer. The writers are bound here, at the
-/// edge, and nowhere else.
+/// Every question goes to [Queries]. `tuul browse` asks the same class, so
+/// the command and the browser describe a symbol the same way. Indexing runs
+/// inside an effect. A project that does not compile is not an error here.
+/// The catalog answers from its last good generation and reports the
+/// problem on standard error, after the answer. The writers are bound here,
+/// at the edge, and nowhere else.
 public final class App {
 
     private static final Duration INDEXING_NOTICE = Duration.ofSeconds(5);
@@ -111,10 +111,11 @@ public final class App {
                 .with("sections", Json.Array.strings(List.copyOf(state.sections()))));
     }
 
-    /// A search answers with groups rather than a symbol, so it prints as
-    /// them. When nothing held every word, the answer says which words it
-    /// holds instead — after the results, where a reader who scrolled up to
-    /// the top of them will see it last and is not stopped by it.
+    /// A search answers with groups rather than a symbol, so it prints them
+    /// instead of one symbol. When nothing holds every word, the answer
+    /// names the words it does hold instead. That notice prints after the
+    /// results, so a reader who scrolled to the top of them sees it last
+    /// and is not stopped by it.
     private static Step<State> found(State state, Message message) {
         var groups = message.list("groups");
         var query = message.string("query", "");
@@ -148,9 +149,9 @@ public final class App {
         return Step.of(state.failed(), report(message.string("reason", "unknown symbol: " + message.string("symbol", ""))));
     }
 
-    /// A problem is not a failure. The answer was given from the last good
-    /// index; this says so, on standard error, and leaves the exit status
-    /// alone.
+    /// A problem is not a failure. The catalog gave the answer from its
+    /// last good index. This message reports that on standard error and
+    /// leaves the exit status alone.
     private static Step<State> problem(State state, Message message) {
         return Step.of(state, report("warning: " + message.string("reason", "")));
     }
@@ -184,7 +185,7 @@ public final class App {
     private static void search(Effect effect, Effect.Emitter emit, CatalogFactory catalogs) throws IOException {
         var wanted = effect.string("search", "");
         try (var index = catalog(effect, catalogs)) {
-            emit.emit(Message.of("docs.found", Questions.search(index, wanted, Questions.MATCHES)));
+            emit.emit(Message.of("docs.found", Queries.search(index, wanted, Queries.MATCHES)));
             problems(index, emit);
         }
     }
@@ -193,19 +194,19 @@ public final class App {
         var symbol = effect.string("symbol", "");
         try (var index = catalog(effect, catalogs)) {
             if (symbol.isEmpty()) {
-                emit.emit(Message.of("docs.roots", Questions.roots(index)));
+                emit.emit(Message.of("docs.roots", Queries.roots(index)));
                 problems(index, emit);
                 return;
             }
-            var asking = new Questions.Asking(effect.flag("all"), effect.flag("members"), effect.flag("recursive"),
+            var asking = new Queries.Asking(effect.flag("all"), effect.flag("members"), effect.flag("recursive"),
                     effect.flag("documents"));
-            var answer = Questions.answer(index, symbol, asking);
+            var answer = Queries.answer(index, symbol, asking);
             if (answer.isEmpty()) {
                 emit.emit(Message.of("docs.missing").with("symbol", symbol));
             } else if (!effect.flag("code")) {
                 emit.emit(Message.of("docs.result", answer.get()));
             } else {
-                emit.emit(Questions.source(index, answer.get())
+                emit.emit(Queries.source(index, answer.get())
                         .map(text -> Message.of("docs.code").with("text", text))
                         .orElseGet(() -> Message.of("docs.missing").with("symbol", symbol)
                                 .with("reason", "no source for " + symbol + ": "
@@ -277,15 +278,16 @@ public final class App {
         out.flush();
     }
 
-    /// A document, or the list of a kind's documents, is told from a symbol
-    /// by carrying a package and a title rather than a class.
+    /// Tells a document description, or a kind's document list, apart from
+    /// a symbol description. A document carries a `package` and a `title`.
+    /// A symbol carries a `class` instead.
     private static boolean document(Json.Object description) {
         return description.get("package") instanceof Json.Str && description.get("title") instanceof Json.Str;
     }
 
     /// A document prints as the Markdown it was written in. A kind with no
-    /// introduction prints the names of the documents it has, each of which
-    /// can be asked for next.
+    /// introduction prints the names of its documents instead. A reader can
+    /// ask for any of those names next.
     private static void printDocument(Json.Object description, boolean json, Writer out) throws IOException {
         if (json) {
             (description.get("doc") instanceof Json.Str ? description.without("documents") : description)
