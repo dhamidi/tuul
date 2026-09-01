@@ -10,70 +10,98 @@ import java.nio.charset.StandardCharsets;
 import java.util.stream.Gatherer;
 import java.util.stream.Stream;
 
-/// `text/event-stream`, in both directions.
+/// Reads and writes the `text/event-stream` format.
 ///
-/// Parsing is a [Gatherer] over lines:
+/// Parsing is a [Gatherer] over lines. Call [#signals] for a reusable parser:
 ///
 /// ```
 /// reader.lines().gather(EventStream.signals()).forEach(signal -> ...);
 /// ```
 ///
-/// That is the whole design decision. A gatherer is lazy, composes with
-/// everything else a stream can do, and needs no pipeline, no callback
-/// interface and no thread of its own — so this library adds a format, not a
-/// world. Line splitting is [BufferedReader]'s, which already ends a line on
-/// CR, LF or CRLF, exactly as the format requires.
+/// The gatherer emits [Event] and [Retry] values in input order. It does not
+/// create a thread or read ahead.
 ///
-/// An event is dispatched by the blank line that ends it, and only by that. A
-/// stream that stops in the middle of an event dispatches nothing, because a
-/// half-received event is not an event — the connection dropped, and whoever
-/// reconnects will be sent it again.
+/// A blank line dispatches the current event. End of input does not dispatch a
+/// partial event. The parser accepts CR, LF, and CRLF line endings and removes
+/// one leading byte-order mark from the first line. It ignores comments and
+/// unknown fields. It carries the most recent valid event id into later events.
 public final class EventStream {
 
     private EventStream() {}
 
-    /// Lines in, signals out.
+    /// Returns a gatherer that converts event-stream lines into [Signal] values.
+    ///
+    /// The gatherer emits [Retry] immediately after a valid `retry:` line. It
+    /// emits [Event] only when a blank line ends an event. It preserves input
+    /// order and drops an event that remains incomplete when input ends.
+    /// Consecutive `data:` fields join with line feeds. An event with no data
+    /// does not emit. The event type resets after each blank line. The last
+    /// valid event id stays in force until another `id:` field changes it.
+    ///
+    /// The gatherer ignores comments, unknown fields, invalid retry values,
+    /// and id values that contain NUL.
+    ///
+    /// The caller supplies lines through a stream such as
+    /// `reader.lines()`. This method does not consume that stream by itself.
     public static Gatherer<String, ?, Signal> signals() {
         return Gatherer.ofSequential(
                 Parse::new,
                 Gatherer.Integrator.<Parse, String, Signal>of((state, line, downstream) -> state.line(line, downstream)));
     }
 
-    /// Reads a stream lazily. Closing what comes back closes `in` — everything
-    /// else about a [Reader] is the caller's business, but a stream that owns a
-    /// resource has to be able to let go of it.
+    /// Returns a lazy stream of signals read from `in`.
+    ///
+    /// The returned stream emits [Event] and [Retry] values in input order. It
+    /// reads only when a terminal stream operation requests the next value.
+    /// The supplied reader controls byte decoding. The parser recognizes CR,
+    /// LF, and CRLF line endings and drops an incomplete final event.
+    ///
+    /// Closing the returned stream closes `in`. The caller must close the
+    /// returned stream when it stops before input ends or when it owns `in`.
+    /// A read or close failure appears as [UncheckedIOException].
     public static Stream<Signal> parse(Reader in) {
         var reader = in instanceof BufferedReader buffered ? buffered : new BufferedReader(in);
         return reader.lines().gather(signals()).onClose(() -> close(reader));
     }
 
-    /// The events alone, for the callers that do not reconnect and so have no
-    /// use for what the server suggested if they did.
+    /// Returns a lazy stream containing only the [Event] values from `in`.
+    ///
+    /// The stream preserves event order and discards [Retry] values. Closing
+    /// it closes the underlying stream and therefore closes `in`.
     public static Stream<Event> events(Reader in) {
         return parse(in).<Event>mapMulti((signal, events) -> {
             if (signal instanceof Event event) events.accept(event);
         });
     }
 
-    /// Reads an event stream straight out of an [java.net.http.HttpClient]
-    /// response, which is where most of them come from:
+    /// Returns an HTTP body handler that parses a response as event-stream data.
     ///
     /// ```
     /// var response = client.send(request, EventStream.body());
     /// try (var signals = response.body()) { ... }
     /// ```
     ///
-    /// The charset is UTF-8 and not negotiable — the format says so, whatever a
-    /// `Content-Type` header claims.
+    /// The handler decodes body bytes as UTF-8 and ignores the response
+    /// charset. The response body becomes a lazy stream of [Event] and
+    /// [Retry] values in wire order. The caller must close that stream to
+    /// release the response body when it stops reading. The handler does not
+    /// validate the response `Content-Type` header.
     public static HttpResponse.BodyHandler<Stream<Signal>> body() {
         return info -> HttpResponse.BodySubscribers.mapping(
                 HttpResponse.BodySubscribers.ofLines(StandardCharsets.UTF_8),
                 lines -> lines.gather(signals()));
     }
 
-    /// Writes one signal and flushes. The flush is the point: an event sitting
-    /// in a buffer has not been sent, and a client waiting on a stream cannot
-    /// tell the difference between that and silence.
+    /// Writes one signal to `out` and flushes `out`.
+    ///
+    /// An [Event] writes its type, id, each data line, and a blank terminator.
+    /// A line feed in event data starts another `data:` line. A carriage return
+    /// or NUL in event data causes [IllegalArgumentException]. A line break or
+    /// NUL in an event type or id also causes that exception.
+    ///
+    /// A [Retry] writes its numeric value on one `retry:` line without
+    /// validation. The method writes no event terminator after a [Retry]. It
+    /// propagates [IOException] from `out`.
     public static void write(Signal signal, Writer out) throws IOException {
         switch (signal) {
             case Retry(var milliseconds) -> out.write("retry: " + milliseconds + "\n");
@@ -82,8 +110,11 @@ public final class EventStream {
         out.flush();
     }
 
-    /// A comment, which is how a server keeps a connection warm through a proxy
-    /// that would otherwise close it.
+    /// Writes one event-stream comment to `out` and flushes `out`.
+    ///
+    /// The comment has no event effect. A line break or NUL in `text` causes
+    /// [IllegalArgumentException]. The method propagates [IOException] from
+    /// `out`.
     public static void comment(String text, Writer out) throws IOException {
         out.write(line("", text));
         out.flush();

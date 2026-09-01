@@ -214,6 +214,7 @@ public final class Request {
     public Request timeout(Duration timeout);
     public Request form(Form form);
     public Request form(Map<String, ?> fields);
+    public Request eventStream(Stream<? extends Signal> signals);
 
     public Response send() throws IOException, InterruptedException;
     public CompletableFuture<Response> sendAsync();
@@ -229,6 +230,10 @@ cased. The URI must be absolute and must use HTTP or HTTPS.
 `form(form)` sets the body to `Body.form(form)` and sets the content type to
 `application/x-www-form-urlencoded; charset=UTF-8`. The map overload first
 calls `Form.of(fields)`. A later `header` call can replace that content type.
+
+`eventStream(signals)` sets the body to `Body.eventStream(signals)` and sets
+the content type to `text/event-stream`. It writes signals in encounter order.
+A later `header` call can replace the content type.
 
 `send` waits for response headers and is interruptible. `sendAsync` returns a
 `CompletableFuture` that completes when response headers arrive. It does not
@@ -289,6 +294,7 @@ public interface Body {
     static Body form(Map<String, ?> fields);
     static Body publisher(Flow.Publisher<ByteBuffer> source,
             OptionalLong length);
+    static Body eventStream(Stream<? extends Signal> signals);
 
     boolean repeatable();
     OptionalLong length();
@@ -318,9 +324,17 @@ accepts it. The publisher must honor demand, signal errors, and release its
 source when the subscription is cancelled. The caller must provide a new
 publisher for each retry unless the source is repeatable.
 
+`eventStream(signals)` is the API for a generated event stream request. It
+writes each `eventstream.Signal` as UTF-8 when the connection requests body
+bytes. It keeps signal encounter order. It closes the signal stream after
+completion, failure, or cancellation. The body is one-shot and has no known
+length. The method does not set a content type. Use `Request.eventStream` to
+set the body and `Content-Type` together.
+
 The response body is one-shot. Only one of `publisher`, `writeTo`, `reader`,
-`text`, or `bytes` can consume it. `writeTo(OutputStream)` leaves `out` open.
-`writeTo(Path)` creates or truncates the file and closes its file stream.
+`text`, `bytes`, or `Response.eventStream` can consume it.
+`writeTo(OutputStream)` leaves `out` open. `writeTo(Path)` creates or truncates
+the file and closes its file stream.
 
 `text` and `bytes` are for bodies known to be small. A caller must use a
 publisher or a file for an unbounded or large response.
@@ -341,6 +355,7 @@ public final class Response implements AutoCloseable {
     public Reader reader() throws IOException;
     public String text() throws IOException;
     public Body body();
+    public Stream<Signal> eventStream() throws IOException;
     public List<Hop> history();
     public boolean successful();
     public Response requireSuccess() throws HttpException;
@@ -359,6 +374,12 @@ does not declare a charset, it returns UTF-8. `reader()` and `text()` use that
 charset. `body().reader(charset)` and `body().text(charset)` are explicit
 overrides. `reader()` closes the response body when the caller closes the
 reader.
+
+`eventStream()` parses the body lazily as UTF-8. It returns
+`eventstream.Event` and `eventstream.Retry` values in wire order. It ignores a
+`charset` parameter because the event stream format requires UTF-8. It does
+not validate the response content type. Closing the returned stream closes the
+response body.
 
 If `Content-Type` declares a charset that the JDK does not support,
 `charset()` throws `UnsupportedCharsetException`. A malformed or missing

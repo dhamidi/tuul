@@ -8,6 +8,8 @@
 /// [Form] keeps repeated form fields as `String[]` values before encoding.
 /// `Request.text` and `Request.form` set their content types. `Response.text`
 /// selects its character set from the response `Content-Type`.
+/// [Request#eventStream] writes event stream signals as UTF-8.
+/// [Response#eventStream()] parses event stream signals lazily.
 ///
 /// ```
 /// import java.net.URI;
@@ -27,7 +29,8 @@
 /// owned [Execution] to [Fetch#of(Execution)] when the application must own
 /// the concurrency resources.
 ///
-/// The connection pool belongs to `Fetch`, so sessions can share persistent
+/// The connection pool belongs to [Fetch], so sessions can share persistent
 /// connections without sharing cookies. Close every [Response] after the
-/// caller consumes or cancels its body.
+/// caller consumes or cancels its body. Close [Session] when its requests are
+/// no longer needed. Close [Fetch] after its sessions and requests finish.
 package fetch;

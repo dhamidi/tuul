@@ -1,8 +1,11 @@
 package eventstream;
 
-/// How long a client should wait before reconnecting, in milliseconds.
+/// A server's requested reconnect delay, in milliseconds.
 ///
-/// It is not a property of any one event: a server can send it before any event
-/// at all, and it stays in force afterwards. That is why it arrives in the
-/// stream on its own rather than hanging off the next [Event].
-public record Retry(long milliseconds) implements Signal {}
+/// A parser emits this value when it reads a non-negative decimal `retry:`
+/// field. It emits the value independently of [Event], including before the
+/// first event. The parser ignores an empty, signed, non-decimal, or
+/// out-of-range `retry:` value. Direct construction accepts any `long`.
+public record Retry(
+        /// The requested reconnect delay. [EventStream#write] writes this value without validation.
+        long milliseconds) implements Signal {}

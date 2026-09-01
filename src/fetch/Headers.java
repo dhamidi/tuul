@@ -14,6 +14,10 @@ import java.util.Set;
 /// Header names compare without regard to case. A name can have several
 /// values, and each value keeps its insertion order. The constructor copies
 /// the map and lists, so later caller changes do not change this object.
+///
+/// The constructor preserves map keys that differ only by case. Lookup methods
+/// use the first matching key. Mutation methods replace matching keys with one
+/// key.
 public record Headers(
         /// The immutable header map, with each name mapped to its ordered values.
         Map<String, List<String>> values) {
@@ -44,6 +48,8 @@ public record Headers(
     public static Headers of(String name, String value) { return NONE.with(name, value); }
 
     /// Returns the first value for `name`, or an empty result when the name is absent.
+    ///
+    /// If several stored names differ only by case, this method uses the first stored entry.
     public Optional<String> first(String name) {
         var found = entry(name);
         return found == null || found.getValue().isEmpty() ? Optional.empty() : Optional.of(found.getValue().getFirst());
@@ -55,15 +61,20 @@ public record Headers(
     /// Returns all values for `name` in insertion order, or an empty list when the name is absent.
     public List<String> all(String name) { var found = entry(name); return found == null ? List.of() : found.getValue(); }
 
-    /// Returns whether at least one value exists for `name`.
+    /// Returns whether a stored header name equals `name` without regard to case.
+    ///
+    /// A stored name with an empty value list still returns `true`.
     public boolean has(String name) { return entry(name) != null; }
 
     /// Returns the header names in their stored order.
+    ///
+    /// The returned set is unmodifiable. Names retain the spelling used when they were stored.
     public Set<String> names() { return values.keySet(); }
 
     /// Returns a new header set with all values for `name` replaced by `value`.
     ///
-    /// The original header set remains unchanged.
+    /// The original header set remains unchanged. The new entry is last in
+    /// stored order.
     public Headers with(String name, String value) {
         checkValue(value);
         var copy = mutableWithout(name);
@@ -73,7 +84,9 @@ public record Headers(
 
     /// Returns a new header set with `value` appended to the values for `name`.
     ///
-    /// The original header set remains unchanged.
+    /// The original header set remains unchanged. When several keys differ
+    /// only by case, this method keeps the first key and its values. The new
+    /// entry is last in stored order.
     public Headers add(String name, String value) {
         checkValue(value);
         var copy = mutableWithout(name);

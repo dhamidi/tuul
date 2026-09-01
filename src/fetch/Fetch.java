@@ -7,11 +7,11 @@ import java.util.Set;
 import java.util.concurrent.ConcurrentHashMap;
 import javax.net.ssl.SSLContext;
 
-/// Owns the HTTP transport and creates independent sessions that share it.
+/// Owns one HTTP transport and creates independent sessions that share it.
 ///
 /// A fetch client owns one connection pool and one [Execution]. Sessions share
 /// the pool but keep separate cookies, default headers, and redirect policies.
-/// Close the client after closing or cancelling the work created from it.
+/// Close the client after the work created from it has finished or was cancelled.
 public final class Fetch implements AutoCloseable {
     private final Execution execution; private final boolean ownsExecution; private final HttpClient client;
     private final Options options; private final Set<Session> sessions = ConcurrentHashMap.newKeySet(); private volatile boolean closed;
@@ -24,13 +24,15 @@ public final class Fetch implements AutoCloseable {
         client = builder.build();
     }
 
-    /// Creates a client that runs transport work on the calling thread.
+    /// Creates a client that runs transport work immediately on the calling thread.
     ///
     /// Use this mode for sequential blocking calls and tests. The client owns
     /// the no-worker execution returned by [Execution#currentThread()].
     public static Fetch sequential() { return sequential(options()); }
 
     /// Creates a current-thread client with a copy of `options`.
+    ///
+    /// The client does not observe later changes to `options`.
     public static Fetch sequential(Options options) { return new Fetch(Execution.currentThread(), true, options); }
 
     /// Creates a client with one platform-thread event loop.
@@ -40,6 +42,8 @@ public final class Fetch implements AutoCloseable {
     public static Fetch flow() { return flow(options()); }
 
     /// Creates a flow client with a copy of `options`.
+    ///
+    /// The client does not observe later changes to `options`.
     public static Fetch flow(Options options) { return new Fetch(Execution.flow(), true, options); }
 
     /// Creates a client that runs transport work on virtual threads.
@@ -49,6 +53,8 @@ public final class Fetch implements AutoCloseable {
     public static Fetch virtualThreads() { return virtualThreads(options()); }
 
     /// Creates a virtual-thread client with a copy of `options`.
+    ///
+    /// The client does not observe later changes to `options`.
     public static Fetch virtualThreads(Options options) { return new Fetch(Execution.virtualThreads(), true, options); }
 
     /// Creates a client that borrows an application-owned `execution`.
@@ -58,18 +64,26 @@ public final class Fetch implements AutoCloseable {
     public static Fetch of(Execution execution) { return of(execution, options()); }
 
     /// Creates a client that borrows `execution` and uses a copy of `options`.
+    ///
+    /// Closing the client leaves `execution` open. The client does not observe
+    /// later changes to `options`.
     public static Fetch of(Execution execution, Options options) { return new Fetch(execution, false, options); }
 
     /// Creates an options builder with the package defaults.
+    ///
+    /// The builder starts with a ten-second connection timeout, 32 configured
+    /// connections per origin, 10 redirect hops, and the JDK proxy and TLS defaults.
     public static Options options() { return new Options(); }
 
     /// Creates a session with a new in-memory cookie jar.
+    ///
+    /// The session starts with no default headers and [Redirects#NEVER].
     public Session session() { return session(CookieJar.memory()); }
 
     /// Creates a session that uses `cookies` and shares this client's transport.
     ///
     /// The caller can create several sessions from one client. The client must
-    /// be open when this method runs.
+    /// be open when this method runs. `cookies` must not be null.
     public Session session(CookieJar cookies) { if (closed) throw new IllegalStateException("fetch is closed"); var session = new Session(this, cookies); sessions.add(session); return session; }
     HttpClient client() { if (closed) throw new IllegalStateException("fetch is closed"); return client; }
     int maxRedirects() { return options.maxRedirects; }
@@ -94,28 +108,30 @@ public final class Fetch implements AutoCloseable {
 
         /// Sets the timeout for establishing a connection.
         ///
-        /// `timeout` must be positive. The default is ten seconds.
+        /// `timeout` must be positive. The default is ten seconds. This method
+        /// returns this builder.
         public Options connectTimeout(Duration timeout) { if (timeout.isZero() || timeout.isNegative()) throw new IllegalArgumentException("timeout must be positive"); connectTimeout = timeout; return this; }
 
         /// Sets the maximum configured number of connections for one origin.
         ///
         /// `maximum` must be positive. HTTP/2 streams can share one connection.
+        /// This method returns this builder.
         public Options maxConnectionsPerOrigin(int maximum) { if (maximum <= 0) throw new IllegalArgumentException("maximum must be positive"); maxConnectionsPerOrigin = maximum; return this; }
 
         /// Sets the maximum number of automatic redirect hops.
         ///
         /// `maximum` must not be negative. Zero returns the first redirect
-        /// response without following it.
+        /// response without following it. This method returns this builder.
         public Options maxRedirects(int maximum) { if (maximum < 0) throw new IllegalArgumentException("maximum must not be negative"); maxRedirects = maximum; return this; }
 
         /// Sets the JDK proxy selector used for connections.
         ///
-        /// `selector` must not be null.
+        /// `selector` must not be null. This method returns this builder.
         public Options proxy(ProxySelector selector) { proxy = java.util.Objects.requireNonNull(selector); return this; }
 
         /// Sets the TLS context used for HTTPS connections.
         ///
-        /// `context` must not be null.
+        /// `context` must not be null. This method returns this builder.
         public Options sslContext(SSLContext context) { sslContext = java.util.Objects.requireNonNull(context); return this; }
         private Options copy() { var copy = new Options(); copy.connectTimeout = connectTimeout; copy.maxConnectionsPerOrigin = maxConnectionsPerOrigin; copy.maxRedirects = maxRedirects; copy.proxy = proxy; copy.sslContext = sslContext; return copy; }
     }

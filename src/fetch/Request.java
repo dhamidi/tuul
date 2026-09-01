@@ -1,5 +1,6 @@
 package fetch;
 
+import eventstream.Signal;
 import java.io.IOException;
 import java.net.URI;
 import java.net.http.HttpRequest;
@@ -11,12 +12,14 @@ import java.util.ArrayList;
 import java.util.Map;
 import java.util.concurrent.CompletableFuture;
 import java.util.concurrent.CompletionException;
+import java.util.stream.Stream;
 
 /// An immutable HTTP request bound to a session.
 ///
-/// Each modifier returns a new request. The method is uppercased, the URI must
-/// be an absolute HTTP or HTTPS URI, and the body defaults to [Body#empty()].
-/// A request can be sent again when its body is repeatable.
+/// Each modifier returns a new request and leaves this request unchanged. The
+/// method is uppercased, the URI must be an absolute HTTP or HTTPS URI, and the
+/// body defaults to [Body#empty()]. A request can be sent again when its body
+/// is repeatable.
 public final class Request {
     private final Session session; private final String method; private final URI uri; private final Headers headers; private final Body body; private final Duration timeout;
     Request(Session session, String method, URI uri, Headers headers, Body body, Duration timeout) {
@@ -67,6 +70,14 @@ public final class Request {
     /// Returns a request with a form created from `fields`.
     public Request form(Map<String, ?> fields) { return form(Form.of(fields)); }
 
+    /// Returns a request with a one-shot UTF-8 event stream body.
+    ///
+    /// Signals are sent in encounter order. The request sets `Content-Type`
+    /// to `text/event-stream`. A later [#header] call can replace that value.
+    /// [Body#eventStream(Stream)] closes `signals` when body consumption ends.
+    /// A redirect cannot resend this body.
+    public Request eventStream(Stream<? extends Signal> signals) { return body(Body.eventStream(signals)).header("Content-Type", "text/event-stream"); }
+
     /// Sends the request and waits until the final response headers arrive.
     ///
     /// The method follows the session's [Redirects] policy. It returns HTTP
@@ -74,8 +85,9 @@ public final class Request {
     /// non-2xx status must be an exception. The caller must consume or close
     /// the returned response body.
     ///
-    /// A transport failure throws `IOException`. An interruption throws
-    /// `InterruptedException`.
+    /// A transport failure throws [FetchException]. A runtime failure from
+    /// request construction or redirect processing is propagated. An
+    /// interruption throws `InterruptedException`.
     public Response send() throws IOException, InterruptedException {
         try { return sendAsync().get(); }
         catch (java.util.concurrent.ExecutionException e) { if (e.getCause() instanceof IOException io) throw io; if (e.getCause() instanceof RuntimeException runtime) throw runtime; throw new IOException(e.getCause()); }
@@ -84,8 +96,9 @@ public final class Request {
     /// Starts the request and returns a future for the final response headers.
     ///
     /// The future does not wait for the response body. A transport failure
-    /// completes the future exceptionally with [FetchException]. The caller
-    /// must consume or close the response body.
+    /// completes the future exceptionally with [FetchException]. Redirects are
+    /// followed before the future completes. The caller must consume or close
+    /// the response body.
     public CompletableFuture<Response> sendAsync() { return session.track(exchange(this, new ArrayList<>(), 0)); }
 
     private CompletableFuture<Response> exchange(Request request, ArrayList<Response.Hop> history, int count) {

@@ -1,12 +1,19 @@
 package fetch;
 
+import eventstream.EventStream;
+import eventstream.Signal;
 import java.io.ByteArrayInputStream;
 import java.io.ByteArrayOutputStream;
+import java.io.FilterInputStream;
 import java.io.IOException;
 import java.io.InputStream;
 import java.io.InputStreamReader;
 import java.io.OutputStream;
+import java.io.OutputStreamWriter;
+import java.io.PipedInputStream;
+import java.io.PipedOutputStream;
 import java.io.Reader;
+import java.io.UncheckedIOException;
 import java.net.URLEncoder;
 import java.nio.ByteBuffer;
 import java.nio.charset.Charset;
@@ -16,20 +23,28 @@ import java.nio.file.Path;
 import java.util.OptionalLong;
 import java.util.concurrent.Flow;
 import java.util.concurrent.atomic.AtomicBoolean;
+import java.util.concurrent.atomic.AtomicReference;
+import java.util.stream.Stream;
 
-/// A stream of bytes for a request or a response.
+/// A one-shot or repeatable stream of bytes for a request or a response.
 ///
-/// Factory methods create repeatable request bodies from values and files, or
-/// one-shot bodies from publishers. A response body is always one-shot. A
-/// caller must consume or close a body before it closes the owning response.
+/// Factory methods create repeatable request bodies from values and files.
+/// Publishers and event signal streams create one-shot request bodies. A
+/// response body is always one-shot. The caller must consume the body or close
+/// its owning response. If the caller opens a stream, reader, or publisher, it
+/// must close or cancel that view.
 public interface Body {
-    /// Creates a repeatable body with no bytes and a length of zero.
+    /// Creates a repeatable body with no bytes.
+    ///
+    /// The body reports a length of zero and can be read any number of times.
     static Body empty() { return bytes(new byte[0]); }
 
-    /// Creates a repeatable UTF-8 body from `value`.
+    /// Creates a repeatable body from `value` encoded as UTF-8.
     static Body text(String value) { return text(value, StandardCharsets.UTF_8); }
 
     /// Creates a repeatable body by encoding `value` with `charset`.
+    ///
+    /// The returned body reports the encoded byte count.
     static Body text(String value, Charset charset) { return bytes(value.getBytes(charset)); }
 
     /// Creates a repeatable body from a copy of `value`.
@@ -38,7 +53,7 @@ public interface Body {
     /// the caller's array.
     static Body bytes(byte[] value) { var copy = value.clone(); return new StreamBody(() -> new ByteArrayInputStream(copy), OptionalLong.of(copy.length), true); }
 
-    /// Creates a repeatable body that opens `path` each time the body is read.
+    /// Creates a repeatable body that opens `path` for each read.
     ///
     /// The body reports the file size when the file system provides it. The
     /// caller must keep the file available and unchanged until the exchange ends.
@@ -63,7 +78,17 @@ public interface Body {
     /// provide a new body for a retry.
     static Body publisher(Flow.Publisher<ByteBuffer> source, OptionalLong length) { return new PublisherBody(source, length); }
 
+    /// Creates a one-shot UTF-8 `text/event-stream` body from `signals`.
+    ///
+    /// The body reads signals in encounter order when a request consumes it.
+    /// The body closes `signals` after completion, failure, or cancellation.
+    /// The body has no known length. This method does not add a request
+    /// `Content-Type` header. [Request#eventStream(Stream)] adds that header.
+    static Body eventStream(Stream<? extends Signal> signals) { java.util.Objects.requireNonNull(signals); return new StreamBody(() -> eventInput(signals), OptionalLong.empty(), false); }
+
     /// Returns whether this body can create the same bytes more than once.
+    ///
+    /// A `false` result means the caller must provide a new body before a retry.
     boolean repeatable();
 
     /// Returns the byte count when it is known, or an empty value otherwise.
@@ -109,6 +134,27 @@ public interface Body {
     InputStream stream() throws IOException;
 
     private static OptionalLong size(Path path) { try { return OptionalLong.of(Files.size(path)); } catch (IOException e) { return OptionalLong.empty(); } }
+    private static InputStream eventInput(Stream<? extends Signal> signals) throws IOException {
+        var input = new PipedInputStream(64 * 1024);
+        var output = new PipedOutputStream(input);
+        var failure = new AtomicReference<Throwable>();
+        var producer = Thread.startVirtualThread(() -> {
+            var writer = new OutputStreamWriter(output, StandardCharsets.UTF_8);
+            try (signals) {
+                signals.sequential().forEachOrdered(signal -> { try { EventStream.write(signal, writer); } catch (IOException e) { throw new UncheckedIOException(e); } });
+            } catch (Throwable e) {
+                failure.set(e instanceof UncheckedIOException unchecked ? unchecked.getCause() : e);
+            } finally {
+                try { writer.close(); } catch (Throwable e) { failure.compareAndSet(null, e); try { output.close(); } catch (IOException ignored) {} }
+            }
+        });
+        return new FilterInputStream(input) {
+            public int read() throws IOException { var value = super.read(); if (value < 0) failed(failure.get()); return value; }
+            public int read(byte[] bytes, int offset, int length) throws IOException { var count = super.read(bytes, offset, length); if (count < 0) failed(failure.get()); return count; }
+            public void close() throws IOException { try { super.close(); } finally { producer.interrupt(); } }
+            private void failed(Throwable cause) throws IOException { if (cause == null) return; if (cause instanceof IOException io) throw io; throw new IOException("event stream failed", cause); }
+        };
+    }
     private static String encode(Form form) {
         var result = new StringBuilder();
         form.fields().forEach((name, values) -> { for (var value : values) { if (!result.isEmpty()) result.append('&'); result.append(URLEncoder.encode(name, StandardCharsets.UTF_8)).append('=').append(URLEncoder.encode(value, StandardCharsets.UTF_8)); } });
@@ -121,7 +167,7 @@ public interface Body {
         InputStream open() throws IOException;
     }
 
-    /// A body that obtains bytes from an input stream opener.
+    /// A body implementation that obtains bytes from an input stream opener.
     final class StreamBody implements Body {
         private final Opener opener; private final OptionalLong length; private final boolean repeatable; private final AtomicBoolean used = new AtomicBoolean();
         StreamBody(Opener opener, OptionalLong length, boolean repeatable) { this.opener = opener; this.length = length; this.repeatable = repeatable; }
@@ -147,7 +193,9 @@ public interface Body {
         private final Flow.Subscriber<? super ByteBuffer> subscriber; private final Body body; private boolean done; private InputStream input;
         InputSubscription(Flow.Subscriber<? super ByteBuffer> subscriber, Body body) { this.subscriber = subscriber; this.body = body; }
 
-        /// Reads and emits up to `count` buffers, or signals completion when the stream ends.
+        /// Reads and emits up to `count` buffers, or signals completion when the body ends.
+        ///
+        /// A non-positive count signals `onError` with `IllegalArgumentException`.
         public synchronized void request(long count) {
             if (done) return;
             if (count <= 0) { done = true; subscriber.onError(new IllegalArgumentException("non-positive demand")); return; }
@@ -176,6 +224,10 @@ public interface Body {
         public Flow.Publisher<ByteBuffer> publisher() { if (!used.compareAndSet(false, true)) throw new IllegalStateException("body was consumed"); return source; }
 
         /// Bridges the source publisher to an input stream and returns that stream.
+        ///
+        /// The returned stream ends when the source completes or fails. A
+        /// source failure is not available through the returned stream. Use
+        /// [#writeTo(OutputStream)] to receive that failure as an `IOException`.
         public InputStream stream() throws IOException {
             var input = new java.io.PipedInputStream(64 * 1024);
             var output = new java.io.PipedOutputStream(input);
@@ -186,6 +238,8 @@ public interface Body {
         }
 
         /// Subscribes to the source, writes all emitted buffers to `out`, and waits for completion.
+        ///
+        /// The method requests unbounded demand and leaves `out` open.
         public void writeTo(OutputStream out) throws IOException {
             var failure = new java.util.concurrent.atomic.AtomicReference<Throwable>();
             var complete = new java.util.concurrent.CountDownLatch(1);

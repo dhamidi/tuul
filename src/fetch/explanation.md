@@ -111,6 +111,18 @@ wire transformation. The transport must handle that transformation before a
 text helper decodes characters. A text helper must never treat `gzip` or
 `deflate` as a charset.
 
+## Why event streams always use UTF-8
+
+The event stream format fixes its character encoding to UTF-8. A response can
+include a different `charset` parameter, but that parameter does not change the
+format. `Response.eventStream` therefore reads UTF-8 directly instead of using
+`Response.charset`.
+
+An event stream can stay open without a final length. `Body.eventStream` reads
+a Java stream only when the HTTP client requests bytes. A slow connection then
+slows signal consumption. Closing or cancelling the request closes the signal
+stream. No adapter collects all signals before the request starts.
+
 ## Why forms keep arrays
 
 HTML forms can send the same field name more than once. A map from `String` to

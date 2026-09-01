@@ -1,9 +1,12 @@
 package eventstream;
 
-/// Everything an event stream can say.
+/// A value emitted by an event-stream parser.
 ///
-/// The format carries two kinds of thing, not one: events to dispatch, and the
-/// reconnection time the server wants a client to use. A parser that modelled
-/// only the events would drop the other on the floor without saying so, which
-/// is why this is a `switch` and not a single record.
+/// A parser emits an [Event] when a complete event ends. It emits a [Retry]
+/// when the stream contains a valid retry directive. It emits both values in
+/// their arrival order.
+///
+/// A caller that handles every protocol value must switch over both permitted
+/// implementations. A caller that only needs events can use
+/// [EventStream#events] instead.
 public sealed interface Signal permits Event, Retry {}

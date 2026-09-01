@@ -9,24 +9,38 @@ import java.util.concurrent.Executors;
 ///
 /// [Fetch] uses an execution for transport callbacks and request work. Factory
 /// methods create executions that own their worker resources. [#of(Executor)]
-/// adapts an executor owned by the application.
+/// adapts an executor owned by the application. An execution does not report
+/// task results.
 public interface Execution extends AutoCloseable {
     /// Runs `action` on this execution.
+    ///
+    /// The execution may run `action` before this method returns or schedule it
+    /// for later. A rejected action follows the executor's rejection behavior.
     void execute(Runnable action);
 
     /// Releases worker resources owned by this execution.
+    ///
+    /// Closing a borrowed or current-thread execution does nothing. Closing an
+    /// execution from [#flow] or [#virtualThreads] closes its executor service.
     @Override void close();
 
     /// Adapts an application-owned executor without taking ownership of it.
+    /// Closing the returned execution leaves `executor` open.
     static Execution of(Executor executor) { return new Impl(executor, null); }
 
-    /// Creates an execution that runs each action immediately on the calling thread.
+    /// Creates an execution that runs each action immediately on the thread that calls [#execute].
+    ///
+    /// Closing the returned execution does nothing.
     static Execution currentThread() { return new Impl(Runnable::run, null); }
 
     /// Creates an execution with one platform-thread event loop.
+    ///
+    /// The caller must close the returned execution to release the thread.
     static Execution flow() { var service = Executors.newSingleThreadExecutor(Thread.ofPlatform().name("fetch-flow-", 0).factory()); return new Impl(service, service); }
 
-    /// Creates an execution that runs actions on virtual threads.
+    /// Creates an execution that runs each action on a new virtual thread.
+    ///
+    /// The caller must close the returned execution to release its executor.
     static Execution virtualThreads() { var service = Executors.newVirtualThreadPerTaskExecutor(); return new Impl(service, service); }
 
     /// An execution adapter that optionally owns an executor service.

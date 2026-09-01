@@ -1,5 +1,7 @@
 package fetch;
 
+import eventstream.EventStream;
+import eventstream.Signal;
 import java.io.IOException;
 import java.io.InputStream;
 import java.io.Reader;
@@ -10,10 +12,11 @@ import java.util.List;
 import java.util.Locale;
 import java.util.OptionalLong;
 import java.util.concurrent.atomic.AtomicBoolean;
+import java.util.stream.Stream;
 import java.util.zip.GZIPInputStream;
 import java.util.zip.InflaterInputStream;
 
-/// An HTTP result with a one-shot streaming body.
+/// An HTTP result with status metadata and a one-shot streaming body.
 ///
 /// The response is available when its headers arrive. The body remains on the
 /// network until the caller reads or closes it. Always close the response when
@@ -68,7 +71,18 @@ public final class Response implements AutoCloseable {
     public String text() throws IOException { return body.text(charset()); }
 
     /// Returns the one-shot response body.
+    ///
+    /// Reading the body through this value consumes the same stream used by
+    /// [#reader()], [#text()], and [#eventStream()].
     public Body body() { return body; }
+
+    /// Parses the one-shot body as a UTF-8 event stream.
+    ///
+    /// The stream returns [eventstream.Event] and [eventstream.Retry] signals
+    /// in wire order. It does not use a `charset` parameter because the event
+    /// stream format requires UTF-8. It does not validate `Content-Type`.
+    /// Closing the stream closes the body.
+    public Stream<Signal> eventStream() throws IOException { return EventStream.parse(body.reader(StandardCharsets.UTF_8)); }
 
     /// Returns metadata for earlier redirect responses in wire order.
     ///
@@ -87,10 +101,15 @@ public final class Response implements AutoCloseable {
 
     /// Closes the response body and releases the response resources.
     ///
-    /// This method is idempotent. It can close an unread one-shot body.
+    /// This method is idempotent. It closes an unread body. If the caller
+    /// already opened a body stream, reader, publisher, or event stream, the
+    /// caller must close or cancel that view.
     public void close() { try { body.stream().close(); } catch (IOException | IllegalStateException ignored) {} }
 
     /// Metadata for one response that the client followed during redirection.
+    ///
+    /// The client stores hops in the order it received them. It closes each
+    /// hop body before it follows the redirect, so this record has metadata only.
     public record Hop(
             /// The request URI that received this redirect response.
             URI uri,

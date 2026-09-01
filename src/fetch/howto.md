@@ -98,6 +98,41 @@ must honor demand and stop when the client cancels the subscription. Use
 `sendAsync` with `Fetch.flow()` when the source and the request must stay
 non-blocking.
 
+## Send and receive an event stream
+
+To send signals, pass a `Stream<? extends Signal>` to `Request.eventStream`.
+The request writes the signals as UTF-8 and sets `Content-Type` to
+`text/event-stream`. The body is one-shot. The request closes the signal stream
+when body consumption ends.
+
+```java
+var outgoing = Stream.<Signal>of(
+        new Retry(2000),
+        Event.of("started"),
+        Event.of("progress", "halfway"));
+
+try (var response = session.post(uri, Body.empty())
+        .eventStream(outgoing)
+        .send()) {
+    response.requireSuccess();
+}
+```
+
+To receive signals, call `Response.eventStream`. Consume the returned stream
+in the response scope. Closing the signal stream closes the response body.
+
+```java
+try (var response = session.get(uri).send()) {
+    response.requireSuccess();
+    try (var signals = response.eventStream()) {
+        signals.forEach(signal -> handle(signal));
+    }
+}
+```
+
+The response parser returns `Event` and `Retry` values in wire order. It always
+uses UTF-8. It does not use a `charset` parameter from `Content-Type`.
+
 ## Download one Maven artifact
 
 1. Create a `Fetch` with `Fetch.virtualThreads()`.

@@ -3,7 +3,7 @@ package fetch;
 import java.io.IOException;
 import java.net.URI;
 
-/// Reports a failure that occurs before a complete HTTP response arrives.
+/// Reports a transport failure that occurs before a complete HTTP response arrives.
 ///
 /// [Request#send()] throws this exception as an `IOException`. [Request#sendAsync()]
 /// completes exceptionally with this exception when transport work fails.
@@ -36,9 +36,11 @@ public final class FetchException extends IOException {
     /// Returns the transport phase that failed.
     public Phase phase() { return phase; }
 
-    /// Returns whether the request method is considered retryable by the client.
+    /// Returns the `retryable` value supplied to the constructor.
     ///
     /// This flag does not recreate a one-shot body. The caller must still
     /// provide a new body when the retry sends request bytes.
+    ///
+    /// [Request] sets this flag for GET, HEAD, PUT, and DELETE methods.
     public boolean retryable() { return retryable; }
 }

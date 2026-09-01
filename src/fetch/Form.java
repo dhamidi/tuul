@@ -3,7 +3,7 @@ package fetch;
 import java.util.LinkedHashMap;
 import java.util.Map;
 
-/// Repeated fields for an `application/x-www-form-urlencoded` body.
+/// Immutable repeated fields for an `application/x-www-form-urlencoded` body.
 ///
 /// A field can have zero or more values. [Body#form(Form)] writes one encoded
 /// field pair for each value, in map order and then array order.
@@ -42,6 +42,8 @@ public final class Form {
     public Form with(String name, String... values) { var result = copy(fields); result.put(name, values.clone()); return new Form(result); }
 
     /// Returns a deep copy of the field map and its value arrays.
+    ///
+    /// Changes to the returned map or arrays do not change this form.
     public Map<String, String[]> fields() { return copy(fields); }
 
     private static LinkedHashMap<String, String[]> copy(Map<String, String[]> source) {

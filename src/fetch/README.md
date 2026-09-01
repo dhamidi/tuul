@@ -36,6 +36,10 @@ memory. `Body.publisher()` exposes the same bytes as a
 the response `Content-Type` charset. `Body.text(Charset)` is an explicit
 override for small bodies.
 
+`Request.eventStream(Stream)` writes `eventstream.Signal` values as a one-shot
+UTF-8 `text/event-stream` body. `Response.eventStream()` parses the response
+body lazily and returns events and retry signals in wire order.
+
 `Form` keeps repeated fields as `String[]` values. `Body.form(Map<String, ?>)`
 accepts a `String` or a `String[]` for each key as a convenient initializer.
 
