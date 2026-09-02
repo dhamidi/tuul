@@ -197,15 +197,15 @@ public final class App {
                 problems(index, emit);
                 return;
             }
-            var asking = new Queries.Asking(effect.flag("all"), effect.flag("members"), effect.flag("recursive"),
+            var scope = new Queries.Scope(effect.flag("all"), effect.flag("members"), effect.flag("recursive"),
                     effect.flag("documents"));
-            var answer = Queries.answer(index, symbol, asking);
+            var answer = Queries.any(index, symbol, scope);
             if (answer.isEmpty()) {
                 emit.emit(Message.of("docs.missing").with("symbol", symbol));
             } else if (!effect.flag("code")) {
                 emit.emit(Message.of("docs.result", answer.get()));
             } else {
-                emit.emit(Queries.source(index, answer.get())
+                emit.emit(Queries.code(index, answer.get())
                         .map(text -> Message.of("docs.code").with("text", text))
                         .orElseGet(() -> Message.of("docs.missing").with("symbol", symbol)
                                 .with("reason", "no source for " + symbol + ": "

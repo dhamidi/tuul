@@ -46,10 +46,6 @@ import web.ui.Ui;
 /// and the only thing that touches the index is an effect.
 public final class Browser implements AutoCloseable {
 
-    /// How many matches a search answers with. A page of results is a page,
-    /// not everything the index knows.
-    public static final int MATCHES = 25;
-
     /// This application's own assets, beside this application's own code.
     ///
     /// They are not tuul's: a stylesheet for browsing a symbol index has no
@@ -189,7 +185,7 @@ public final class Browser implements AutoCloseable {
                 .on(Routes.SEARCH.name(), Symbols::searched)
                 .on(Symbols.MATCHED, Symbols::matched)
                 .on(Message.HANDLE_ERROR, Symbols::unsearched)
-                .effect(Symbols.SEARCH, Symbols.searching(index, MATCHES))
+                .effect(Symbols.SEARCH, Symbols.searching(index, symbols.Queries.MATCHES))
                 .render((found, request, response) -> render(
                         Views.RESULTS.equals(frame(request))
                                 ? Views.results(routes(), found)

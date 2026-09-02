@@ -150,7 +150,7 @@ public final class Symbols {
                 emit.emit(Message.error("documentation is being indexed"));
                 return;
             }
-            emit.emit(Queries.symbol(index, name, Queries.Asking.SYMBOL)
+            emit.emit(Queries.symbol(index, name, Queries.Scope.BARE)
                     .map(description -> Message.of(FOUND, description))
                     .orElseGet(() -> Message.of(MISSING).with("symbol", name)));
         };

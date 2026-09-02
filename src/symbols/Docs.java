@@ -45,7 +45,7 @@ public final class Docs {
     /// Describes one symbol and lists its package documents.
     ///
     /// Each item under `documents` holds `symbol`, the name to pass to
-    /// [Queries#answer] for the document, its `title`, and its level-two
+    /// [Queries#any] for the document, its `title`, and its level-two
     /// `sections`. Read a body with [Catalog#document].
     ///
     /// A package without a doc comment takes its `doc` from the first

@@ -18,10 +18,10 @@ import json.Json;
 /// Pass any [Catalog]. The catalog decides where the symbols come from and
 /// whether a call can compile. This class only reads.
 ///
-/// Start with [#answer] when the name can be any shape. Call [#symbol],
+/// Start with [#any] when the name can be any shape. Call [#symbol],
 /// [#member] or [#document] when the shape is already known. Call [#search]
 /// for words instead of a name, [#roots] when there is no name yet, and
-/// [#source] to turn an answer into the text it was read from.
+/// [#code] to turn an answer into the text it was read from.
 public final class Queries {
 
     /// The number of matches one search answers with. Pass it as the limit
@@ -30,19 +30,19 @@ public final class Queries {
 
     private Queries() {}
 
-    /// What to include with a symbol. Pass [#SYMBOL] for the symbol alone.
+    /// How much of a symbol to include. Pass [#BARE] for the symbol alone.
     ///
     /// `all` includes members that are not public or protected. `members`
     /// adds a description of every type a package holds, or every nested
     /// type a type holds, under `members`. `recursive` adds subpackages to
     /// that, and implies `members`. `documents` adds the body of every
     /// package document under `documents` instead of only its title.
-    public record Asking(boolean all, boolean members, boolean recursive, boolean documents) {
+    public record Scope(boolean all, boolean members, boolean recursive, boolean documents) {
 
         /// The symbol alone: public members, document titles, no `members`.
-        public static final Asking SYMBOL = new Asking(false, false, false, false);
+        public static final Scope BARE = new Scope(false, false, false, false);
 
-        public Asking {
+        public Scope {
             if (recursive) members = true;
         }
     }
@@ -54,23 +54,23 @@ public final class Queries {
     /// and goes to [#member]. Anything else is a symbol and goes to
     /// [#symbol]. A name is read as one shape only. Returns empty when the
     /// catalog has nothing by that name in that shape.
-    public static Optional<Json.Object> answer(Catalog index, String name, Asking asking) {
+    public static Optional<Json.Object> any(Catalog index, String name, Scope scope) {
         var document = Document.reference(name);
         if (document.isPresent()) return document(index, document.get());
         var hash = name.indexOf('#');
-        if (hash > 0) return member(index, name.substring(0, hash), name.substring(hash + 1), asking.all());
-        return symbol(index, name, asking);
+        if (hash > 0) return member(index, name.substring(0, hash), name.substring(hash + 1), scope.all());
+        return symbol(index, name, scope);
     }
 
     /// Answers a type, a package, or a module by its qualified name.
     ///
     /// The object is the one [Docs#describe(TypeInfo, boolean, List)]
     /// builds. A package also lists its documents under `documents`. With
-    /// `asking.members()` the object holds `members`, one such object per
+    /// `scope.members()` the object holds `members`, one such object per
     /// type the symbol holds. Returns empty when the catalog has no symbol
     /// by that name.
-    public static Optional<Json.Object> symbol(Catalog index, String name, Asking asking) {
-        return index.lookup(name).map(type -> describe(index, type, asking, new LinkedHashSet<>()));
+    public static Optional<Json.Object> symbol(Catalog index, String name, Scope scope) {
+        return index.lookup(name).map(type -> describe(index, type, scope, new LinkedHashSet<>()));
     }
 
     /// Answers one member of a type by name.
@@ -118,8 +118,8 @@ public final class Queries {
         var siblings = page.documents().stream().filter(document -> document.kind().equals(reference.kind())).toList();
         var selected = page.selected();
         if (selected.isEmpty() && (!reference.slug().isEmpty() || siblings.isEmpty())) return Optional.empty();
-        var listed = Json.Array.of(siblings.stream().map(Queries::linked).toList());
-        var links = Json.Array.of(page.documents().stream().map(Queries::linked).toList());
+        var listed = Json.Array.of(siblings.stream().map(Queries::link).toList());
+        var links = Json.Array.of(page.documents().stream().map(Queries::link).toList());
         return Optional.of(selected
                 .map(document -> document.describe().with("documents", listed).with("links", links))
                 .orElseGet(() -> Json.Object.of()
@@ -134,7 +134,7 @@ public final class Queries {
 
     /// A document without its body: identity, title, and `file`, the name of
     /// the Markdown file it was read from.
-    private static Json linked(Document document) {
+    private static Json link(Document document) {
         return document.describe().without("doc").without("source")
                 .with("file", java.nio.file.Path.of(document.source()).getFileName().toString());
     }
@@ -145,7 +145,7 @@ public final class Queries {
         return Docs.describe(index.roots());
     }
 
-    /// Reads the source text behind an answer from [#answer].
+    /// Reads the source text behind an answer from [#any].
     ///
     /// Pass the object that method returned. For a document the text is its
     /// Markdown body. For a package or a module it is the whole
@@ -159,7 +159,7 @@ public final class Queries {
     /// cannot be read, or when a member was asked for and its declaration
     /// is not in the file. A type from a jar without a sources jar has no
     /// source.
-    public static Optional<String> source(Catalog index, Json.Object description) {
+    public static Optional<String> code(Catalog index, Json.Object description) {
         if (description.get("doc") instanceof Json.Str(var body) && description.get("package") instanceof Json.Str
                 && description.get("title") instanceof Json.Str) {
             return Optional.of(body);
@@ -170,7 +170,7 @@ public final class Queries {
         var name = description.string("class", "");
         var kind = description.string("kind", "");
         if (kind.equals("package") || kind.equals("module")) return text;
-        var path = written(name, location);
+        var path = path(name, location);
         var member = description.string("member", "");
         if (member.isEmpty() && !path.contains(".")) return text;
         var spans = Javadoc.spans(text.get(), file(location), path, member);
@@ -186,7 +186,7 @@ public final class Queries {
     /// The type as it is written inside its file: `Json.Object` for
     /// `json.Json.Object` in `Json.java`. The file name marks where the
     /// package ends, which the dotted name alone does not.
-    private static String written(String name, String location) {
+    private static String path(String name, String location) {
         var file = file(location);
         var outer = file.endsWith(".java") ? file.substring(0, file.length() - ".java".length()) : file;
         var segments = List.of(name.split("\\."));
@@ -241,7 +241,7 @@ public final class Queries {
         var groups = new ArrayList<Json>();
         grouped.forEach((packageName, held) -> groups.add(Json.Object.of()
                 .with("prefix", prefix(held))
-                .with("matches", Json.Array.of(held.stream().map(Queries::describe).toList()))));
+                .with("matches", Json.Array.of(held.stream().map(Queries::match).toList()))));
         return groups;
     }
 
@@ -253,19 +253,19 @@ public final class Queries {
     /// rule, so a type with a lowercase name is grouped as if it were a
     /// package.
     static String packageOf(Catalog.Match match) {
-        var page = page(match.symbol());
-        if (match.symbol().contains("/")) return page;
+        var owner = owner(match.symbol());
+        if (match.symbol().contains("/")) return owner;
         var kept = new ArrayList<String>();
-        for (var segment : page.split("\\.")) {
+        for (var segment : owner.split("\\.")) {
             if (segment.isEmpty() || Character.isUpperCase(segment.charAt(0))) break;
             kept.add(segment);
         }
         return String.join(".", kept);
     }
 
-    /// The symbol a match is shown on: the type for a member, the package
+    /// The symbol a match belongs to: the type for a member, the package
     /// for a document, and the symbol itself otherwise.
-    private static String page(String symbol) {
+    private static String owner(String symbol) {
         var slash = symbol.indexOf('/');
         if (slash >= 0) return symbol.substring(0, slash);
         var hash = symbol.indexOf('#');
@@ -274,16 +274,16 @@ public final class Queries {
 
     /// The prefix a group is shown under.
     ///
-    /// When the matches are on two or more pages, it is the longest dotted
-    /// name those pages share. When they are all on one page, it is the
-    /// package of that page.
+    /// When the matches belong to two or more owners, it is the longest
+    /// dotted name those owners share. When they all belong to one owner,
+    /// it is the package of that owner.
     static String prefix(List<Catalog.Match> matches) {
-        var pages = new LinkedHashSet<String>();
-        for (var match : matches) pages.add(page(match.symbol()));
-        if (pages.size() <= 1) return matches.isEmpty() ? "" : packageOf(matches.getFirst());
+        var owners = new LinkedHashSet<String>();
+        for (var match : matches) owners.add(owner(match.symbol()));
+        if (owners.size() <= 1) return matches.isEmpty() ? "" : packageOf(matches.getFirst());
         List<String> common = null;
-        for (var page : pages) {
-            var segments = List.of(page.split("\\."));
+        for (var owner : owners) {
+            var segments = List.of(owner.split("\\."));
             if (common == null) {
                 common = new ArrayList<>(segments);
                 continue;
@@ -297,7 +297,8 @@ public final class Queries {
         return String.join(".", common);
     }
 
-    private static Json describe(Catalog.Match match) {
+    /// One search match as a JSON row.
+    private static Json match(Catalog.Match match) {
         return Json.Object.of()
                 .with("symbol", match.symbol())
                 .with("kind", match.kind().toLowerCase(Locale.ROOT))
@@ -308,16 +309,16 @@ public final class Queries {
     }
 
     /// One symbol as [#symbol] answers it, with `members` when asked for.
-    private static Json.Object describe(Catalog index, TypeInfo type, Asking asking, Set<String> seen) {
+    private static Json.Object describe(Catalog index, TypeInfo type, Scope scope, Set<String> seen) {
         var documents = type.kind() == TypeInfo.Kind.PACKAGE ? index.documents(type.name()) : List.<Document>of();
-        var description = Docs.describe(type, asking.all(), documents);
-        if (asking.documents() && !documents.isEmpty()) {
+        var description = Docs.describe(type, scope.all(), documents);
+        if (scope.documents() && !documents.isEmpty()) {
             description = description.with("documents", Json.Array.of(documents.stream()
                     .map(document -> (Json) document.describe()).toList()));
         }
-        if (!asking.members()) return description;
+        if (!scope.members()) return description;
         seen.add(type.name());
-        return description.with("members", Json.Array.of(members(index, description, asking, seen)));
+        return description.with("members", Json.Array.of(members(index, description, scope, seen)));
     }
 
     /// The types a package or a type holds, each described as [#symbol]
@@ -325,17 +326,17 @@ public final class Queries {
     ///
     /// A subpackage is included only with `recursive`, and then its own
     /// contents follow it. A name that is reached twice is described once.
-    private static List<Json> members(Catalog index, Json.Object description, Asking asking, Set<String> seen) {
+    private static List<Json> members(Catalog index, Json.Object description, Scope scope, Set<String> seen) {
         var described = new ArrayList<Json>();
         for (var value : description.list("nested")) {
             if (!(value instanceof Json.Str(var name)) || !seen.add(name)) continue;
             var found = index.lookup(name);
             if (found.isEmpty()) continue;
             var group = found.get().kind().grouping();
-            if (group && !asking.recursive()) continue;
-            var member = describe(index, found.get(), new Asking(asking.all(), false, false, asking.documents()), seen);
+            if (group && !scope.recursive()) continue;
+            var member = describe(index, found.get(), new Scope(scope.all(), false, false, scope.documents()), seen);
             described.add(member);
-            if (group) described.addAll(members(index, member, asking, seen));
+            if (group) described.addAll(members(index, member, scope, seen));
         }
         return List.copyOf(described);
     }
