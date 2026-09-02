@@ -11,10 +11,9 @@ import json.Json;
 
 /// Turns a name a reader typed into the JSON that describes it.
 ///
-/// Call this from anything that answers a reader: `tuul docs` prints the
-/// object, `tuul browse` renders it. Both call the same method for the same
-/// name and get the same object, so a fact is either in the object or in
-/// neither output.
+/// Call this from anything that answers a reader. `tuul docs` prints the
+/// object and `tuul browse` renders it. Both get the same object for the
+/// same name.
 ///
 /// Pass any [Catalog]. The catalog decides where the symbols come from and
 /// whether a call can compile. This class only reads.
@@ -215,9 +214,9 @@ public final class Queries {
     ///
     /// Matches are grouped by the package they belong to, in the order of
     /// each group's best match. The prefix is the longest dotted name the
-    /// group's matches share, and is itself a package or a type. A caller
-    /// can pass it to [#symbol]. A search for `event stream` groups the types
-    /// and members that mention it under the prefix `eventstream`.
+    /// group's matches share, and is itself a package or a type that
+    /// [#symbol] answers. A search for `event stream` groups the types and
+    /// members that mention it under the prefix `eventstream`.
     public static Json.Object search(Catalog index, String text, int limit) {
         var every = true;
         var matches = distinct(index.search(text, limit));
@@ -277,8 +276,7 @@ public final class Queries {
     ///
     /// When the matches are on two or more pages, it is the longest dotted
     /// name those pages share. When they are all on one page, it is the
-    /// package of that page, so a lone type is shown under its package
-    /// rather than under itself.
+    /// package of that page.
     static String prefix(List<Catalog.Match> matches) {
         var pages = new LinkedHashSet<String>();
         for (var match : matches) pages.add(page(match.symbol()));

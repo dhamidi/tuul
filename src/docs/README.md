@@ -1,8 +1,8 @@
 # tuul docs
 
-`tuul docs` answers questions about symbols from the command line. It reads
-the symbol index in `build/index.db`. It updates the index when the sources
-changed. An agent runs it mid-task. A person runs it from a shell.
+Run `tuul docs` to read the API of a type, a package, or a dependency
+without opening its source. It reads the symbol index in `build/index.db`
+and updates the index when the sources changed.
 
 The index holds three sources of symbols:
 
@@ -10,7 +10,8 @@ The index holds three sources of symbols:
 - the selected jars under `vendor/`, with their source archives,
 - the running JDK.
 
-Ask for a name. The answer describes what the name is.
+Pass a name. The answer is the comment, the members, and the location of
+what the name refers to.
 
 ```sh
 $ tuul docs json.Json

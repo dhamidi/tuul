@@ -44,13 +44,12 @@ public final class Docs {
 
     /// Describes one symbol and lists its package documents.
     ///
-    /// Each item under `documents` holds `symbol`, the name that asks for
-    /// the document again, its `title`, and its level-two `sections`. Read a
-    /// body with [Catalog#document].
+    /// Each item under `documents` holds `symbol`, the name to pass to
+    /// [Queries#answer] for the document, its `title`, and its level-two
+    /// `sections`. Read a body with [Catalog#document].
     ///
     /// A package without a doc comment takes its `doc` from the first
-    /// paragraph of its README, when it has one. A package that wrote its
-    /// overview in Markdown is then not described by a blank line.
+    /// paragraph of its README, when it has one.
     public static Json.Object describe(TypeInfo type, boolean all, List<Document> documents) {
         var description = describe(type, all);
         if (type.kind() != TypeInfo.Kind.PACKAGE || documents.isEmpty()) return description;
@@ -118,8 +117,7 @@ public final class Docs {
     }
 
     /// One member asked for by name: the type and member on the first line,
-    /// then every overload with its line number and its whole comment. The
-    /// whole comment, because the member is what was asked for.
+    /// then every overload with its line number and its whole comment.
     private static void member(Json.Object description, Writer out) throws IOException {
         out.write(description.string("class", "?") + "#" + description.string("member", "") + "\n");
         where(description, out);
@@ -173,9 +171,8 @@ public final class Docs {
         for (var name : held) out.write("  " + name + "\n");
     }
 
-    /// The documents of a package, one per line: the name that asks for the
-    /// document, then its title. The name comes first because it is what a
-    /// reader hands back.
+    /// The documents of a package, one per line: the name to pass to
+    /// `tuul docs`, then the title.
     private static void documents(Json.Object description, Writer out) throws IOException {
         var documents = description.list("documents");
         if (documents.isEmpty()) return;

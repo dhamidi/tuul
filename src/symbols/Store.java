@@ -199,8 +199,7 @@ final class Store implements IndexStore {
     }
 
     /// The same words, where any one of them is enough. [#searchAny] uses
-    /// this after [#search] found nothing, so a reader gets a lead instead
-    /// of nothing.
+    /// this after [#search] found nothing.
     static String anyQuery(String typed) {
         return query(typed, " OR ");
     }

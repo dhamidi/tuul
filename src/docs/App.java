@@ -114,8 +114,7 @@ public final class App {
 
     /// A search answers with groups, so it prints as groups. No group at
     /// all is a failure. When the groups hold only some of the words, a line
-    /// on `err` says so after the results, where a reader who scrolls back
-    /// through them sees it first.
+    /// on `err` says so after the results.
     private static Step<State> found(State state, Message message) {
         var groups = message.list("groups");
         var query = message.string("query", "");

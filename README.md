@@ -600,12 +600,11 @@ dependency generations plus a lightweight JDK name generation. Dependency
 source JARs supply type and public or protected member documentation. Exact
 symbol lookup remains lazy and supplies full JDK source documentation.
 
-Everything `tuul docs` knows is in `build/index.db`. The index is refreshed
-only when a question needs it, so a question about `java.lang.String` does
-not wait for the project to compile. A project that does not compile is
-answered from the last build that did, with javac's messages after a
-`warning:` on standard error. See `tuul docs docs/reference` for the flags
-and the JSON fields.
+Run `tuul docs` while the project is broken or mid-edit. A question about
+`java.lang.String` does not wait for the project to compile. A question
+about the project is answered from the last build that compiled, with
+javac's messages after a `warning:` on standard error. Run
+`tuul docs docs/reference` for the flags and the JSON fields.
 
 ## Contributing
 

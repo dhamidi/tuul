@@ -9,7 +9,7 @@ tuul docs --search <text> [--json]
 
 `tuul docs` with no symbol lists the roots. The roots are the project's
 packages, the packages of the selected dependencies, and the JDK modules
-that export something. Each name in the list is a name you can ask for.
+that export something. Pass any name in the list to `tuul docs`.
 
 ## Name shapes
 
@@ -75,8 +75,8 @@ Two words are also tried as one word. A search for `event stream` finds the
 package `eventstream`.
 
 The results are grouped. Each group is named by the longest prefix its
-results share. That prefix is a package or a type. The name of a group is a
-name you can ask for. Groups come in the order of their best result. A
+results share. That prefix is a package or a type. Pass it to `tuul docs`
+to read it. Groups come in the order of their best result. A
 symbol appears once. Overloads are one result.
 
 ```
@@ -156,7 +156,7 @@ longer than that.
 ## The index
 
 The index is `build/index.db`, an SQLite database. Everything the command
-knows is in it. Deleting it costs the time to build it again.
+knows is in it. Delete it to force a full rebuild.
 
 The command refreshes the index when it needs to:
 

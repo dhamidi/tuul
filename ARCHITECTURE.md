@@ -60,9 +60,8 @@ connection per client, and browsers allow about six per origin over HTTP/1.1.
 
 The application tuul dogfoods this with is a fast, interactive browser for a
 symbol index — the one `tuul docs` already builds. Both ask `symbols.Queries`,
-so the command line and the browser answer a name with one description, and
-both read `build/index.db`, which holds everything the index knows — including
-why a project that does not compile is answered from its last good build.
+so the command line and the browser answer a name with one description. Both
+read `build/index.db`, and nothing else, for what the index knows.
 
 These are all plain Java libraries. They are packages in one Java module,
 named `tuul`.

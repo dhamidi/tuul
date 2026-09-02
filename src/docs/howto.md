@@ -3,7 +3,7 @@
 ## Find a symbol when you know only a word
 
 Search for the word. Read the group names first. A group name is a package
-or a type. You can ask for it next.
+or a type. Pass it to `tuul docs` to read it.
 
 ```sh
 $ tuul docs --search "event stream"

@@ -140,8 +140,7 @@ public final class Javadoc {
     /// overload, in source order. A name the file does not declare has none.
     ///
     /// javac starts a declaration at its first modifier, so the doc comment
-    /// above it is added by walking back over the comment lines. The comment
-    /// is included because it is what a reader of the span came for.
+    /// above it is added by walking back over the comment lines.
     public static List<Span> spans(String source, String fileName, String path, String member) {
         var compiler = ToolProvider.getSystemJavaCompiler();
         if (compiler == null) return List.of();
