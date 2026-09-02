@@ -319,6 +319,14 @@ public final class FormsTest {
                 markup.contains("id=\"name\" name=\"name\" required"));
         Check.that("a hint is described rather than only shown",
                 markup.contains("aria-describedby=\"name-hint\""));
+        var prompted = Form.at("/search").with(Field.search("q")
+                .label("Search").placeholder("Type a symbol").hint("A name or documentation words")).blank();
+        var promptedMarkup = Forms.html(prompted).markup();
+        Check.that("a field can show a concise prompt inside its control",
+                promptedMarkup.contains("placeholder=\"Type a symbol\""));
+        Check.that("without replacing its accessible label or hint",
+                promptedMarkup.contains("<label for=\"q\">Search</label>")
+                        && promptedMarkup.contains("aria-describedby=\"q-hint\""));
         Check.that("a checkbox is written with the hidden input that makes an unticked one send something",
                 markup.contains("<input type=\"hidden\" name=\"all\" value=\"0\">"
                         + "<input id=\"all\" name=\"all\" type=\"checkbox\" value=\"1\">"));

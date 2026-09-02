@@ -57,9 +57,21 @@ public final class Views {
     /// quietly reloads the page instead.
     public static final String MAIN = "main";
 
+    private static final String PAGE_NAVIGATION = "page-navigation";
+
     /// The icon, by its logical name — the one place it is spelled, so the
     /// page's link and the conventional path cannot point at different files.
     public static final String ICON = "favicon.svg";
+
+    /// The logical name of the logo asset. Pass it to [web.assets.Assets#url(String)]
+    /// when [#page] writes the home link. The browser feature includes this file
+    /// in its asset load path.
+    public static final String LOGO = "tuul-transparent.webp";
+
+    /// The logical name of the search icon asset. Pass it to
+    /// [web.assets.Assets#url(String)] when the page writes the submit button.
+    /// The browser feature includes this file in its asset load path.
+    public static final String SEARCH_ICON = "search.svg";
 
     /// A qualified type name, which is what can be linked: dotted, and ending
     /// in a segment that begins with a capital. `java.lang.String` is one and
@@ -100,13 +112,12 @@ public final class Views {
 
     /// A whole page.
     ///
-    /// Nothing here names a file. The stylesheets, the icon, the import map and
-    /// the element the cable listens through all arrive through
+    /// The stylesheets, icon, import map and cable element arrive through
     /// [Features#head()] and [Features#body()], from the packages that ship
-    /// them — so this cannot link a stylesheet that is not served, or serve one
-    /// it forgot to link. What is left is the module that starts the
-    /// application, which is this application's own and has to come after the
-    /// import map it imports through.
+    /// them. The home link resolves [#LOGO] through the same feature wiring.
+    /// What is left is the module that starts the application, which is this
+    /// application's own and has to come after the import map it imports
+    /// through.
     public static Html page(Features wiring, String heading, Submission search,
                             List<Catalog.Root> roots, Node... content) {
         var routes = wiring.router();
@@ -121,14 +132,16 @@ public final class Views {
                 body(
                         Html.deferred(wiring.body()::write),
                         a(classes("skip"), href("#" + MAIN), text("Skip to content")),
-                        Html.element("div", classes("shell"), Stimulus.controller(Ui.CONTROLLER),
+                        Html.element("div", classes("shell"),
+                                Stimulus.controller(Ui.CONTROLLER, PAGE_NAVIGATION),
                                 header(classes("bar"),
                                         Ui.group(Props.of("gap", "lg"),
                                                 Ui.opener(Props.of("href", routes.path(Routes.TREE)),
                                                         text("Browse")),
                                                 Ui.anchor(Props.of("href", routes.path(Routes.HOME)),
-                                                        classes("brand"), text("tuul")),
-                                                search(search))),
+                                                        classes("brand"),
+                                                        img(src(wiring.assets().url(LOGO)), alt("tuul"))),
+                                                search(wiring, search))),
                                 Html.element("div", classes("panes"),
                                         Ui.sidebar(Props.of("label", "What there is"), tree(routes, roots)),
                                         main(id(MAIN),
@@ -187,7 +200,12 @@ public final class Views {
     /// the price of a frame that can still be swapped, and it is the same thing
     /// the result links have always said.
     private static Html framed(Html inside) {
-        return Turbo.frame(CONTENT, inside);
+        return Turbo.frame(CONTENT,
+                Html.element("div", classes("page-layout"),
+                        Html.element("div", classes("page-body"), inside),
+                        Html.element("nav", classes("page-nav"), hidden(),
+                                aria("label", "On this page"),
+                                Stimulus.target(PAGE_NAVIGATION, "outline"))));
     }
 
     /// The search form, which lives in the bar on every page — one form, so
@@ -202,14 +220,17 @@ public final class Views {
     /// shared, reloaded, and undone with Back. A frame that updates without
     /// saying so leaves the address bar describing the page somebody saw before
     /// they typed anything.
-    private static Html search(Submission submission) {
+    private static Html search(Features wiring, Submission submission) {
         return Forms.html(submission,
                 classes("search"),
                 Stimulus.controller("search"),
                 Stimulus.action(Stimulus.on("input", "search", "ask")),
                 Turbo.targetFrame(RESULTS),
                 Turbo.advance(),
-                Ui.button(Props.of().on("submit"), text("Search")));
+                Ui.button(Props.of().on("submit"),
+                        classes("search-submit"),
+                        aria("label", "Search"),
+                        img(src(wiring.assets().url(SEARCH_ICON)), alt(""))));
     }
 
     /// The results, always inside their frame: Turbo takes the frame out of
@@ -238,9 +259,20 @@ public final class Views {
         if (!found.asked()) return Ui.blank(text("Type to search the index."));
         if (found.matches().isEmpty()) return Ui.blank(text("Nothing matches " + found.query() + "."));
         return Ui.stack(Props.of("gap", "md"),
+                Ui.prose(Props.of("tone", "muted"), text(resultSummary(found))),
                 found.every() ? Html.nothing() : Ui.prose(Props.of("tone", "muted"),
                         text("Nothing holds every word of " + found.query() + ". These hold some of them.")),
                 Html.each(found.groups(), group -> group(routes, group)));
+    }
+
+    /// The context above a non-empty result list. A cap without saying so makes
+    /// a broad search look complete when it is only the first page of answers;
+    /// the count and the cap are useful facts before a reader starts scanning.
+    private static String resultSummary(Found found) {
+        var count = found.matches().size();
+        var noun = count == 1 ? "result" : "results";
+        var capped = count >= symbols.Queries.MATCHES ? " (maximum shown)" : "";
+        return "Results for " + found.query() + " — " + count + " " + noun + capped + ".";
     }
 
     /// One group of results: the name its results share, then the results.
@@ -315,33 +347,43 @@ public final class Views {
                                         Ui.mono(Microdata.of("name"), text(qualified))),
                                 Ui.badge(Microdata.of("kind"), text(description.string("kind", "class"))),
                                 modifiers(description)),
-                        documentation(links, description.string("doc", ""))),
+                        anchoredDocumentation(links, description.string("doc", ""))),
                 relations(routes, description),
                 tags(description),
                 members(routes, links, "Constructors and methods", description, "methods"),
                 members(routes, links, "Fields", description, "fields"));
     }
 
-    /// A symbol nobody has. It is still a page of this browser — the trail, the
-    /// name in the face every other page names a symbol in — and it offers
-    /// somewhere to go, because a dead end that only says "no" makes the reader
-    /// reach for the back button and lose their place.
+    /// Content for a symbol lookup that failed. It names the requested symbol,
+    /// shows the lookup problem, and links to the search page. It does not link
+    /// parts of the symbol name because the catalog did not prove that they
+    /// exist.
     private static Html missing(Router routes, Symbol state) {
         var name = state.name();
-        var dot = name.lastIndexOf('.');
-        var onward = new ArrayList<Node>();
-        onward.add(Ui.anchor(Props.of("href", routes.path(Routes.HOME), "frame", Turbo.TOP),
-                text("Search from the beginning")));
-        if (dot > 0) {
-            onward.add(Ui.anchor(Props.of("href", symbolPath(routes, name.substring(0, dot)), "frame", Turbo.TOP),
-                    text("Look in " + name.substring(0, dot))));
-        }
         return Ui.stack(Props.of("gap", "lg"),
-                where(routes, name),
+                Ui.breadcrumbs(
+                        Ui.crumb(Props.of("href", routes.path(Routes.HOME), "frame", Turbo.TOP), text("tuul")),
+                        Ui.crumb(Props.of(), Ui.mono(text(name)))),
                 Ui.stack(Props.of("gap", "sm"),
-                        Ui.heading(Props.of("level", "1"), Ui.mono(text(name))),
+                        Ui.heading(Props.of("level", "1"), text("Symbol not found")),
+                        Ui.mono(text(name)),
                         problem(state.problem())),
-                Ui.group(Props.of("gap", "md"), onward.toArray(new Node[0])));
+                Ui.anchor(Props.of("href", routes.path(Routes.HOME), "frame", Turbo.TOP),
+                        text("Search the index")));
+    }
+
+    /// Content for an unmatched browser route. Pass the requested path exactly
+    /// as the router received it.
+    ///
+    /// The result names the path in an error notice and links to the search
+    /// page. The caller must render it in the page shell and set status 404.
+    public static Html notFound(Router routes, String path) {
+        return Ui.stack(Props.of("gap", "lg"),
+                Ui.heading(Props.of("level", "1"), text("Page not found")),
+                Ui.notice(Props.of("tone", "error"),
+                        Ui.prose(text("There is no page at " + path + "."))),
+                Ui.anchor(Props.of("href", routes.path(Routes.HOME), "frame", Turbo.TOP),
+                        text("Search the index")));
     }
 
     /// A package or a module is a container, not a declaration: it has no
@@ -371,7 +413,7 @@ public final class Views {
                                 Ui.heading(Props.of("level", "1"),
                                         Ui.mono(Microdata.of("name"), text(qualified))),
                                 Ui.badge(Microdata.of("kind"), text(description.string("kind", "package")))),
-                        documentation(links, description.string("doc", ""))),
+                        anchoredDocumentation(links, description.string("doc", ""))),
                 contents(routes, "Packages", qualified, packages),
                 documents(routes, description),
                 contents(routes, "Types", qualified, types));
@@ -392,7 +434,7 @@ public final class Views {
 
     private static Html documentGroup(Router routes, String packageName, String kind, List<Json.Object> documents) {
         return Html.element("section", classes("document-group"),
-                Html.element("h2", classes("document-kind"), text(section(kind))),
+                Html.element("h2", classes("document-kind"), id(headingId(section(kind))), text(section(kind))),
                 Html.element("div", classes("document-list"),
                         Html.each(documents, document -> documentEntry(routes, packageName, kind, document))));
     }
@@ -434,7 +476,8 @@ public final class Views {
     private static Html documentLinks(Router routes, String packageName, String kind, List<Json.Object> documents) {
         if (documents.isEmpty()) return Html.nothing();
         return Ui.stack(Props.of("gap", "sm"),
-                Ui.heading(Props.of("level", "2"), text("More " + section(kind).toLowerCase())),
+                        Ui.heading(Props.of("level", "2"), id(headingId("More " + section(kind).toLowerCase())),
+                                text("More " + section(kind).toLowerCase())),
                 Ui.items(Html.each(documents, document -> Ui.item(
                         Ui.anchor(Props.of("href", documentPath(routes, packageName, kind,
                                         document.string("slug", "")), "frame", Turbo.TOP),
@@ -480,7 +523,7 @@ public final class Views {
         if (held.isEmpty()) return Html.nothing();
         var prefix = within + ".";
         return Ui.stack(Props.of("gap", "sm"),
-                Ui.heading(Props.of("level", "2"), text(heading)),
+                Ui.heading(Props.of("level", "2"), id(headingId(heading)), text(heading)),
                 Ui.items(Props.of().on("columns"),
                         Html.each(held, name -> Ui.item(
                                 Ui.mono(Microdata.of("contains"),
@@ -621,7 +664,7 @@ public final class Views {
             written.add(Member.of(routes, links, member, seen == 1 ? name : name + "-" + seen));
         }
         return Ui.stack(Props.of("gap", "sm"),
-                Ui.heading(Props.of("level", "2"), text(heading)),
+                Ui.heading(Props.of("level", "2"), id(headingId(heading)), text(heading)),
                 Ui.items(Props.of().on("divided"), Html.fragment(written)));
     }
 
@@ -646,6 +689,19 @@ public final class Views {
 
     private static String symbolPath(Router routes, String symbol) {
         return routes.path(Routes.SYMBOL.with(Routes.NAME, symbol));
+    }
+
+    private static String headingId(String heading) {
+        var id = new StringBuilder();
+        var separator = false;
+        for (var character : heading.toLowerCase(java.util.Locale.ROOT).toCharArray()) {
+            if (character >= 'a' && character <= 'z' || character >= '0' && character <= '9') {
+                if (separator && !id.isEmpty()) id.append('-');
+                id.append(character);
+                separator = false;
+            } else separator = true;
+        }
+        return "section-" + id;
     }
 
     private static List<String> one(Json.Object description, String key) {
@@ -678,12 +734,14 @@ public final class Views {
             import CableStream from "@tuul/cable-stream";
             import Sidebar from "@tuul/ui-sidebar";
             import Search from "@tuul/browser-search";
+            import PageNavigation from "@tuul/browser-page-navigation";
             import ResultKind from "@tuul/result-kind";
 
             const stimulus = Application.start();
             stimulus.register("cable-stream", CableStream);
             stimulus.register("ui-sidebar", Sidebar);
             stimulus.register("search", Search);
+            stimulus.register("page-navigation", PageNavigation);
             stimulus.register("result-kind", ResultKind);
             """;
 }

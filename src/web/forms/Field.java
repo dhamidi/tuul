@@ -35,6 +35,7 @@ public record Field(
         boolean multiple,
         List<Choice> choices,
         String hint,
+        String placeholder,
         List<Rule> rules) {
 
     /// How the field is drawn. The parameter decides what a value means. This
@@ -144,41 +145,51 @@ public record Field(
     }
 
     private static Field of(Parameter<?> parameter, Widget widget, String input) {
-        return new Field(parameter, titled(parameter.name()), widget, input, false, false, List.of(), "", List.of());
+        return new Field(parameter, titled(parameter.name()), widget, input, false, false, List.of(), "", "", List.of());
     }
 
     public Field label(String label) {
-        return new Field(parameter, label, widget, input, mandatory, multiple, choices, hint, rules);
+        return new Field(parameter, label, widget, input, mandatory, multiple, choices, hint, placeholder, rules);
     }
 
     /// A word or two under the input, for the thing a label cannot say without
     /// becoming a sentence.
     public Field hint(String hint) {
-        return new Field(parameter, label, widget, input, mandatory, multiple, choices, hint, rules);
+        return new Field(parameter, label, widget, input, mandatory, multiple, choices, hint, placeholder, rules);
+    }
+
+    /// An example or prompt for an empty input. Call this when the label does
+    /// not show the expected input shape.
+    ///
+    /// Blank text omits the placeholder. Checkboxes, selects, and text areas
+    /// ignore it. The placeholder disappears after input. It does not replace
+    /// [#label(String)] or [#hint(String)].
+    public Field placeholder(String placeholder) {
+        return new Field(parameter, label, widget, input, mandatory, multiple, choices, hint, placeholder, rules);
     }
 
     public Field required() {
-        return new Field(parameter, label, widget, input, true, multiple, choices, hint, rules);
+        return new Field(parameter, label, widget, input, true, multiple, choices, hint, placeholder, rules);
     }
 
     /// Keeps every value rather than the first, for the fields that are a list:
     /// a multiple select, or a row of checkboxes sharing a name.
     public Field repeated() {
-        return new Field(parameter, label, widget, input, mandatory, true, choices, hint, rules);
+        return new Field(parameter, label, widget, input, mandatory, true, choices, hint, placeholder, rules);
     }
 
     public Field options(Choice... choices) {
-        return new Field(parameter, label, widget, input, mandatory, multiple, List.of(choices), hint, rules);
+        return new Field(parameter, label, widget, input, mandatory, multiple, List.of(choices), hint, placeholder, rules);
     }
 
     public Field rule(Rule rule) {
         var next = new ArrayList<>(rules);
         next.add(rule);
-        return new Field(parameter, label, widget, input, mandatory, multiple, choices, hint, next);
+        return new Field(parameter, label, widget, input, mandatory, multiple, choices, hint, placeholder, next);
     }
 
     public Field type(String input) {
-        return new Field(parameter, label, widget, input, mandatory, multiple, choices, hint, rules);
+        return new Field(parameter, label, widget, input, mandatory, multiple, choices, hint, placeholder, rules);
     }
 
     /// The id an input gets, and what a label points at. One field, one id —

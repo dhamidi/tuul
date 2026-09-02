@@ -23,7 +23,9 @@ public final class Search {
     public static Form form(Router routes) {
         return Form.named("search", routes.path(Routes.SEARCH))
                 .get()
-                .with(Field.search(QUERY).label("Search").hint("A type name, or words from its documentation"));
+                .with(Field.search(QUERY).label("Search")
+                        .placeholder("Type a symbol or search docs")
+                        .hint("A type name, or words from its documentation"));
     }
 
     public static Submission blank(Router routes) {

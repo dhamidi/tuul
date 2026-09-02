@@ -119,6 +119,7 @@ public final class Forms {
     private static Html typed(Submission submission, Field field, List<Attribute> common) {
         var attributes = new ArrayList<>(common);
         attributes.add(type(field.input()));
+        if (!field.placeholder().isBlank()) attributes.add(placeholder(field.placeholder()));
         if (!field.multiple()) {
             attributes.add(value(submission.typed(field.name())));
             return input(attributes.toArray(new Attribute[0]));

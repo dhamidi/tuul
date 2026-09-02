@@ -3,6 +3,7 @@ package browser;
 import browser.Symbols.Found;
 import browser.Symbols.Symbol;
 import harness.Check;
+import java.util.ArrayList;
 import java.util.List;
 import json.Json;
 import web.Router;
@@ -50,6 +51,16 @@ public final class ViewsTest {
         Check.that("and says what kind of thing it is", some.contains("itemprop=\"kind\""));
         Check.that("in the way a person reads rather than the way an enum spells it",
                 some.contains(">interface<") && !some.contains(">INTERFACE<"));
+        Check.that("and says what the results answer", some.contains("Results for json — 2 results."));
+
+        var capped = new ArrayList<Json>();
+        for (var number = 0; number < symbols.Queries.MATCHES; number++) {
+            capped.add(match("json.Result" + number, "CLASS"));
+        }
+        var maximum = markup(Views.results(routes, Found.nothing().asking("json")
+                .matching(capped)));
+        Check.that("a full result page says when the maximum is shown",
+                maximum.contains("Results for json — 25 results (maximum shown)."));
 
         var failed = markup(Views.results(routes, Found.nothing().asking("...").failed("the index said no")));
         Check.that("a failure is a panel as well, so the page still works",
@@ -125,6 +136,8 @@ public final class ViewsTest {
         Check.that("a package links to sections inside one document",
                 hub.contains("href=\"/symbols/tcl/tutorial#create-the-interpreter\""));
         Check.that("document kinds are compact groups", hub.contains("class=\"document-grid\""));
+        Check.that("a package document group has a stable outline id",
+                hub.contains("<h2 class=\"document-kind\" id=\"section-tutorials\">Tutorials</h2>"));
 
         var description = Json.Object.of()
                 .with("package", "tcl").with("kind", "tutorial").with("slug", "")
@@ -139,6 +152,15 @@ public final class ViewsTest {
         var anchored = markup(Views.packageDocument(routes, markdown.Links.NONE, sectioned));
         Check.that("a document section has the fragment target used by the package page",
                 anchored.contains("<h2 id=\"create-the-interpreter\">Create the interpreter</h2>"));
+
+        var other = Json.Object.of().with("kind", "tutorial").with("slug", "second")
+                .with("title", "A second script");
+        var withOther = description.with("documents", Json.Array.of(List.of(
+                Json.Object.of().with("kind", "tutorial").with("slug", "")
+                        .with("title", "A first script"), other)));
+        var linked = markup(Views.packageDocument(routes, markdown.Links.NONE, withOther));
+        Check.that("a document's related heading has a stable outline id",
+                linked.contains("id=\"section-more-tutorials\""));
     }
 
     /// A symbol page: what it says it is describing, and what it links to.
@@ -203,6 +225,11 @@ public final class ViewsTest {
 
         Check.that("fields are their own section", page.contains("Fields"));
         Check.that("and methods theirs", page.contains("Constructors and methods"));
+        Check.that("the methods section has a stable outline id",
+                page.contains("id=\"section-constructors-and-methods\""));
+        Check.that("the fields section has a stable outline id",
+                page.contains("id=\"section-fields\""));
+
     }
 
     /// A failure is a resource, not a sentence — which is what makes it
@@ -218,6 +245,15 @@ public final class ViewsTest {
         Check.that("so does a symbol nobody has", missing.contains("itemtype=\"/Problem\""));
         Check.that("which is not a symbol, whatever else it is", !missing.contains("itemtype=\"/Symbol\""));
         Check.that("and still names what was asked for", missing.contains("nothing.At.All"));
+        Check.that("with a clear missing-symbol heading", missing.contains(">Symbol not found</h1>"));
+        Check.that("and a direct search recovery action", missing.contains(">Search the index</a>"));
+        Check.that("without linking an ancestor that may also be missing",
+                !missing.contains("/symbols/nothing.At"));
+
+        var route = markup(Views.notFound(routes, "/nowhere"));
+        Check.that("an unknown route has a clear heading", route.contains(">Page not found</h1>"));
+        Check.that("and explains the missing path", route.contains("There is no page at /nowhere."));
+        Check.that("with a direct search recovery action", route.contains(">Search the index</a>"));
     }
 
     /// The search box, which drives the panel — the one piece of the design
@@ -225,6 +261,11 @@ public final class ViewsTest {
     private static void form(Router routes) {
         var blank = markup(web.forms.Forms.html(Search.blank(routes)));
         Check.that("the search box asks for the field the update reads", blank.contains("name=\"q\""));
+        Check.that("and gives an empty search a concise visible prompt",
+                blank.contains("placeholder=\"Type a symbol or search docs\""));
+        Check.that("while retaining the accessible label and hint",
+                blank.contains("<label for=\"q\">Search</label>")
+                        && blank.contains("A type name, or words from its documentation"));
 
         var asked = markup(web.forms.Forms.html(Search.asking(routes, "json.Json")));
         Check.that("and holds what was typed, so a page re-render does not empty it",

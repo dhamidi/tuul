@@ -74,9 +74,21 @@ public final class HandlerTest {
         Check.that("including Turbo", text.contains("@hotwired/turbo"));
         Check.that("and Stimulus", text.contains("@hotwired/stimulus"));
         Check.that("it starts them", text.contains("type=\"module\""));
+        Check.that("the shell keeps the page navigation controller across frame updates",
+                text.contains("data-controller=\"ui-sidebar page-navigation\""));
+        Check.that("the content frame owns the page layout and body",
+                text.contains("<turbo-frame id=\"content\"><div class=\"page-layout\"><div class=\"page-body\">"));
+        Check.that("the page outline has an accessible navigation label",
+                text.contains("class=\"page-nav\" hidden aria-label=\"On this page\""));
         Check.that("it listens for the index being rebuilt", text.contains("data-controller=\"cable-stream\""));
         Check.that("it offers the search box", text.contains("name=\"q\""));
         Check.that("and a way back to the front page", text.contains("href=\"/\""));
+        Check.that("the home link carries the digested logo", text.contains(
+                "<img src=\"" + browser.assets().url(Views.LOGO) + "\" alt=\"tuul\""));
+        Check.that("the search submit is a named icon button", text.contains(
+                "<button class=\"ui-button search-submit\" type=\"submit\" aria-label=\"Search\">"
+                        + "<img src=\"" + browser.assets().url(Views.SEARCH_ICON) + "\" alt=\"\""));
+        Check.that("the icon button has no visible text fallback", !text.contains(">Search</button>"));
         Check.that("the front page holds no results yet", !text.contains("itemtype=\"/Symbol\""));
 
         var searched = Memory.handle(browser.handler(), Memory.get("/search?q=write")).text();
@@ -191,7 +203,9 @@ public final class HandlerTest {
         var nowhere = Memory.handle(browser.handler(), Memory.get("/nowhere"));
         Check.equal("so is a page that does not exist", 404, nowhere.status());
         Check.that("which also offers the search box", nowhere.text().contains("name=\"q\""));
-        Check.that("and says what was not there", nowhere.text().contains("/nowhere"));
+        Check.that("with a clear page-not-found heading", nowhere.text().contains(">Page not found</h1>"));
+        Check.that("and says what was not there", nowhere.text().contains("There is no page at /nowhere."));
+        Check.that("with a direct search recovery action", nowhere.text().contains(">Search the index</a>"));
     }
 
     /// Assets, which are the one thing here a browser fetches more than once
@@ -204,6 +218,16 @@ public final class HandlerTest {
         Check.that("cacheable for good, since its name changes when it does",
                 css.header("Cache-Control").orElse("").contains("immutable"));
         Check.that("and tagged, so a client can ask whether it changed", css.header("ETag").isPresent());
+
+        var logoUrl = browser.assets().url(Views.LOGO);
+        var logo = Memory.handle(browser.handler(), Memory.get(logoUrl));
+        Check.equal("the logo asset is served", 200, logo.status());
+        Check.that("as a WebP image", logo.header("Content-Type").orElse("").contains("image/webp"));
+
+        var searchIconUrl = browser.assets().url(Views.SEARCH_ICON);
+        var searchIcon = Memory.handle(browser.handler(), Memory.get(searchIconUrl));
+        Check.equal("the search icon asset is served", 200, searchIcon.status());
+        Check.that("as an SVG image", searchIcon.header("Content-Type").orElse("").contains("image/svg+xml"));
 
         var again = Memory.handle(browser.handler(),
                 Memory.request("GET", url, Headers.of("If-None-Match", css.header("ETag").orElse("")), ""));

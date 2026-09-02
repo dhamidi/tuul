@@ -29,12 +29,15 @@ export default class Sidebar extends Controller {
     this.opener.setAttribute("role", "button")
     this.opened = () => this.mark()
     this.closed = () => this.restore()
+    this.navigated = event => this.navigate(event)
     this.panelTarget.addEventListener("close", this.closed)
+    this.panelTarget.addEventListener("click", this.navigated)
     this.mark()
   }
 
   disconnect() {
     if (this.panelTarget) this.panelTarget.removeEventListener("close", this.closed)
+    if (this.panelTarget) this.panelTarget.removeEventListener("click", this.navigated)
   }
 
   // showModal() is the reason this is a <dialog>: focus goes inside and stays
@@ -62,6 +65,15 @@ export default class Sidebar extends Controller {
 
   close() {
     if (this.panelTarget.open) this.panelTarget.close()
+  }
+
+  // A navigation is the end of the drawer task. Close it before Turbo follows
+  // the link, so the new page is visible immediately and the reader does not
+  // need a second tap on the close button. This is limited to the modal case:
+  // the wide presentation is a normal pane and must stay in the layout.
+  navigate(event) {
+    if (!this.panelTarget.matches(":modal")) return
+    if (event.target.closest("a")) this.close()
   }
 
   // Light dismiss: a tap outside the panel closes it, which is what the

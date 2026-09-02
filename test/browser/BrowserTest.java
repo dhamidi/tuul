@@ -115,13 +115,33 @@ public final class BrowserTest {
         Check.that("after the components', so this application's stylesheet cascades over theirs",
                 assets.loadPaths().indexOf(Bundled.of(web.ui.Ui.class, web.ui.Ui.ASSETS))
                         < assets.loadPaths().indexOf(mine));
-        for (var file : List.of("browser.css", "search.js", "kind.js", Views.ICON)) {
+        for (var file : List.of(
+                "browser.css", "search.js", "page-navigation.js", "kind.js",
+                Views.ICON, Views.LOGO, Views.SEARCH_ICON,
+                "source-sans-3-latin.woff2", "source-sans-3-latin-ext.woff2",
+                "source-sans-3-OFL.txt", "source-serif-4-latin.woff2",
+                "source-serif-4-latin-ext.woff2", "source-serif-4-latin-italic.woff2",
+                "source-serif-4-latin-ext-italic.woff2", "source-serif-4-OFL.txt")) {
             Check.that(file + " is on the load path", assets.find(file).isPresent());
         }
         Check.that("and Turbo still is, without this application asking for it",
                 assets.find(Hotwired.TURBO_FILE).isPresent());
         Check.that("the stylesheet the page links to is really served",
                 assets.serve(assets.url("browser.css")).status() == 200);
+        for (var font : List.of("source-sans-3-latin.woff2", "source-sans-3-latin-ext.woff2")) {
+            var served = assets.serve(assets.url(font));
+            Check.equal(font + " is served as a webfont", 200, served.status());
+            Check.equal(font + " has the WOFF2 content type", "font/woff2",
+                    served.headers().get("Content-Type"));
+        }
+        for (var font : List.of(
+                "source-serif-4-latin.woff2", "source-serif-4-latin-ext.woff2",
+                "source-serif-4-latin-italic.woff2", "source-serif-4-latin-ext-italic.woff2")) {
+            var served = assets.serve(assets.url(font));
+            Check.equal(font + " is served as a webfont", 200, served.status());
+            Check.equal(font + " has the WOFF2 content type", "font/woff2",
+                    served.headers().get("Content-Type"));
+        }
     }
 
     /// One of the specs in `cases`, by name — a resource, so it is found the

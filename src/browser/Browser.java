@@ -98,13 +98,12 @@ public final class Browser implements AutoCloseable {
                 cable.feature(Topics.fixed(INDEX)), own(watch(cable, watched))), cable);
     }
 
-    /// What this application ships to the browser.
+    /// The browser feature and its asset path.
     ///
-    /// Its own files, its own stylesheet and icon, and the two controllers it
-    /// wrote. Everything else on the page — the components' stylesheet, the
-    /// cable's controller and element, Turbo and Stimulus — comes from the
-    /// package that ships it, which is why this list is short and why nothing
-    /// here repeats a file name that a framework package already knows.
+    /// The feature adds this application's stylesheet and assets, the icon
+    /// contribution, and the search, page-navigation, and result-kind modules.
+    /// Everything else on the page comes from the package that ships it.
+    /// This feature does not repeat a file name that a framework package owns.
     ///
     /// It is named last in [#of(Index, Path)] so that [#STYLESHEET] cascades
     /// over the components' one. See [Features] on what that order costs.
@@ -126,6 +125,7 @@ public final class Browser implements AutoCloseable {
                 .stylesheet(STYLESHEET)
                 .head(Views.icon())
                 .pin("@tuul/browser-search", "search.js")
+                .pin("@tuul/browser-page-navigation", "page-navigation.js")
                 .pin(ResultItemKind.MODULE, ResultItemKind.FILE);
         return watching == null ? feature : feature.closing(watching::shutdownNow);
     }
@@ -338,8 +338,8 @@ public final class Browser implements AutoCloseable {
     }
 
     private void missing(Request request, Response response) throws IOException {
-        render(shell(request, "Not found", Search.blank(routes()),
-                Views.searching(routes(), Found.nothing().failed("There is nothing at " + request.path() + "."))),
+        render(shell(request, "Page not found", Search.blank(routes()),
+                Views.notFound(routes(), request.path())),
                 Status.NOT_FOUND, response);
     }
 
