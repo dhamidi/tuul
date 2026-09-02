@@ -93,19 +93,11 @@ public final class Sources {
 
     /// Reads the text at a source location the index recorded.
     ///
-    /// A location is a file path, an archive entry, or a `jrt:/` path.
-    ///
-    /// A file path such as `src/a/B.java` returns its content. A missing or
-    /// unreadable file returns empty.
-    ///
-    /// An archive entry is written as `archive!/entry`, such as
-    /// `vendor/x/x-sources.jar!/a/B.java` or
-    /// `.../lib/src.zip!/java.base/java/lang/String.java`. This opens the
-    /// archive named before `!/` and reads the entry named after it. A
-    /// missing archive or entry returns empty.
-    ///
-    /// A `jrt:/` path names a class file, not a source file. It always
-    /// returns empty.
+    /// Pass the `source` of a [TypeInfo] or a [Document]. A location is a
+    /// file such as `src/a/B.java`, or an archive entry written as
+    /// `archive!/entry`, such as `vendor/x/x-sources.jar!/a/B.java`. Empty
+    /// when the file or entry cannot be read, and for a `jrt:/` location,
+    /// which names a class file and has no source.
     public static java.util.Optional<String> text(String location) {
         if (location.isEmpty() || location.startsWith("jrt:")) return java.util.Optional.empty();
         try {

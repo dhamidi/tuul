@@ -157,8 +157,8 @@ public final class Symbols {
     }
 
     /// Searches the index the way `tuul docs --search` does: each symbol
-    /// once, grouped by what it belongs to, and matched on any word when no
-    /// result holds every word.
+    /// once, grouped by package, and on any word when nothing holds every
+    /// word. The message body is the object [Queries#search] returns.
     public static Effect.Handler searching(Catalog index, int limit) {
         return (effect, emit) -> {
             var query = effect.string("query", "");

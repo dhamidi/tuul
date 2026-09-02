@@ -79,8 +79,8 @@
 ///
 /// The supported kinds are:
 ///
-/// - [symbols.Document#README] is the package's `README.md`. Its filename
-///   is fixed, not a `<kind>.md` pattern.
+/// - [symbols.Document#README] is the package's `README.md`, spelled that
+///   way and no other.
 /// - `tutorial` teaches through a first working result.
 /// - `howto` gives steps for one task.
 /// - `reference` states facts, tables, and rules.
@@ -98,10 +98,9 @@
 /// `tutorial-01-first-script.md` has the route
 /// `/symbols/tcl/tutorial/first-script`.
 ///
-/// Names are lowercase, except `README.md`, which keeps the filename other
-/// tools expect. The index ignores `Tutorial.md`. It also ignores
-/// `ORIGIN.md`, `AGENTS.md`, tool instruction files, notes, and Markdown
-/// files without a supported prefix.
+/// Names are lowercase, except `README.md`. The index ignores `Tutorial.md`.
+/// It also ignores `ORIGIN.md`, `AGENTS.md`, tool instruction files, notes,
+/// and Markdown files without a supported prefix.
 ///
 /// Keep document files in the Java package directory. Do not create a
 /// `tutorial/`, `howto/`, `reference/`, or `guide/` directory. Java tools can

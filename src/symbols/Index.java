@@ -46,16 +46,16 @@ import sqlite3.SqliteException;
 /// compiling the project. A successful generation remains in `index.db` for
 /// later processes.
 ///
-/// Everything the index knows is in `index.db`. A project that fails to
-/// compile does not stop the index. It writes the failure to the project's
-/// origin row. The rows of the last build that did compile keep answering,
-/// and [#problems()] reports the failure. The index does not compile the
-/// same broken tree twice.
+/// Everything the index knows is in `index.db`. When the project does not
+/// compile, the index records the failure against the current sources and
+/// keeps answering from the rows of the last build that compiled.
+/// [#problems()] returns that failure. The same sources are not compiled
+/// again until they change.
 ///
-/// A call to [#lookup(String)] compiles the project only when the project
-/// could hold the requested name. A question about the JDK or a dependency
-/// is answered from their own rows or archives. It never waits for javac,
-/// however stale the project is.
+/// [#lookup(String)] compiles the project only when the project could hold
+/// the name. A name in the JDK or in a dependency is answered from their
+/// rows or archives, so it does not wait for javac when the project is
+/// stale.
 ///
 /// Call [#catalog(Path)] when a caller must only read committed rows. That
 /// catalog has no source paths and cannot start compilation.
@@ -94,9 +94,9 @@ public final class Index implements Catalog {
     private final Compiler compiler;
     private Map<String, byte[]> classes;
 
-    /// The reason the last compile in this process failed, or empty when the
-    /// compile succeeded. An index with no store keeps the failure here
-    /// instead of in the project's origin row.
+    /// Why the last compile in this process failed, or empty. An index
+    /// without a store has no origin row to record it in, so it is kept
+    /// here.
     private String compileProblem = "";
 
     private List<Document> projectDocuments;
@@ -164,11 +164,10 @@ public final class Index implements Catalog {
     /// after a type is a thing somebody wrote by accident and a type named after
     /// a package is not.
     ///
-    /// The project compiles only when it could hold the name. That is true
-    /// when the last generation held the name, held the name's package, or
-    /// when nothing else answers. A question about `java.lang.String`
-    /// therefore never waits for javac, however many project files changed
-    /// since the last index.
+    /// The project is compiled only when it could hold the name: its last
+    /// generation held the name or the name's package, or no other origin
+    /// holds the name. A lookup of `java.lang.String` therefore does not
+    /// compile a stale project.
     public Optional<TypeInfo> lookup(String name) {
         var current = project(name, false);
         if (current.isPresent()) return current;
@@ -181,10 +180,10 @@ public final class Index implements Catalog {
         return project(name, true);
     }
 
-    /// Whether the name could be the project's, judged from the last
-    /// generation without compiling anything. The last generation held the
-    /// name, or it held the name's package. A project that has never been
-    /// indexed could hold any name.
+    /// Whether the project could hold this name, judged from its last
+    /// generation without compiling. True when that generation held the
+    /// name or the name's package. True for a project that was never
+    /// indexed, since it could hold any name.
     private boolean projectMayHold(String name) {
         var origin = snapshot("project", "sources", sourceStamp);
         if (origin.isEmpty() || !origin.get().complete()) return true;
@@ -199,10 +198,10 @@ public final class Index implements Catalog {
         }
     }
 
-    /// Reports why this index's answers may be out of date. A project that
-    /// fails to compile still answers lookups. Those answers come from the
-    /// rows of the last build that did compile. This method names that
-    /// failure as the reason.
+    /// Why an answer may be out of date, one line per failure: the project
+    /// does not compile, or its documents could not be indexed. Empty when
+    /// every generation is current. The lines are meant for a reader and
+    /// carry javac's messages.
     @Override
     public List<String> problems() {
         if (store.isEmpty()) return problems(compileProblem, documentProblem);
@@ -211,8 +210,8 @@ public final class Index implements Catalog {
                 snapshot("project", "documents", documentStamp).map(IndexStore.Snapshot::problem).orElse(""));
     }
 
-    /// Builds the problem lines a reader sees. Every catalog implementation
-    /// words them the same way.
+    /// The lines [#problems()] returns, worded here so that every catalog
+    /// over `index.db` says the same thing.
     static List<String> problems(String sources, String documents) {
         var lines = new ArrayList<String>();
         if (!sources.isEmpty()) {
@@ -233,8 +232,8 @@ public final class Index implements Catalog {
         return documents(packageName, "");
     }
 
-    /// Returns the documents of one package. This method makes only the
-    /// document generation current. A Markdown question never compiles Java.
+    /// The documents of one package. Only the document generation is
+    /// refreshed for this, so reading Markdown does not compile Java.
     @Override
     public List<Document> documents(String packageName, String kind) {
         ensureDocumentsCurrent();
@@ -649,10 +648,10 @@ public final class Index implements Catalog {
 
     /// The project's answer for one name.
     ///
-    /// When `compiling` is false, this method answers only from a generation
-    /// that is current, or from the last good generation when the current
-    /// sources fail to build. It does not start javac. A stale generation
-    /// with neither answers nothing.
+    /// With `compiling` false, only a current generation answers, or the
+    /// last good one when the current sources fail to build. A stale
+    /// generation answers nothing, and javac is not started. With
+    /// `compiling` true, a stale generation is refreshed first.
     private Optional<TypeInfo> project(String name, boolean compiling) {
         var origin = snapshot("project", "sources", sourceStamp);
         if (origin.isPresent() && (origin.get().fresh() || origin.get().failed())) {
@@ -995,16 +994,14 @@ public final class Index implements Catalog {
         }
     }
 
-    /// Whether an origin needs no more work for its stamp. The origin is
-    /// settled when it is current, or when this stamp already failed. A
-    /// failed stamp is not retried.
+    /// Whether an origin needs no work for its stamp: it is current, or this
+    /// stamp already failed. A failed stamp is not tried again.
     private static boolean settled(Optional<IndexStore.Snapshot> origin) {
         return origin.isPresent() && ((origin.get().fresh() && origin.get().complete()) || origin.get().failed());
     }
 
-    /// Makes only the package documents current. Reading Markdown does not
-    /// wait for javac. The source and document generations use separate
-    /// stamps, and this method touches only the document stamp.
+    /// Refreshes the package documents and nothing else. The documents have
+    /// their own stamp, so this does not compile Java.
     private void ensureDocumentsCurrent() {
         if (store.isEmpty()) {
             discoveredDocuments();
@@ -1048,9 +1045,8 @@ public final class Index implements Catalog {
     }
 
     /// Compiles and publishes the project when its sources changed. A build
-    /// that fails is recorded against this stamp. The rows of the last good
-    /// build keep answering. The index does not compile the same stamp
-    /// twice.
+    /// that fails is recorded against this stamp, the rows of the last good
+    /// build stay, and this stamp is not compiled again.
     private boolean refreshSources() {
         var source = snapshot("project", "sources", sourceStamp);
         if (settled(source)) return false;
@@ -1068,8 +1064,8 @@ public final class Index implements Catalog {
     }
 
     /// Publishes the package documents when a Markdown file changed. Two
-    /// files that name the same document are recorded as a problem, the same
-    /// way a build failure is. The last good documents keep answering.
+    /// files that name the same document are recorded as a failure, the
+    /// same way a build failure is, and the last good documents stay.
     private boolean refreshDocuments() {
         var documents = snapshot("project", "documents", documentStamp);
         if (settled(documents)) return false;
@@ -1082,8 +1078,8 @@ public final class Index implements Catalog {
         return true;
     }
 
-    /// The project's packages for the root summary, taken from whichever
-    /// generation is available.
+    /// The project's packages for the root summary, from the generation
+    /// there is, current or not.
     private List<String> projectSummary() {
         return snapshot("project", "sources", sourceStamp)
                 .map(origin -> store.orElseThrow().names(origin.id(), TypeInfo.Kind.PACKAGE))
@@ -1100,8 +1096,9 @@ public final class Index implements Catalog {
     }
 
     /// Reads each package document as source text. The normalized identity must
-    /// be unique across all source roots. A collision is recorded as the
-    /// document problem, and this method answers with no documents.
+    /// be unique across all source roots. Two files that name the same
+    /// document are recorded as the document failure, and the answer is no
+    /// documents.
     private List<Document> discoveredDocuments() {
         if (projectDocuments != null) return projectDocuments;
         try {
@@ -1157,16 +1154,14 @@ public final class Index implements Catalog {
         return read.isEmpty() ? located : Javadoc.attach(located, read, path(name));
     }
 
-    /// The project's class files. This method returns what `tuul build` left
-    /// in `build/classes` when it built these exact sources, or javac's
-    /// answer held in memory. It writes nothing to disk here. The facts go
-    /// into the index, and the class files are not needed once they are
-    /// there.
+    /// The project's class files: what `tuul build` left in `build/classes`
+    /// when it built these exact sources, or javac's answer in memory.
+    /// Nothing is written to disk, since the facts go into the index and the
+    /// class files are not needed after that.
     ///
-    /// A build that fails is not an exception. It is the answer "no
-    /// classes," with the reason kept in `compileProblem`. This method
-    /// compiles at most once per process, so a cached failure keeps
-    /// returning that same answer.
+    /// A build that fails answers with no classes and records why in
+    /// `compileProblem`. javac runs at most once per process, so a second
+    /// call after a failure answers the same way without running it.
     private Map<String, byte[]> compile() {
         if (classes != null) return classes;
         if (!compileProblem.isEmpty()) return Map.of();

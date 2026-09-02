@@ -14,11 +14,9 @@ public interface CatalogFactory {
     /// Opens a catalog for the given source roots, vendor roots, and index file.
     Catalog open(List<Path> sourceRoots, List<Path> vendorRoots, Path index) throws IOException;
 
-    /// Returns the factory used by command-line symbol queries.
-    ///
-    /// The returned index refreshes itself only when a query needs an
-    /// answer. Opening it walks the source tree. Opening it does not
-    /// compile the project.
+    /// The factory `tuul docs` uses. It opens an [Index] over `index.db`.
+    /// Opening walks the source tree to fingerprint it and compiles nothing.
+    /// The index compiles later, when a question needs the project.
     static CatalogFactory system() {
         return (sources, vendor, index) -> Index.of(sources, vendor, index);
     }

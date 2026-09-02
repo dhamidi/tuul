@@ -9,36 +9,38 @@ import java.util.Optional;
 import java.util.Set;
 import json.Json;
 
-/// Answers the questions `tuul docs` and `tuul browse` both need to answer.
+/// Turns a name a reader typed into the JSON that describes it.
 ///
-/// A name a reader writes is a symbol such as `json.Json`, a member such as
-/// `json.Json#parse`, a package document such as `web/tutorial`, or nothing
-/// the catalog knows. The command line and the browser used to parse and
-/// describe a name separately, and their two descriptions of the same name
-/// could drift apart. This class reads a name, asks the [Catalog], and
-/// builds the JSON that both of them print.
+/// Call this from anything that answers a reader: `tuul docs` prints the
+/// object, `tuul browse` renders it. Both call the same method for the same
+/// name and get the same object, so a fact is either in the object or in
+/// neither output.
 ///
-/// Every answer is a [Json.Object]. A message is JSON, and `--json` prints
-/// this same object. The text output and the browser page both render it,
-/// so neither can show a fact this object does not hold.
+/// Pass any [Catalog]. The catalog decides where the symbols come from and
+/// whether a call can compile. This class only reads.
+///
+/// Start with [#answer] when the name can be any shape. Call [#symbol],
+/// [#member] or [#document] when the shape is already known. Call [#search]
+/// for words instead of a name, [#roots] when there is no name yet, and
+/// [#source] to turn an answer into the text it was read from.
 public final class Queries {
 
-    /// The default limit on how many matches [#search] returns.
+    /// The number of matches one search answers with. Pass it as the limit
+    /// to [#search] unless a caller has a reason for another number.
     public static final int MATCHES = 25;
 
     private Queries() {}
 
-    /// What a caller wants to see with a symbol, beyond the symbol itself.
+    /// What to include with a symbol. Pass [#SYMBOL] for the symbol alone.
     ///
-    /// `all` includes private members. `members` describes everything a
-    /// package or a type holds. `documents` carries the full body of each
-    /// package document instead of just its title.
-    ///
-    /// `recursive` also asks into subpackages. Setting `recursive` sets
-    /// `members` too, since there is nothing to recurse into otherwise.
+    /// `all` includes members that are not public or protected. `members`
+    /// adds a description of every type a package holds, or every nested
+    /// type a type holds, under `members`. `recursive` adds subpackages to
+    /// that, and implies `members`. `documents` adds the body of every
+    /// package document under `documents` instead of only its title.
     public record Asking(boolean all, boolean members, boolean recursive, boolean documents) {
 
-        /// Asks for the symbol alone, the way a page shows it.
+        /// The symbol alone: public members, document titles, no `members`.
         public static final Asking SYMBOL = new Asking(false, false, false, false);
 
         public Asking {
@@ -46,11 +48,13 @@ public final class Queries {
         }
     }
 
-    /// Answers a name of any shape: a package document, a member, or a
-    /// symbol.
+    /// Answers a name of any shape.
     ///
-    /// This method tries each shape in that order and returns the first
-    /// match. It returns empty when the catalog has nothing by that name.
+    /// The shape decides the answer. `web/tutorial` or `web/tutorial/first`
+    /// is a document and goes to [#document]. `json.Json#parse` is a member
+    /// and goes to [#member]. Anything else is a symbol and goes to
+    /// [#symbol]. A name is read as one shape only. Returns empty when the
+    /// catalog has nothing by that name in that shape.
     public static Optional<Json.Object> answer(Catalog index, String name, Asking asking) {
         var document = Document.reference(name);
         if (document.isPresent()) return document(index, document.get());
@@ -59,20 +63,24 @@ public final class Queries {
         return symbol(index, name, asking);
     }
 
-    /// Answers one symbol: a type, a package, or a module.
+    /// Answers a type, a package, or a module by its qualified name.
     ///
-    /// The result includes what `asking` asked for beyond the symbol itself.
+    /// The object is the one [Docs#describe(TypeInfo, boolean, List)]
+    /// builds. A package also lists its documents under `documents`. With
+    /// `asking.members()` the object holds `members`, one such object per
+    /// type the symbol holds. Returns empty when the catalog has no symbol
+    /// by that name.
     public static Optional<Json.Object> symbol(Catalog index, String name, Asking asking) {
         return index.lookup(name).map(type -> describe(index, type, asking, new LinkedHashSet<>()));
     }
 
-    /// Answers the members of one type that share a name: every overload of
-    /// a method, or a field.
+    /// Answers one member of a type by name.
     ///
-    /// The result is the type's description holding only those members, with
-    /// `member` set to the name asked for. A renderer reads `member` to know
-    /// what was asked. Returns empty when `member` is blank, when the type
-    /// does not exist, or when the type has no member by that name.
+    /// The object is the type's description with `member` set to the name,
+    /// `methods` holding every overload of that name, and `fields` holding a
+    /// field of that name. With `all`, non-public members count too. Returns
+    /// empty when `member` is empty, when the type does not exist, or when
+    /// the type has no member of that name.
     public static Optional<Json.Object> member(Catalog index, String typeName, String member, boolean all) {
         if (member.isEmpty()) return Optional.empty();
         var found = index.lookup(typeName);
@@ -93,17 +101,19 @@ public final class Queries {
                 .toList();
     }
 
-    /// Answers one package document, or the introduction of a kind when the
-    /// caller asked for a kind with no slug.
+    /// Answers one package document, or a kind of document.
     ///
-    /// A kind with no document of its own still answers, with a synthesized
-    /// title and the list of documents of that kind under `documents`, so
-    /// `web/reference` is never a dead end when reference documents exist.
-    /// `links` holds every document of the package, which a page needs to
-    /// resolve a relative link to another file in the package.
+    /// When the reference names a document that exists, the object is
+    /// [Document#describe()] with two lists added. `documents` holds the
+    /// other documents of the same kind. `links` holds every document of the
+    /// package with its file name, which a renderer uses to turn a relative
+    /// link into a route.
     ///
-    /// Returns empty when the reference names a slug that does not exist, or
-    /// when the kind has no documents at all.
+    /// When the reference has no slug and the kind has no introduction, the
+    /// object has no `doc`. It carries `symbol`, `package`, `kind`, `title`,
+    /// and the same two lists, so a caller can offer the documents of that
+    /// kind. Returns empty when a slug was given and no such document
+    /// exists, or when the kind has no documents at all.
     public static Optional<Json.Object> document(Catalog index, Document.Reference reference) {
         var page = index.documentPage(reference.packageName(), reference.kind(), reference.slug());
         var siblings = page.documents().stream().filter(document -> document.kind().equals(reference.kind())).toList();
@@ -123,37 +133,33 @@ public final class Queries {
                         .with("links", links)));
     }
 
-    /// Describes a document as a link to it.
-    ///
-    /// The result holds the document's identity and file name, and drops
-    /// the body.
+    /// A document without its body: identity, title, and `file`, the name of
+    /// the Markdown file it was read from.
     private static Json linked(Document document) {
         return document.describe().without("doc").without("source")
                 .with("file", java.nio.file.Path.of(document.source()).getFileName().toString());
     }
 
-    /// Answers what there is, before a caller has named anything: every root
-    /// and what it holds.
+    /// Answers the question with no name in it: which roots there are and
+    /// which names each holds. See [Docs#describe(List)] for the object.
     public static Json.Object roots(Catalog index) {
         return Docs.describe(index.roots());
     }
 
-    /// Returns the source text that a description describes.
+    /// Reads the source text behind an answer from [#answer].
     ///
-    /// A document description returns its own `doc` field, since a
-    /// document's source is the Markdown already inside the description. A
-    /// package or a module returns the whole text of its file. A top-level
-    /// type with no member asked for also returns its whole file, because
-    /// the imports are part of reading it.
+    /// Pass the object that method returned. For a document the text is its
+    /// Markdown body. For a package or a module it is the whole
+    /// `package-info.java` or `module-info.java`. For a top-level type it is
+    /// the whole file, imports included. For a nested type it is that type's
+    /// declaration with the comment above it. For a member it is every
+    /// declaration of that name with its comment, one after another with a
+    /// blank line between them.
     ///
-    /// A nested type, or a member, returns only its own declaration and the
-    /// comment above it. When a member has more than one overload, each
-    /// overload's span joins the others with a newline between them.
-    ///
-    /// Returns empty when the catalog knows no source for the location,
-    /// which is the case for a jar that shipped without one. Returns empty
-    /// when a member was asked for and the catalog finds no declaration for
-    /// it.
+    /// Returns empty when the object names no source, when the location
+    /// cannot be read, or when a member was asked for and its declaration
+    /// is not in the file. A type from a jar without a sources jar has no
+    /// source.
     public static Optional<String> source(Catalog index, Json.Object description) {
         if (description.get("doc") instanceof Json.Str(var body) && description.get("package") instanceof Json.Str
                 && description.get("title") instanceof Json.Str) {
@@ -178,10 +184,9 @@ public final class Queries {
         return Optional.of(out.toString());
     }
 
-    /// Returns the type as it is written inside its file.
-    ///
-    /// `json.Json.Object` becomes `Json.Object` in `Json.java`. The filename
-    /// says where the package ends, which the dotted name alone cannot say.
+    /// The type as it is written inside its file: `Json.Object` for
+    /// `json.Json.Object` in `Json.java`. The file name marks where the
+    /// package ends, which the dotted name alone does not.
     private static String written(String name, String location) {
         var file = file(location);
         var outer = file.endsWith(".java") ? file.substring(0, file.length() - ".java".length()) : file;
@@ -196,19 +201,23 @@ public final class Queries {
         return slash < 0 ? location : location.substring(slash + 1);
     }
 
-    /// Answers what matches some words, grouped by what each match belongs
-    /// to.
+    /// Searches names and comments for words.
     ///
-    /// Every word must match by default. When nothing matches every word,
-    /// this method answers with whatever matches any word instead, and sets
-    /// `every` to false to say so. Each symbol appears once, even when it
-    /// matches through more than one overload.
+    /// The object holds `query`, `every`, and `groups`. Each group holds a
+    /// `prefix` and its `matches`. A match holds `symbol`, `kind`,
+    /// `modifiers`, `doc`, `origin`, and `source`. Blank text answers with
+    /// no groups.
     ///
-    /// Matches are grouped by the package they are filed under. Groups
-    /// appear in the order their best match ranks. A group's name is the
-    /// longest prefix its matches' pages share. Searching for `event
-    /// stream` shows `eventstream` as a group name above the types and
-    /// members that mention it, a name the reader can search next.
+    /// The catalog first looks for what holds every word, at most `limit`
+    /// matches. When that finds nothing, it looks for what holds any word and
+    /// sets `every` to false. A symbol appears once, so three overloads of
+    /// one method are one match.
+    ///
+    /// Matches are grouped by the package they belong to, in the order of
+    /// each group's best match. The prefix is the longest dotted name the
+    /// group's matches share, and is itself a package or a type. A caller
+    /// can pass it to [#symbol]. A search for `event stream` groups the types
+    /// and members that mention it under the prefix `eventstream`.
     public static Json.Object search(Catalog index, String text, int limit) {
         var every = true;
         var matches = distinct(index.search(text, limit));
@@ -237,12 +246,13 @@ public final class Queries {
         return groups;
     }
 
-    /// Returns the package a match is filed under.
+    /// The package a match belongs to.
     ///
-    /// A document's symbol already names its package. A type or a member
-    /// has no separate package field, so this method takes the leading
-    /// lowercase segments of its symbol, following the convention every
-    /// Java package uses on disk.
+    /// A document names its package before the slash. For a type or a
+    /// member the package is the leading segments that start with a
+    /// lowercase letter. That is the convention for Java packages, not a
+    /// rule, so a type with a lowercase name is grouped as if it were a
+    /// package.
     static String packageOf(Catalog.Match match) {
         var page = page(match.symbol());
         if (match.symbol().contains("/")) return page;
@@ -254,8 +264,8 @@ public final class Queries {
         return String.join(".", kept);
     }
 
-    /// Returns the symbol that owns a page: the type of a member, the
-    /// package of a document, or the symbol itself otherwise.
+    /// The symbol a match is shown on: the type for a member, the package
+    /// for a document, and the symbol itself otherwise.
     private static String page(String symbol) {
         var slash = symbol.indexOf('/');
         if (slash >= 0) return symbol.substring(0, slash);
@@ -263,12 +273,12 @@ public final class Queries {
         return hash < 0 ? symbol : symbol.substring(0, hash);
     }
 
-    /// Returns the name a group is filed under.
+    /// The prefix a group is shown under.
     ///
-    /// The name is the longest dotted prefix that the matches' pages share.
-    /// When every match shares one page, the name is that page's package
-    /// instead, since a package introduces a lone type better than the type
-    /// introduces itself.
+    /// When the matches are on two or more pages, it is the longest dotted
+    /// name those pages share. When they are all on one page, it is the
+    /// package of that page, so a lone type is shown under its package
+    /// rather than under itself.
     static String prefix(List<Catalog.Match> matches) {
         var pages = new LinkedHashSet<String>();
         for (var match : matches) pages.add(page(match.symbol()));
@@ -299,7 +309,7 @@ public final class Queries {
                 .with("source", match.source());
     }
 
-    /// Describes one symbol, with its members when `asking` asked for them.
+    /// One symbol as [#symbol] answers it, with `members` when asked for.
     private static Json.Object describe(Catalog index, TypeInfo type, Asking asking, Set<String> seen) {
         var documents = type.kind() == TypeInfo.Kind.PACKAGE ? index.documents(type.name()) : List.<Document>of();
         var description = Docs.describe(type, asking.all(), documents);
@@ -312,13 +322,11 @@ public final class Queries {
         return description.with("members", Json.Array.of(members(index, description, asking, seen)));
     }
 
-    /// Describes every symbol a package or a type holds.
+    /// The types a package or a type holds, each described as [#symbol]
+    /// describes it.
     ///
-    /// Each member gets the same description a direct lookup would give it.
-    /// A subpackage is skipped unless `recursive` is set. `web` holds eight
-    /// subpackages, and a caller who asks about `web` does not also want
-    /// all of them expanded by default. The `seen` set makes a name appear
-    /// once, however many ways this method reaches it.
+    /// A subpackage is included only with `recursive`, and then its own
+    /// contents follow it. A name that is reached twice is described once.
     private static List<Json> members(Catalog index, Json.Object description, Asking asking, Set<String> seen) {
         var described = new ArrayList<Json>();
         for (var value : description.list("nested")) {

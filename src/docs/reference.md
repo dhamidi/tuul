@@ -45,8 +45,8 @@ A document name is `package/kind` or `package/kind/slug`. The kinds are
 
 ## Source code
 
-`--code` prints source text and nothing else. The output then compiles or
-renders as it was written.
+`--code` prints source text and nothing else. You can compile or render the
+output as it was written.
 
 | Asked for | Printed |
 | --- | --- |

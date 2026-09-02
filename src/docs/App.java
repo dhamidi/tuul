@@ -23,15 +23,16 @@ import symbols.Docs;
 import symbols.Index;
 import symbols.Queries;
 
-/// `tuul docs` as an application: which messages it understands, and how it
-/// carries out the effects those messages request.
+/// `tuul docs` as an application: the messages it understands, and the
+/// effects that answer them.
 ///
-/// Every question goes to [Queries]. `tuul browse` asks the same class, so
-/// the command and the browser describe a symbol the same way. Indexing runs
-/// inside an effect. A project that does not compile is not an error here.
-/// The catalog answers from its last good generation and reports the
-/// problem on standard error, after the answer. The writers are bound here,
-/// at the edge, and nowhere else.
+/// Send `docs.query` with a `symbol` or a `search`, and the flags of the
+/// command line, to get an answer printed on `out`. The answer comes from
+/// [Queries], the same class `tuul browse` asks, so the two describe a
+/// symbol the same way. The catalog is opened and read inside an effect.
+/// When it reports a problem, such as a project that does not compile, the
+/// answer is printed and the problem follows on `err` as a `warning:` line.
+/// The exit status is 1 only when there is no answer.
 public final class App {
 
     private static final Duration INDEXING_NOTICE = Duration.ofSeconds(5);
@@ -111,11 +112,10 @@ public final class App {
                 .with("sections", Json.Array.strings(List.copyOf(state.sections()))));
     }
 
-    /// A search answers with groups rather than a symbol, so it prints them
-    /// instead of one symbol. When nothing holds every word, the answer
-    /// names the words it does hold instead. That notice prints after the
-    /// results, so a reader who scrolled to the top of them sees it last
-    /// and is not stopped by it.
+    /// A search answers with groups, so it prints as groups. No group at
+    /// all is a failure. When the groups hold only some of the words, a line
+    /// on `err` says so after the results, where a reader who scrolls back
+    /// through them sees it first.
     private static Step<State> found(State state, Message message) {
         var groups = message.list("groups");
         var query = message.string("query", "");
@@ -149,9 +149,9 @@ public final class App {
         return Step.of(state.failed(), report(message.string("reason", "unknown symbol: " + message.string("symbol", ""))));
     }
 
-    /// A problem is not a failure. The catalog gave the answer from its
-    /// last good index. This message reports that on standard error and
-    /// leaves the exit status alone.
+    /// A problem is not a failure. The answer was printed from the last good
+    /// index, so this prints a `warning:` line on `err` and leaves the exit
+    /// status alone.
     private static Step<State> problem(State state, Message message) {
         return Step.of(state, report("warning: " + message.string("reason", "")));
     }
@@ -278,16 +278,16 @@ public final class App {
         out.flush();
     }
 
-    /// Tells a document description, or a kind's document list, apart from
-    /// a symbol description. A document carries a `package` and a `title`.
-    /// A symbol carries a `class` instead.
+    /// Whether a description is a document or a kind's document list, which
+    /// carry `package` and `title`, rather than a symbol, which carries
+    /// `class`.
     private static boolean document(Json.Object description) {
         return description.get("package") instanceof Json.Str && description.get("title") instanceof Json.Str;
     }
 
     /// A document prints as the Markdown it was written in. A kind with no
-    /// introduction prints the names of its documents instead. A reader can
-    /// ask for any of those names next.
+    /// introduction prints one line per document it has, the name that asks
+    /// for the document and then its title.
     private static void printDocument(Json.Object description, boolean json, Writer out) throws IOException {
         if (json) {
             (description.get("doc") instanceof Json.Str ? description.without("documents") : description)

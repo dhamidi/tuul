@@ -25,22 +25,19 @@ final class Schema {
     /// symbols in their own right. Version 5 carries a symbol's modifiers into
     /// search. Version 6 adds package documents and their search rows. Version
     /// 7 stores the root summary that lets a browser start without discovery.
-    /// Version 8 files a package's `README.md` as a document. Version 8 also
-    /// records why the last refresh of an origin failed, so a broken build
-    /// answers from the last good generation instead of being rebuilt.
+    /// Version 8 files a package's `README.md` as a document and records
+    /// why the last refresh of an origin failed.
     static final int VERSION = 8;
 
     /// The whole format. It stores types, members, parameters, tags, package
     /// documents, and the origin of each stored item.
     private static final String TABLES = """
-            -- `stamp` is the fingerprint of the rows stored here.
-            -- `attempted` and `problem` are empty unless the last refresh
-            -- failed. `attempted` then holds the fingerprint that failed to
-            -- publish. `problem` says why it failed. A caller checking
-            -- `attempted` against a new fingerprint skips a refresh already
-            -- known to fail, so a broken tree is not built twice. A reader of
-            -- the rows learns that the answer is the last good generation,
-            -- not the newest one.
+            -- `stamp` is the fingerprint of the rows stored here. When a
+            -- refresh for a newer fingerprint failed, `attempted` holds that
+            -- fingerprint and `problem` says why. Both are cleared by the
+            -- next publication. They let the index skip a fingerprint it
+            -- already failed on, and tell a reader that the rows are the
+            -- last good ones.
             create table origin (
                 id        integer primary key,
                 kind      text    not null check (kind in ('project', 'vendor', 'platform')),
