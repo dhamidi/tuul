@@ -540,7 +540,8 @@ Serializable
 TreeCodec
 ```
 
-A member is a name too, and so is the source behind any name:
+Ask for one member as `Type#member`. Add `--code` to print the source of
+any name:
 
 ```sh
 $ tuul docs invoicing.Invoice#compareTo
@@ -558,9 +559,8 @@ $ tuul docs invoicing.Invoice#compareTo --code
     }
 ```
 
-A package answers with what it holds and the Markdown written beside it —
-its `README.md` and its `tutorial`, `howto`, `reference` and `guide` files.
-`--documents` reads them all in one call:
+Ask for a package to see its types and its documents. Add `--documents` to
+read every document of the package in one call:
 
 ```sh
 $ tuul docs invoicing
@@ -577,8 +577,7 @@ $ tuul docs invoicing/tutorial
 $ tuul docs invoicing --documents
 ```
 
-Use search when you do not know the full symbol name. Results are grouped
-by the name they share, and that name is one you can ask for next:
+Use search when you do not know the full symbol name:
 
 ```sh
 $ tuul docs --search "event stream"
@@ -601,11 +600,12 @@ dependency generations plus a lightweight JDK name generation. Dependency
 source JARs supply type and public or protected member documentation. Exact
 symbol lookup remains lazy and supplies full JDK source documentation.
 
-Everything `tuul docs` knows is in `build/index.db`, and it is refreshed
-only when a question needs it: a question about `java.lang.String` never
-waits for the project to compile. A project that does not compile is
-answered from the last build that did, with a `warning:` on standard error
-that carries javac's messages. `tuul docs docs` reads the rest.
+Everything `tuul docs` knows is in `build/index.db`. The index is refreshed
+only when a question needs it, so a question about `java.lang.String` does
+not wait for the project to compile. A project that does not compile is
+answered from the last build that did, with javac's messages after a
+`warning:` on standard error. See `tuul docs docs/reference` for the flags
+and the JSON fields.
 
 ## Contributing
 
