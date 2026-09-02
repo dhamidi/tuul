@@ -69,7 +69,7 @@ request and response bodies.
 
 ## Why
 
-- Only modern Java (JDK 27) is supported — no legacy toolchain juggling.
+- Only modern Java (JDK 27) is supported.
 - The primary user of `tuul` is a developer *through an agent*. Every command
   is built to be predictable and scriptable first, pleasant for humans
   second.
@@ -78,9 +78,9 @@ request and response bodies.
 - No external config language, and no dependency manifest to keep in sync.
   Deploy targets are declared in a plain Java file `tuul` runs directly — not
   TOML, not YAML, not a Groovy/Kotlin DSL. Tasks are files under `tasks/`.
-  The requested roots and selected files are checked into `vendor/`.
-  `vendor/.tuul/resolution.json` records the generated graph. It is not a
-  second dependency declaration.
+  Build, release, and other task Java files contain their inputs. The files
+  under `vendor/` are the complete dependency set. These two inputs contain
+  all project and dependency state.
 - The file tree *is* the documentation. A library holds the application;
   entrypoints are thin call-throughs. Open the tree and you can see what the
   app does before reading a line of code.
@@ -167,15 +167,15 @@ add.complete 9 downloaded, 0 cached, 0 failed
 
 Tuul resolves all command-line roots as one graph. It uses breadth-first
 conflict mediation. The nearest version wins. Declaration order breaks a tie.
-The generated resolution record stores roots, runtime and test selections,
-omitted conflicts, dependency paths, scopes, repositories, checksums, missing
-supplements, exclusions, duplicate exceptions, and owned files.
+The roots, exclusions, and duplicate exceptions apply only to that invocation.
+Put repeatable dependency setup in a Java task. The published JARs then become
+the dependency set.
 
-Tuul downloads to `vendor/.tuul/staging-*`. It verifies SHA-256, or SHA-1 when
-SHA-256 metadata is not present. It records a warning when a repository has no
-checksum metadata. It validates each JAR before publication. A required-file
-failure keeps the previous selected graph active. Source and javadoc JARs are
-optional and never enter the runtime classpath.
+Tuul downloads to a temporary directory outside `vendor/`. It verifies
+SHA-256, or SHA-1 when SHA-256 metadata is not present. It reports a warning
+when a repository has no checksum metadata. It validates each JAR before
+publication. A required-file failure leaves `vendor/` unchanged. Source and
+javadoc JARs are optional and never enter a classpath.
 
 Maven GET requests use at most four attempts. Tuul retries transport failures,
 HTTP 408, 425, 429, 500, 502, 503, and 504. It honors `Retry-After`. It does not
@@ -192,11 +192,10 @@ $ tuul add --repository https://repo.example.test/maven2/ com.example:library:1.
 add.complete 3 downloaded, 0 cached, 0 failed
 ```
 
-Commit the managed coordinate directories and `vendor/.tuul/resolution.json`.
-A fresh clone then builds and runs without a network request. Runtime builds
-use only the runtime graph. `tuul test` also uses the selected test graph.
-Test and provided dependencies of a requested root enter the test graph. They
-do not propagate from transitive dependencies.
+Commit the coordinate directories under `vendor/`. A fresh clone then builds
+and runs without a network request. Every binary JAR under `vendor/` enters
+the application and test classpaths. Source and javadoc JARs contribute only
+to documentation.
 
 Vendoring sources, not just compiled classes, is also what makes `tuul docs`
 work on dependencies — see [Example: querying the code index](#example-querying-the-code-index).
@@ -215,13 +214,12 @@ explicit error.
 `tuul add` scans runtime binaries for duplicate class names. It reports every
 owning coordinate and stops before publication. Use `--exclude group:artifact`
 to remove a dependency path. Use `--allow-duplicate package.Type` only when the
-duplicate is intentional. Both choices are stored in the resolution record.
+duplicate is intentional. Both choices apply only to the current invocation.
 
-Use `tuul add --dry-run <coordinates>` to see additions, removals, conflicts,
-and migration work without changing files. For an old flat `vendor/`, review
-that output and then run `tuul add --migrate <coordinates>`. Tuul moves JARs
-that contain Maven identity metadata. It preserves unknown files as unmanaged
-files and excludes them from the selected classpath.
+Use `tuul add --dry-run <coordinates>` to see the selected graph and files that
+are missing from `vendor/`. An add preserves files from earlier invocations.
+Delete a JAR to remove it from the project. Tuul reads every JAR below
+`vendor/`, regardless of its nesting depth.
 
 ## Example: an agent driving the whole lifecycle
 
@@ -254,9 +252,7 @@ module descriptor. Packages remain directories inside those source roots.
 ```
 invoicing/
 ├── project.java                 # deploy target — plain Java, run by tuul
-├── vendor/                      # selected Maven graph and generated record
-│   ├── .tuul/
-│   │   └── resolution.json
+├── vendor/                      # complete dependency set; no manifest
 │   └── com.fasterxml.jackson.core/
 │       └── jackson-databind/
 │           └── 2.18.1/
@@ -337,9 +333,8 @@ The regular runnable jar is the deliberate exception described below.
 
 **Dependencies.** There is no hand-written manifest for these. Commands such as
 `tuul add com.fasterxml.jackson.core:jackson-databind:2.18.1` and
-`tuul add org.xerial:sqlite-jdbc:3.46.0.0` select one graph and populate
-coordinate directories. The generated resolution record identifies every
-owned file and the graph that selected it.
+`tuul add org.xerial:sqlite-jdbc:3.46.0.0` resolve a graph and populate
+coordinate directories. The JARs present under `vendor/` are the dependencies.
 
 **Tasks.** Each Java file under `tasks/` is one task. Tuul discovers the task
 from its class name. No registry or `project.java` entry is necessary.
@@ -594,11 +589,11 @@ $ tuul docs --search SpringBootApplication --json
 Every word has to match. When nothing holds every word, the results that
 hold some of them are shown instead and standard error says so.
 
-Search covers project symbols, the selected runtime and test dependency set,
-and exported JDK names. The first search builds complete cached project and
-dependency generations plus a lightweight JDK name generation. Dependency
-source JARs supply type and public or protected member documentation. Exact
-symbol lookup remains lazy and supplies full JDK source documentation.
+Search covers project symbols, every binary JAR under `vendor/`, and exported
+JDK names. The first search builds complete cached project and dependency
+generations plus a lightweight JDK name generation. Dependency source JARs
+supply type and public or protected member documentation. Exact symbol lookup
+remains lazy and supplies full JDK source documentation.
 
 Run `tuul docs` while the project is broken or mid-edit. A question about
 `java.lang.String` does not wait for the project to compile. A question

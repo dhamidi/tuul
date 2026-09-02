@@ -516,7 +516,7 @@ public final class SymbolsTest {
                     .findFirst().orElseThrow();
             Check.equal("a cold search finds a dependency type", TypeInfo.Kind.CLASS.name(), result.kind());
             Check.equal("a dependency result names its owning artifact",
-                    "unmanaged:greeting-1.0.jar", result.origin());
+                    "vendor:greeting-1.0.jar", result.origin());
             Check.that("a dependency result locates its source archive",
                     result.source().contains("greeting-1.0-sources.jar"));
             Check.that("exact dependency lookup works after search",

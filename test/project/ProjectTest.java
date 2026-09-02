@@ -320,12 +320,10 @@ public final class ProjectTest {
         var sources = installed.directory().resolve(Version.artifact() + "-sources.jar");
         Check.that("it writes a jar named for the version", Files.isRegularFile(jar));
         Check.that("and a sources jar beside it", Files.isRegularFile(sources));
-        Check.that("install records tuul as a selected dependency",
-                Files.readString(layout.vendor().resolve(".tuul/resolution.json"))
-                        .contains("\"coordinate\":\"dev.tuul:tuul:" + Version.NUMBER + "\""));
-        Check.that("the install metadata keeps sources off the runtime classpath",
-                Vendor.of(List.of(layout.vendor())).runtime().equals(List.of(jar))
-                        && Vendor.of(List.of(layout.vendor())).sources().equals(List.of(sources)));
+        Check.that("the vendor contents put the binary on the classpath and keep sources off it",
+                Vendor.of(List.of(layout.vendor())).runtime().contains(jar)
+                        && !Vendor.of(List.of(layout.vendor())).runtime().contains(sources)
+                        && Vendor.of(List.of(layout.vendor())).sources().contains(sources));
         Check.equal("it vendors a library for every platform tuul ships, because vendor/ is committed",
                 Platform.SHIPPED.stream().map(Platform::directory).toList(),
                 installed.platforms());

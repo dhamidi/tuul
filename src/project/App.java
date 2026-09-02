@@ -162,7 +162,6 @@ public final class App {
                 .with("exclusions", Json.Array.of(message.list("exclude")))
                 .with("duplicateExceptions", Json.Array.of(message.list("allow-duplicate")))
                 .with("dryRun", message.flag("dry-run"))
-                .with("migrate", message.flag("migrate"))
                 .with("tty", message.flag("tty")));
     }
 
@@ -354,7 +353,7 @@ public final class App {
                 tty ? Add.Mode.TTY : Add.Mode.EVENTS,
                 new Add.Options(java.util.Set.copyOf(strings(effect.list("exclusions"))),
                         java.util.Set.copyOf(strings(effect.list("duplicateExceptions"))),
-                        effect.flag("dryRun"), effect.flag("migrate")));
+                        effect.flag("dryRun")));
         emit.emit(Message.of("project.added")
                 .with("downloaded", Json.Array.strings(result.downloaded()))
                 .with("cached", Json.Array.strings(result.cached()))

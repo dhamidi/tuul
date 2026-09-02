@@ -157,9 +157,9 @@ public final class MavenTest {
                 failure(dependencyProfile).contains("unsupported Maven profile activation 'conditional-dependency'"));
 
         var fileProfile = Map.of("g:root:1", pom("g", "root", "1",
-                "<profiles><profile><id>legacy-jdk</id><activation><file>"
+                "<profiles><profile><id>matching-jdk</id><activation><file>"
                         + "<exists>${java.home}/../src.zip</exists></file></activation>"
-                        + dependencies(dependency("g", "legacy-tools", "1", ""))
+                        + dependencies(dependency("g", "jdk-tools", "1", ""))
                         + "</profile></profiles>"));
         var inactive = new Maven.Resolver(coordinate -> new Maven.PomDocument(
                 fileProfile.get(coordinate.group() + ":" + coordinate.artifact() + ":" + coordinate.version()),

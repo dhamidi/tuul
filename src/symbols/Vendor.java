@@ -11,159 +11,82 @@ import java.util.Map;
 import java.util.Optional;
 import java.util.TreeSet;
 import java.util.LinkedHashSet;
-import java.util.Set;
-import json.Json;
 
-/// The selected dependencies of a tuul-managed project.
+/// The dependencies of a tuul-managed project.
 ///
-/// `vendor/.tuul/resolution.json` selects the runtime and test binaries by
-/// coordinate. Source and javadoc archives are separate documentation views.
-/// They never enter a compile or runtime classpath. A compatibility scan reads
-/// projects that do not have a resolution record yet and marks their binaries
-/// as unmanaged.
+/// Every binary JAR under `vendor/` enters the runtime and test classpaths.
+/// A source or javadoc JAR contributes documentation and does not enter a
+/// classpath. No manifest or generated file selects dependencies.
 public final class Vendor {
 
     private static final String SOURCES = "-sources.jar";
     private static final String JAVADOC = "-javadoc.jar";
 
-    private final List<Path> runtime;
-    private final List<Path> test;
     private final List<Path> binaries;
     private final Map<Path, Path> sources;
     private final List<Path> javadocs;
     private final Map<Path, String> coordinates;
 
-    private Vendor(List<Path> runtime, List<Path> test, List<Path> binaries,
-            Map<Path, Path> sources, List<Path> javadocs, Map<Path, String> coordinates) {
-        this.runtime = List.copyOf(runtime);
-        this.test = List.copyOf(test);
-        this.binaries = binaries;
-        this.sources = sources;
+    private Vendor(List<Path> binaries, Map<Path, Path> sources,
+            List<Path> javadocs, Map<Path, String> coordinates) {
+        this.binaries = List.copyOf(binaries);
+        this.sources = Map.copyOf(sources);
         this.javadocs = List.copyOf(javadocs);
         this.coordinates = Map.copyOf(coordinates);
     }
 
     public static Vendor none() {
-        return new Vendor(List.of(), List.of(), List.of(), Map.of(), List.of(), Map.of());
+        return new Vendor(List.of(), Map.of(), List.of(), Map.of());
     }
 
-    /// Reads each selected vendor view. A root without metadata uses the flat
-    /// layout compatibility reader.
+    /// Scans each root for JARs. Missing roots contribute nothing.
+    ///
+    /// Binary JARs appear in path order. A sibling `-sources.jar` attaches to
+    /// its binary. A `-javadoc.jar` appears only in [#javadocs].
     public static Vendor of(List<Path> roots) throws IOException {
-        var runtime = new ArrayList<Path>();
-        var test = new ArrayList<Path>();
-        var binaries = new ArrayList<Path>();
-        var sources = new LinkedHashMap<Path, Path>();
-        var javadocs = new ArrayList<Path>();
-        var coordinates = new LinkedHashMap<Path, String>();
-        for (var root : roots) {
-            var resolution = root.resolve(".tuul/resolution.json");
-            if (Files.isRegularFile(resolution)) managed(root, resolution, runtime, test, binaries, sources, javadocs,
-                    coordinates);
-            else compatible(root, runtime, test, binaries, sources, javadocs, coordinates);
-        }
-        return new Vendor(distinct(runtime), distinct(test), distinct(binaries), sources, distinct(javadocs), coordinates);
-    }
-
-    private static void compatible(Path root, List<Path> runtime, List<Path> test, List<Path> binaries,
-            Map<Path, Path> sources, List<Path> javadocs, Map<Path, String> coordinates) throws IOException {
         var jars = new ArrayList<Path>();
-        if (!Files.isDirectory(root)) return;
-        try (var tree = Files.walk(root)) {
-            tree.filter(path -> path.toString().endsWith(".jar")).sorted().forEach(jars::add);
+        for (var root : roots) {
+            if (!Files.isDirectory(root)) continue;
+            try (var tree = Files.walk(root)) {
+                tree.filter(Files::isRegularFile).filter(path -> path.toString().endsWith(".jar"))
+                        .sorted().forEach(jars::add);
+            }
         }
         var selected = jars.stream().filter(jar -> !jar.toString().endsWith(SOURCES)
                 && !jar.toString().endsWith(JAVADOC)).toList();
-        runtime.addAll(selected);
-        test.addAll(selected);
-        binaries.addAll(selected);
-        for (var binary : selected) coordinates.put(binary, "unmanaged:" + binary.getFileName());
+        var sources = new LinkedHashMap<Path, Path>();
+        var coordinates = new LinkedHashMap<Path, String>();
+        for (var binary : selected) coordinates.put(binary, "vendor:" + binary.getFileName());
         for (var binary : selected) attach(binary, jars).ifPresent(source -> sources.put(binary, source));
-        javadocs.addAll(jars.stream().filter(jar -> jar.toString().endsWith(JAVADOC)).toList());
-    }
-
-    private static void managed(Path root, Path resolution, List<Path> runtime, List<Path> test,
-            List<Path> binaries, Map<Path, Path> sources, List<Path> javadocs,
-            Map<Path, String> coordinates) throws IOException {
-        Json value;
-        try (var reader = Files.newBufferedReader(resolution)) {
-            value = Json.parse(reader);
-        } catch (RuntimeException invalid) {
-            throw new IOException("invalid vendor resolution " + resolution + ": " + invalid.getMessage(), invalid);
-        }
-        if (!(value instanceof Json.Object document)) throw new IOException("vendor resolution is not an object: " + resolution);
-        var runtimeCoordinates = coordinates(document.list("runtime"));
-        var testCoordinates = coordinates(document.list("test"));
-        var sourceByCoordinate = new LinkedHashMap<String, Path>();
-        var binaryByCoordinate = new LinkedHashMap<String, Path>();
-        for (var valueFile : document.list("files")) {
-            if (!(valueFile instanceof Json.Object file)) continue;
-            var relative = Path.of(file.string("path", "")).normalize();
-            var path = root.resolve(relative).normalize();
-            if (relative.isAbsolute() || !path.startsWith(root.normalize()) || !Files.isRegularFile(path)) continue;
-            var coordinate = file.string("coordinate", "");
-            var kind = file.string("kind", "");
-            switch (kind) {
-                case "binary" -> {
-                    binaryByCoordinate.put(coordinate, path);
-                    coordinates.put(path, coordinate);
-                }
-                case "sources" -> sourceByCoordinate.put(coordinate.replaceFirst(":sources$", ""), path);
-                case "javadoc" -> javadocs.add(path);
-                default -> {}
-            }
-        }
-        for (var coordinate : runtimeCoordinates) {
-            var binary = binaryByCoordinate.get(coordinate);
-            if (binary != null) runtime.add(binary);
-        }
-        for (var coordinate : testCoordinates) {
-            var binary = binaryByCoordinate.get(coordinate);
-            if (binary != null) test.add(binary);
-        }
-        var all = new LinkedHashSet<Path>();
-        all.addAll(runtime);
-        all.addAll(test);
-        binaries.addAll(all);
-        for (var entry : binaryByCoordinate.entrySet()) {
-            var source = sourceByCoordinate.get(entry.getKey());
-            if (source != null && all.contains(entry.getValue())) sources.put(entry.getValue(), source);
-        }
-    }
-
-    private static Set<String> coordinates(List<Json> nodes) {
-        var coordinates = new LinkedHashSet<String>();
-        for (var value : nodes) if (value instanceof Json.Object node) coordinates.add(node.string("coordinate", ""));
-        return coordinates;
+        var javadocs = jars.stream().filter(jar -> jar.toString().endsWith(JAVADOC)).toList();
+        return new Vendor(distinct(selected), sources, distinct(javadocs), coordinates);
     }
 
     private static List<Path> distinct(List<Path> paths) {
         return List.copyOf(new LinkedHashSet<>(paths));
     }
 
-    /// Returns the selected runtime binaries in resolution order. Build,
-    /// compile, and run use this same list.
+    /// The binary JARs for compilation and runtime, in path order.
     public List<Path> runtime() {
-        return runtime;
+        return binaries;
     }
 
-    /// Returns the selected test binaries in resolution order. This list also
-    /// contains the runtime graph.
+    /// The binary JARs for test compilation and runtime, in path order.
     public List<Path> test() {
-        return test;
+        return binaries;
     }
 
-    /// Returns the source archives for selected runtime and test binaries.
+    /// The source archives attached to binary JARs, in binary path order.
     public List<Path> sources() {
         return List.copyOf(new LinkedHashSet<>(sources.values()));
     }
 
-    /// Returns the javadoc archives for selected runtime and test binaries.
+    /// Every javadoc JAR under the roots, in path order.
     public List<Path> javadocs() {
         return javadocs;
     }
 
-    /// Returns every public dependency type in binary-name order.
+    /// Every public dependency type in binary-name order.
     public List<String> typeNames() {
         var names = new TreeSet<String>();
         for (var jar : binaries) {
@@ -183,7 +106,10 @@ public final class Vendor {
         return List.copyOf(names);
     }
 
-    /// Returns the coordinate that owns a source or binary archive location.
+    /// The binary archive label for a source or binary location.
+    ///
+    /// The label is `vendor:<file name>`. A location outside the scanned
+    /// archives returns empty.
     public Optional<String> origin(String location) {
         for (var entry : coordinates.entrySet()) {
             if (location.startsWith(entry.getKey().toString())) return Optional.of(entry.getValue());
@@ -198,7 +124,7 @@ public final class Vendor {
     /// says so here.
     public String stamp() {
         var stamp = new StringBuilder();
-        for (var jar : runtime) {
+        for (var jar : binaries) {
             stamp.append(jar).append(':');
             try {
                 stamp.append(Files.size(jar)).append(':').append(Files.getLastModifiedTime(jar).toInstant());
@@ -227,7 +153,7 @@ public final class Vendor {
     }
 
     public String testStamp() {
-        return stamp(test);
+        return stamp(binaries);
     }
 
     private static String stamp(List<Path> jars) {

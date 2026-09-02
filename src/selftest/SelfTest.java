@@ -70,9 +70,11 @@ public final class SelfTest {
         }
         check(checks, "tuul add exits cleanly", added.status() == 0, added.output());
         check(checks, "it vendors the dependency jar",
-                exists(project, "vendor/msgpack-core-0.9.12.jar"), listing(project.resolve("vendor")));
+                exists(project, "vendor/org.msgpack/msgpack-core/0.9.12/msgpack-core-0.9.12.jar"),
+                listing(project.resolve("vendor")));
         check(checks, "it vendors the dependency sources",
-                exists(project, "vendor/msgpack-core-0.9.12-sources.jar"), listing(project.resolve("vendor")));
+                exists(project, "vendor/org.msgpack/msgpack-core/0.9.12/msgpack-core-0.9.12-sources.jar"),
+                listing(project.resolve("vendor")));
         check(checks, "it reports the dependency resolution",
                 added.output().contains("add.resolved " + MSGPACK_COORDINATE), added.output());
     }

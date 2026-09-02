@@ -104,8 +104,6 @@ public final class AddIntegrationTest {
                     "com.acme/two/2.0/two-2.0-sources.jar", "com.acme/two/2.0/two-2.0-javadoc.jar").stream()
                     .map(file -> Files.isRegularFile(root.resolve("vendor").resolve(file)))
                     .allMatch(Boolean.TRUE::equals));
-            Check.that("a successful add publishes the selected graph",
-                    Files.readString(root.resolve("vendor/.tuul/resolution.json")).contains("\"coordinate\":\"com.acme:two:2.0\""));
             var vendor = Vendor.of(List.of(root.resolve("vendor")));
             Check.that("runtime binaries exclude source and javadoc archives",
                     vendor.runtime().size() == 2 && vendor.runtime().stream().noneMatch(path ->
@@ -125,13 +123,12 @@ public final class AddIntegrationTest {
             Check.that("cache output is still an event", cachedOutput.toString().contains(
                     "add.cached com.acme:one:1.0:sources"));
 
-            var excluded = client.into(new Layout(root), List.of("com.acme:one:1.0"), List.of(repository),
+            var excludedRoot = root.resolve("excluded");
+            var excluded = client.into(new Layout(excludedRoot), List.of("com.acme:one:1.0"), List.of(repository),
                     new StringWriter(), Add.Mode.EVENTS,
-                    new Add.Options(java.util.Set.of("com.acme:two"), java.util.Set.of(), false, false));
-            var excludedResolution = Files.readString(root.resolve("vendor/.tuul/resolution.json"));
-            Check.that("an explicit graph exclusion is persistent",
-                    excluded.ok() && excludedResolution.contains("\"exclusions\":[\"com.acme:two\"]")
-                            && Vendor.of(List.of(root.resolve("vendor"))).runtime().size() == 1);
+                    new Add.Options(java.util.Set.of("com.acme:two"), java.util.Set.of(), false));
+            Check.that("an explicit graph exclusion applies without becoming stored state",
+                    excluded.ok() && Vendor.of(List.of(excludedRoot.resolve("vendor"))).runtime().size() == 1);
 
             var retried = client.into(new Layout(root), List.of("com.acme:retry:1.0"),
                     List.of(repository), new StringWriter(), Add.Mode.EVENTS);
@@ -139,20 +136,17 @@ public final class AddIntegrationTest {
             Check.equal("the POM retry count is bounded", 2, retryPomRequests.get());
             Check.equal("the response-body retry count is bounded", 2, retryArtifactRequests.get());
             Check.equal("a definitive supplement 404 is not retried", 1, missingSourcesRequests.get());
-            var retryResolution = Files.readString(root.resolve("vendor/.tuul/resolution.json"));
-            Check.that("checksums and optional misses enter the resolution record",
-                    retryResolution.contains("\"checksumStatus\":\"verified\"")
-                            && retryResolution.contains("com.acme:retry:1.0:sources"));
-            Check.that("publishing prunes obsolete managed artifact directories",
-                    !Files.exists(root.resolve("vendor/com.acme/one"))
-                            && !Files.exists(root.resolve("vendor/com.acme/two")));
+            Check.that("a later add preserves dependencies already present in vendor",
+                    Files.isRegularFile(root.resolve("vendor/com.acme/one/1.0/one-1.0.jar"))
+                            && Files.isRegularFile(root.resolve("vendor/com.acme/two/2.0/two-2.0.jar"))
+                            && Files.isRegularFile(root.resolve("vendor/com.acme/retry/1.0/retry-1.0.jar")));
 
-            var beforeFailure = retryResolution;
             var failed = client.into(new Layout(root), List.of("com.acme:bad:1.0"),
                     List.of(repository), new StringWriter(), Add.Mode.EVENTS);
             Check.that("a checksum mismatch fails the required binary", !failed.ok());
-            Check.equal("a failed staged add keeps the active resolution", beforeFailure,
-                    Files.readString(root.resolve("vendor/.tuul/resolution.json")));
+            Check.that("a failed staged add leaves vendor unchanged",
+                    Files.notExists(root.resolve("vendor/com.acme/bad"))
+                            && Vendor.of(List.of(root.resolve("vendor"))).runtime().size() == 3);
 
             String duplicateFailure;
             try {
@@ -165,48 +159,40 @@ public final class AddIntegrationTest {
             Check.that("duplicate classes report every owner and do not publish",
                     duplicateFailure.contains("same.Type") && duplicateFailure.contains("duplicate-one")
                             && duplicateFailure.contains("duplicate-two")
-                            && Files.readString(root.resolve("vendor/.tuul/resolution.json")).equals(beforeFailure));
+                            && Files.notExists(root.resolve("vendor/com.acme/duplicate-one"))
+                            && Files.notExists(root.resolve("vendor/com.acme/duplicate-two")));
             var accepted = client.into(new Layout(root),
                     List.of("com.acme:duplicate-one:1.0", "com.acme:duplicate-two:1.0"), List.of(repository),
                     new StringWriter(), Add.Mode.EVENTS,
-                    new Add.Options(java.util.Set.of(), java.util.Set.of("same.Type"), false, false));
-            Check.that("an explicit duplicate exception is persistent",
-                    accepted.ok() && Files.readString(root.resolve("vendor/.tuul/resolution.json"))
-                            .contains("\"duplicateExceptions\":[\"same.Type\"]"));
+                    new Add.Options(java.util.Set.of(), java.util.Set.of("same.Type"), false));
+            Check.that("an explicit duplicate exception applies without becoming stored state",
+                    accepted.ok() && Files.isRegularFile(root.resolve(
+                            "vendor/com.acme/duplicate-one/1.0/duplicate-one-1.0.jar"))
+                            && Files.isRegularFile(root.resolve(
+                                    "vendor/com.acme/duplicate-two/1.0/duplicate-two-1.0.jar")));
 
-            var migrationRoot = root.resolve("migration-project");
-            var migrationVendor = migrationRoot.resolve("vendor");
-            Files.createDirectories(migrationVendor);
-            var flat = migrationVendor.resolve("one-1.0.jar");
-            Files.write(flat, mavenJar("com.acme", "one", "1.0"));
-            var flatSources = migrationVendor.resolve("one-1.0-sources.jar");
-            Files.write(flatSources, jar("sources"));
-            var unknown = migrationVendor.resolve("unknown.jar");
-            Files.write(unknown, jar("unknown"));
+            var existingRoot = root.resolve("existing-project");
+            var existingVendor = existingRoot.resolve("vendor");
+            Files.createDirectories(existingVendor);
+            var local = existingVendor.resolve("local.jar");
+            Files.write(local, jar("local"));
+            var localSources = existingVendor.resolve("local-sources.jar");
+            Files.write(localSources, jar("sources"));
             var dryOutput = new StringWriter();
-            var dry = client.into(new Layout(migrationRoot), List.of("com.acme:one:1.0"), List.of(repository),
+            var dry = client.into(new Layout(existingRoot), List.of("com.acme:one:1.0"), List.of(repository),
                     dryOutput, Add.Mode.EVENTS,
-                    new Add.Options(java.util.Set.of(), java.util.Set.of(), true, false));
-            Check.that("dry-run reports migration and leaves the project unchanged",
-                    dry.ok() && dryOutput.toString().contains("add.migrate")
-                            && dryOutput.toString().contains("add.unmanaged") && Files.isRegularFile(flat)
-                            && !Files.exists(migrationVendor.resolve(".tuul/resolution.json")));
-            var confirmation = "";
-            try {
-                client.into(new Layout(migrationRoot), List.of("com.acme:one:1.0"), List.of(repository),
-                        new StringWriter(), Add.Mode.EVENTS);
-            } catch (IOException expected) {
-                confirmation = expected.getMessage();
-            }
-            Check.that("migration needs explicit confirmation", confirmation.contains("--migrate"));
-            var migrated = client.into(new Layout(migrationRoot), List.of("com.acme:one:1.0"), List.of(repository),
-                    new StringWriter(), Add.Mode.EVENTS,
-                    new Add.Options(java.util.Set.of(), java.util.Set.of(), false, true));
-            Check.that("confirmed migration moves identified jars and preserves unknown jars",
-                    migrated.ok() && !Files.exists(flat) && !Files.exists(flatSources) && Files.isRegularFile(unknown)
-                            && Files.isRegularFile(migrationVendor.resolve("com.acme/one/1.0/one-1.0.jar"))
-                            && Vendor.of(List.of(migrationVendor)).runtime().stream()
-                                    .noneMatch(path -> path.equals(unknown)));
+                    new Add.Options(java.util.Set.of(), java.util.Set.of(), true));
+            Check.that("dry-run reports missing files and leaves vendor unchanged",
+                    dry.ok() && dryOutput.toString().contains("add.add com.acme/one/1.0/one-1.0.jar")
+                            && Files.isRegularFile(local)
+                            && Files.notExists(existingVendor.resolve("com.acme/one/1.0/one-1.0.jar")));
+            var added = client.into(new Layout(existingRoot), List.of("com.acme:one:1.0"), List.of(repository),
+                    new StringWriter(), Add.Mode.EVENTS);
+            Check.that("add preserves every existing vendor file and publishes the requested graph",
+                    added.ok() && Files.isRegularFile(local) && Files.isRegularFile(localSources)
+                            && Files.isRegularFile(existingVendor.resolve("com.acme/one/1.0/one-1.0.jar"))
+                            && Files.isRegularFile(existingVendor.resolve("com.acme/two/2.0/two-2.0.jar"))
+                            && Vendor.of(List.of(existingVendor)).runtime().size() == 3);
         } finally {
             server.stop(0);
             delete(root);
@@ -283,13 +269,6 @@ public final class AddIntegrationTest {
             }
         }
         return bytes.toByteArray();
-    }
-
-    private static byte[] mavenJar(String group, String artifact, String version) throws IOException {
-        var metadata = "groupId=" + group + "\nartifactId=" + artifact + "\nversion=" + version + "\n";
-        return jar(Map.of("fixture.txt", new byte[] {1},
-                "META-INF/maven/" + group + "/" + artifact + "/pom.properties",
-                metadata.getBytes(StandardCharsets.UTF_8)));
     }
 
     private static void delete(Path root) throws IOException {

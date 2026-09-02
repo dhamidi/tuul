@@ -7,8 +7,6 @@ import java.io.Writer;
 import java.nio.file.Files;
 import java.nio.file.Path;
 import java.nio.file.StandardCopyOption;
-import java.security.MessageDigest;
-import java.security.NoSuchAlgorithmException;
 import java.util.ArrayList;
 import java.util.Collections;
 import java.util.Comparator;
@@ -20,13 +18,12 @@ import java.util.jar.JarFile;
 import java.util.jar.JarOutputStream;
 import java.util.jar.Manifest;
 import tuul.Version;
-import json.Json;
 
 /// Puts tuul into a project, as an ordinary dependency.
 ///
 /// What lands in `vendor/dev.tuul/tuul/<version>/` is a jar, a sources jar, and
 /// a compiled SQLite for each supported platform. The jar is the named module
-/// `tuul`. The install updates `vendor/.tuul/resolution.json` atomically.
+/// `tuul`. These files are the installed dependency.
 ///
 /// A modular project reads the jar from its module path. An unnamed project
 /// reads the same jar from its classpath. The sources jar supplies comments to
@@ -51,6 +48,12 @@ public final class Install {
 
     private Install() {}
 
+    /// Installs this Tuul distribution into `layout.vendor()`.
+    ///
+    /// Pass `source` to install native C instead of prebuilt libraries. Progress
+    /// goes to `log`. The result describes the files after writing finishes.
+    /// Missing distribution inputs throw `IOException`. A native build failure
+    /// also throws `IOException` or `InterruptedException`.
     public static Result into(Layout layout, boolean source, Writer log) throws IOException, InterruptedException {
         var home = Home.find();
         var missing = home.missing();
@@ -81,90 +84,7 @@ public final class Install {
 
         var native_ = directory.resolve(Home.NATIVE);
         var platforms = source ? source(home, native_) : binaries(home, native_, log);
-        resolution(layout, jar, sources);
         return new Result(directory, Version.NUMBER, classes, written, platforms);
-    }
-
-    private static void resolution(Layout layout, Path jar, Path sources) throws IOException {
-        var file = layout.vendor().resolve(".tuul/resolution.json");
-        Json.Object document = Json.Object.of().with("version", 1)
-                .with("roots", Json.Array.of(List.of())).with("runtime", Json.Array.of(List.of()))
-                .with("test", Json.Array.of(List.of())).with("omitted", Json.Array.of(List.of()))
-                .with("files", Json.Array.of(List.of())).with("optionalMissing", Json.Array.of(List.of()));
-        if (Files.isRegularFile(file)) {
-            try (var reader = Files.newBufferedReader(file)) {
-                if (Json.parse(reader) instanceof Json.Object existing) document = existing;
-            }
-        }
-        var coordinate = "dev.tuul:tuul:" + Version.NUMBER;
-        var roots = strings(document.list("roots"));
-        roots.removeIf(value -> value.startsWith("dev.tuul:tuul:"));
-        roots.add(coordinate);
-        var runtime = withoutCoordinate(document.list("runtime"), "dev.tuul:tuul:");
-        var node = (Json) Json.Object.of().with("coordinate", coordinate).with("group", "dev.tuul")
-                .with("artifact", "tuul").with("version", Version.NUMBER).with("type", "jar")
-                .with("classifier", "").with("scope", "compile").with("repository", "tuul:self")
-                .with("path", Json.Array.strings(List.of(coordinate))).with("relocatedFrom", "");
-        runtime.add(node);
-        var test = withoutCoordinate(document.list("test"), "dev.tuul:tuul:");
-        test.add(node);
-        var files = withoutCoordinate(document.list("files"), "dev.tuul:tuul:");
-        files.add(file(layout, jar, coordinate, "binary"));
-        files.add(file(layout, sources, coordinate + ":sources", "sources"));
-        var missing = withoutCoordinate(document.list("optionalMissing"), "dev.tuul:tuul:");
-        missing.add(Json.Object.of().with("coordinate", coordinate + ":javadoc")
-                .with("reason", "tuul does not ship a javadoc archive"));
-        document = document.with("roots", Json.Array.strings(roots)).with("runtime", Json.Array.of(runtime))
-                .with("test", Json.Array.of(test)).with("files", Json.Array.of(files))
-                .with("optionalMissing", Json.Array.of(missing));
-        Files.createDirectories(file.getParent());
-        var temporary = Files.createTempFile(file.getParent(), "resolution.", ".tmp");
-        try {
-            try (var writer = Files.newBufferedWriter(temporary)) {
-                document.write(writer);
-            }
-            try {
-                Files.move(temporary, file, StandardCopyOption.ATOMIC_MOVE, StandardCopyOption.REPLACE_EXISTING);
-            } catch (java.nio.file.AtomicMoveNotSupportedException unsupported) {
-                Files.move(temporary, file, StandardCopyOption.REPLACE_EXISTING);
-            }
-        } finally {
-            Files.deleteIfExists(temporary);
-        }
-    }
-
-    private static Json file(Layout layout, Path path, String coordinate, String kind) throws IOException {
-        return Json.Object.of().with("path", layout.vendor().relativize(path).toString())
-                .with("coordinate", coordinate).with("kind", kind).with("checksumAlgorithm", "SHA-256")
-                .with("checksum", sha256(path)).with("checksumStatus", "local").with("repository", "tuul:self");
-    }
-
-    private static ArrayList<String> strings(List<Json> values) {
-        var result = new ArrayList<String>();
-        for (var value : values) if (value instanceof Json.Str(var text)) result.add(text);
-        return result;
-    }
-
-    private static ArrayList<Json> withoutCoordinate(List<Json> values, String prefix) {
-        var result = new ArrayList<Json>();
-        for (var value : values) {
-            if (value instanceof Json.Object object && object.string("coordinate", "").startsWith(prefix)) continue;
-            result.add(value);
-        }
-        return result;
-    }
-
-    private static String sha256(Path path) throws IOException {
-        try {
-            var digest = MessageDigest.getInstance("SHA-256");
-            try (var input = Files.newInputStream(path)) {
-                var buffer = new byte[16 * 1024];
-                for (int count; (count = input.read(buffer)) >= 0;) if (count > 0) digest.update(buffer, 0, count);
-            }
-            return java.util.HexFormat.of().formatHex(digest.digest());
-        } catch (NoSuchAlgorithmException impossible) {
-            throw new AssertionError(impossible);
-        }
     }
 
     /// An older tuul in the same directory would be a second copy of every class
