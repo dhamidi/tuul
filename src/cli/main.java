@@ -122,9 +122,10 @@ static int dispatch(Parsed.Values parsed, Writer out, Writer err) throws IOExcep
 
 /// A message read from stdin goes to whichever application handles its type,
 /// so `tuul message` reaches all of tuul rather than the half of it `docs`
-/// happens to be.
+/// happens to be. Project messages use plain event output, even when the
+/// process has a terminal.
 static int deliver(Message message, Writer out, Writer err) {
-    return message.type().startsWith("project.") ? manage(message, out, err) : ask(message, out, err);
+    return message.type().startsWith("project.") ? manage(message, out, err, false) : ask(message, out, err);
 }
 
 /// `tuul browse` is the one command that does not dispatch a message: it starts
@@ -217,8 +218,11 @@ static int ask(Message message, Writer out, Writer err) {
 
 static int manage(Message message, Writer out, Writer err) {
     var console = System.console();
-    return project.App.of(project.State.of(Path.of(".")), out, err,
-            console != null && console.isTerminal())
+    return manage(message, out, err, console != null && console.isTerminal());
+}
+
+static int manage(Message message, Writer out, Writer err, boolean tty) {
+    return project.App.of(project.State.of(Path.of(".")), out, err, tty)
             .dispatch(message).exit();
 }
 

@@ -161,8 +161,7 @@ public final class App {
                 .with("repositories", Json.Array.of(message.list("repository")))
                 .with("exclusions", Json.Array.of(message.list("exclude")))
                 .with("duplicateExceptions", Json.Array.of(message.list("allow-duplicate")))
-                .with("dryRun", message.flag("dry-run"))
-                .with("tty", message.flag("tty")));
+                .with("dryRun", message.flag("dry-run")));
     }
 
     private static Step<State> added(State state, Message message) {

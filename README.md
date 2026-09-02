@@ -183,9 +183,11 @@ retry HTTP 404. At most eight downloads run at once, with at most four for one
 repository origin. Use `--repository URL` more than once to try repositories
 in order.
 
-When stdout is a terminal, `tuul add` replaces these lines with one ANSI
-progress bar per artifact. When stdout is not a terminal, it keeps the
-plain event lines so an agent can read them without terminal control codes.
+When stdout is a terminal, `tuul add` replaces its one-line status with an ANSI
+progress bar. The line shows completed artifact jobs and the current transfer.
+When stdout is not a terminal, it keeps the plain lifecycle, plan, and
+diagnostic events so an agent can read them without terminal control codes.
+Byte-level progress events are omitted from this stream.
 
 ```sh
 $ tuul add --repository https://repo.example.test/maven2/ com.example:library:1.2.3

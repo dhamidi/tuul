@@ -56,7 +56,8 @@ public final class Add {
     public enum Mode {
         /// ANSI progress bars for an interactive terminal.
         TTY,
-        /// One plain event per line for pipes and agents.
+        /// Plain plan, lifecycle, diagnostic, and final event lines for pipes
+        /// and agents. Byte-level `progress` events are omitted.
         EVENTS
     }
 
@@ -273,8 +274,9 @@ public final class Add {
     /// Publication replaces selected version directories and preserves every
     /// other file under `vendor/`. It writes no dependency metadata.
     ///
-    /// `Mode.TTY` writes ANSI bars. `Mode.EVENTS` writes one flushed event per
-    /// line. Resolution and setup errors throw `IOException`. Download failures
+    /// `Mode.TTY` writes one flushed aggregate ANSI bar. `Mode.EVENTS` writes
+    /// one flushed semantic event per line and omits byte-level progress.
+    /// Resolution and setup errors throw `IOException`. Download failures
     /// appear in the result. A required failure does not publish staged files.
     /// Duplicate classes throw `IOException` before publication.
     public static Result into(Layout layout, List<String> coordinates,
@@ -305,6 +307,7 @@ public final class Add {
             for (var event : resolved.plan()) progress.publish(event);
             artifacts = resolved.artifacts().stream()
                     .map(Coordinate::parse).toList();
+            progress.schedule(scheduled(artifacts).size());
             for (var root : roots) progress.publish(Event.resolved(root.text(), artifacts.size()));
         } catch (Exception failure) {
             var reason = failure.getMessage() == null ? failure.toString() : failure.getMessage();
