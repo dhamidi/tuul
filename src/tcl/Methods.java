@@ -1,6 +1,8 @@
 package tcl;
 
 import java.lang.reflect.Array;
+import java.lang.reflect.Constructor;
+import java.lang.reflect.Executable;
 import java.lang.reflect.InvocationTargetException;
 import java.lang.reflect.Method;
 import java.lang.reflect.Modifier;
@@ -9,6 +11,7 @@ import java.util.ArrayList;
 import java.util.Arrays;
 import java.util.Comparator;
 import java.util.List;
+import java.util.Map;
 
 final class Methods {
 
@@ -18,6 +21,7 @@ final class Methods {
         if (args.isEmpty()) throw new TclException.Error("missing Java method name");
         var name = Values.string(args.getFirst());
         var values = args.subList(1, args.size());
+        if (receiver instanceof Class<?> type && name.equals("new")) return construct(tcl, type, values);
         var type = receiver instanceof Class<?> found ? found : receiver.getClass();
         var candidates = new ArrayList<Candidate>();
         for (var method : type.getMethods()) {
@@ -26,34 +30,67 @@ final class Methods {
             var converted = convert(tcl, accessible(type, method), values);
             if (converted != null) candidates.add(converted);
         }
-        if (candidates.isEmpty()) throw new TclException.Error("no public Java method \"" + name + "\" accepts " + values.size() + " argument(s)");
+        var what = "method \"" + name + "\"";
+        return run(select(candidates, what, values.size()), receiver instanceof Class<?> ? null : receiver, what);
+    }
+
+    static Object construct(Tcl tcl, Class<?> type, List<Object> values) {
+        var name = name(type);
+        if (!tcl.permits(type)) {
+            throw new TclException.Error("class \"" + name + "\" is not available to new", List.of("TCL", "LOOKUP", "CLASS", name));
+        }
+        if (type.isInterface() || type.isPrimitive() || type.isArray() || Modifier.isAbstract(type.getModifiers())) {
+            throw new TclException.Error("cannot instantiate \"" + name + "\"");
+        }
+        var candidates = new ArrayList<Candidate>();
+        for (var constructor : type.getConstructors()) {
+            if (constructor.isSynthetic()) continue;
+            var converted = convert(tcl, constructor, values);
+            if (converted != null) candidates.add(converted);
+        }
+        var what = "constructor of \"" + name + "\"";
+        return run(select(candidates, what, values.size()), null, what);
+    }
+
+    static String name(Class<?> type) {
+        var canonical = type.getCanonicalName();
+        return canonical == null ? type.getName() : canonical;
+    }
+
+    private static Candidate select(List<Candidate> candidates, String what, int count) {
+        if (candidates.isEmpty()) throw new TclException.Error("no public Java " + what + " accepts " + count + " argument(s)");
         candidates.sort(Comparator.comparingInt(Candidate::score));
         if (candidates.size() > 1 && candidates.get(0).score == candidates.get(1).score) {
-            throw new TclException.Error("ambiguous Java method \"" + name + "\"");
+            throw new TclException.Error("ambiguous Java " + what);
         }
-        var selected = candidates.getFirst();
+        return candidates.getFirst();
+    }
+
+    private static Object run(Candidate selected, Object receiver, String what) {
         try {
-            var result = selected.method.invoke(receiver instanceof Class<?> ? null : receiver, selected.arguments);
-            return selected.method.getReturnType() == void.class ? "" : result;
+            if (selected.executable instanceof Constructor<?> constructor) return constructor.newInstance(selected.arguments);
+            var method = (Method) selected.executable;
+            var result = method.invoke(receiver, selected.arguments);
+            return method.getReturnType() == void.class ? "" : result;
         } catch (InvocationTargetException e) {
             var cause = e.getCause();
             if (cause instanceof TclException completion) throw completion;
             throw new TclException.Error(cause.getMessage() == null ? cause.getClass().getName() : cause.getMessage(),
-                    java.util.Map.of("-errorcode", List.of("JAVA", cause.getClass().getName())), cause);
+                    Map.of("-errorcode", List.of("JAVA", cause.getClass().getName())), cause);
         } catch (ReflectiveOperationException | IllegalArgumentException e) {
-            throw new TclException.Error("cannot call Java method \"" + name + "\": " + e.getMessage(),
-                    java.util.Map.of("-errorcode", List.of("JAVA", e.getClass().getName())), e);
+            throw new TclException.Error("cannot call Java " + what + ": " + e.getMessage(),
+                    Map.of("-errorcode", List.of("JAVA", e.getClass().getName())), e);
         }
     }
 
-    private static Candidate convert(Tcl tcl, Method method, List<Object> values) {
-        var types = method.getParameterTypes();
-        if (!method.isVarArgs() && types.length != values.size()) return null;
-        if (method.isVarArgs() && values.size() < types.length - 1) return null;
+    private static Candidate convert(Tcl tcl, Executable executable, List<Object> values) {
+        var types = executable.getParameterTypes();
+        if (!executable.isVarArgs() && types.length != values.size()) return null;
+        if (executable.isVarArgs() && values.size() < types.length - 1) return null;
         var arguments = new Object[types.length];
         var score = 0;
         for (var at = 0; at < types.length; at++) {
-            if (method.isVarArgs() && at == types.length - 1) {
+            if (executable.isVarArgs() && at == types.length - 1) {
                 var component = types[at].componentType();
                 var count = values.size() - at;
                 var array = Array.newInstance(component, count);
@@ -71,7 +108,7 @@ final class Methods {
             arguments[at] = conversion.value;
             score += conversion.score;
         }
-        return new Candidate(method, arguments, score);
+        return new Candidate(executable, arguments, score);
     }
 
     private static Method accessible(Class<?> receiver, Method method) {
@@ -122,7 +159,32 @@ final class Methods {
         if ((value instanceof String || value instanceof Command) && sam(parameter) != null) {
             return new Conversion(proxy(tcl, value, parameter, sam(parameter)), 6);
         }
+        if (value instanceof String text) {
+            var parsed = parse(text, boxed);
+            if (parsed != null) return new Conversion(parsed, 7);
+        }
         return null;
+    }
+
+    private static Object parse(String text, Class<?> type) {
+        try {
+            if (type == Boolean.class) return Values.bool(text);
+            if (type == Double.class) return Values.number(text);
+            if (type == Float.class) return (float) Values.number(text);
+            if (type == Long.class) return Values.integer(text);
+            if (type == Integer.class) return Math.toIntExact(Values.integer(text));
+            if (type == Short.class) {
+                var value = Values.integer(text);
+                return value == (short) value ? (short) value : null;
+            }
+            if (type == Byte.class) {
+                var value = Values.integer(text);
+                return value == (byte) value ? (byte) value : null;
+            }
+            return null;
+        } catch (TclException | ArithmeticException e) {
+            return null;
+        }
     }
 
     private static Object number(Number value, Class<?> type) {
@@ -202,5 +264,5 @@ final class Methods {
     }
 
     private record Conversion(Object value, int score) {}
-    private record Candidate(Method method, Object[] arguments, int score) {}
+    private record Candidate(Executable executable, Object[] arguments, int score) {}
 }

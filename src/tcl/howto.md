@@ -48,8 +48,9 @@ evaluated.
 The first word after substitution is the object. The second word is the
 method name. The rest are arguments.
 
-The interpreter calls a public method only. It does not read fields. It does
-not call a constructor. Create the object in Java. Then pass it.
+The interpreter calls a public method only. It does not read fields. To
+create an object in a script, see
+[Create a Java object from a script](#create-a-java-object-from-a-script).
 
 If the first word is a `Class`, the interpreter calls a static method.
 
@@ -71,6 +72,65 @@ share a tail. `app start` uses the command. `app::start` uses the namespace.
 
 The interpreter passes the current interpreter and the arguments after the
 command name. It does not pass the command name.
+
+## Create a Java object from a script
+
+1. Permit the class in the host: `tcl.types(Json.class, ArrayList.class)`.
+   Or open a pattern when the script names the class:
+   `tcl.imports("json.*", "java.util.*")`.
+2. In the script, import a class the host opened by pattern:
+   `import java.util.ArrayList`. A class passed to `types` needs no
+   `import`.
+3. Write `ArrayList new` to run a constructor. Add arguments after `new`.
+4. Write `Json of admin` to run a static method.
+
+`import` registers the simple name and each public member class as
+`Outer.Inner`. `import json.Json` gives `Json.Str`, `Json.Object`, and the
+other members. Write `import java.util.HashMap as Dict` to choose the name.
+
+A text word stays text. `Json.Num new 3` works, because `Num` has no
+`String` constructor. `$o with age 41` picks `with(String, String)`. Write
+`[expr 41]` when the numeric overload must win.
+
+## Build a JSON value from a script
+
+1. Pass the classes and a writer:
+
+```java
+var tcl = Tcl.of().types(Json.class, ArrayList.class);
+tcl.set("out", writer);
+```
+
+2. Build the document in the script:
+
+```tcl
+set tags [ArrayList new]
+$tags add [Json of admin]
+$tags add [Json of ops]
+
+set user [Json.Object of name Ada]
+set user [$user with age [expr 41]]
+set user [$user with tags [Json.Array of $tags]]
+$user write $out
+```
+
+`Json.Object` is immutable, so each `with` returns a new object. `write`
+streams the document to the writer.
+
+## Test the type of a value
+
+1. Write `instanceof $v Json.Str`. The result is a `Boolean`.
+2. For one body per class, write `switch -instanceof`:
+
+```tcl
+switch -instanceof $v {
+    Json.Num { expr {[$v value] + 1} }
+    Json.Str { $v value }
+    default  { error "unexpected value" }
+}
+```
+
+3. A `Class` from `$v getClass` also works as the class argument.
 
 ## Put an object in a namespace
 

@@ -5,6 +5,7 @@ import java.io.Reader;
 import java.io.StringReader;
 import java.io.UncheckedIOException;
 import java.lang.reflect.Array;
+import java.lang.reflect.Modifier;
 import java.util.ArrayDeque;
 import java.util.ArrayList;
 import java.util.Arrays;
@@ -39,12 +40,17 @@ public final class Tcl {
     private final ArrayList<Frame> frames = new ArrayList<>();
     private final ArrayList<Evaluation> evaluations = new ArrayList<>();
     private final Object gate = new Object();
+    private final ClassLoader loader;
+    private final LinkedHashSet<Class<?>> types = new LinkedHashSet<>();
+    private final ArrayList<String> imports = new ArrayList<>();
     private Thread owner;
     private int entries;
     private long commandCount;
     private List<Object> lastErrorStack = List.of();
 
     private Tcl() {
+        var context = Thread.currentThread().getContextClassLoader();
+        loader = context == null ? Tcl.class.getClassLoader() : context;
         frames.add(new Frame(root, root.variables, false, "", List.of()));
         install();
     }
@@ -96,6 +102,38 @@ public final class Tcl {
     /// Registers a host object as a root-relative command.
     public Tcl command(String name, Object target) {
         return command(name, (tcl, args) -> Methods.call(tcl, target, args));
+    }
+
+    /// The classes a script may create objects of, each registered as a
+    /// command in `::`. Pass a class here before a script writes `Name new`.
+    ///
+    /// The command name is the simple name of the class. Each public member
+    /// class becomes `Outer.Inner`. A class command runs a constructor when
+    /// its first argument is `new` and a static method otherwise. A class
+    /// passed here needs no `import`. To let a script name the class itself,
+    /// pass a pattern to [#imports] instead.
+    public Tcl types(Class<?>... classes) {
+        locked(() -> {
+            for (var type : classes) registerType(root, type.getSimpleName(), type);
+            return null;
+        });
+        return this;
+    }
+
+    /// Glob patterns over canonical class names that `import` and `new`
+    /// accept. Pass a pattern before a script writes `import` for a class
+    /// under it. With no pattern, a script can only use classes passed to
+    /// [#types].
+    ///
+    /// `*` matches any characters, including `.`. `new` on a `Class` value
+    /// from any source runs only for a class that matches a pattern or was
+    /// passed to [#types]. Later calls add patterns. Nothing removes one.
+    public Tcl imports(String... patterns) {
+        locked(() -> {
+            imports.addAll(Arrays.asList(patterns));
+            return null;
+        });
+        return this;
     }
 
     /// Evaluates source text with no origin.
@@ -250,6 +288,8 @@ public final class Tcl {
         builtin("upvar", this::upvarCommand);
         builtin("global", this::globalCommand);
         builtin("variable", this::variableCommand);
+        builtin("import", this::importCommand);
+        builtin("instanceof", this::instanceofCommand);
 
         var namespace = namespace(root, "namespace", true);
         namespaceCommand(namespace, "eval", this::namespaceEval);
@@ -548,13 +588,15 @@ public final class Tcl {
                 case "-exact" -> mode = "exact";
                 case "-glob" -> mode = "glob";
                 case "-regexp" -> mode = "regexp";
+                case "-instanceof" -> mode = "instanceof";
                 case "-nocase" -> nocase = true;
                 default -> throw error("bad option \"" + option + "\"");
             }
             at++;
         }
         if (at >= args.size()) wrongArgs("switch ?options? string pattern body ?pattern body ...?");
-        var value = Values.string(args.get(at++));
+        var subject = args.get(at++);
+        var value = mode.equals("instanceof") ? "" : Values.string(subject);
         var pairs = new ArrayList<Object>();
         if (args.size() - at == 1) pairs.addAll(Values.list(args.get(at)));
         else pairs.addAll(args.subList(at, args.size()));
@@ -564,7 +606,7 @@ public final class Tcl {
         for (var index = 0; index < pairs.size(); index += 2) {
             var pattern = Values.string(pairs.get(index));
             if (pattern.equals("default")) fallback = index;
-            else if (matches(mode, nocase, pattern, value)) {
+            else if (mode.equals("instanceof") ? classArgument(pattern).isInstance(subject) : matches(mode, nocase, pattern, value)) {
                 selected = index;
                 break;
             }
@@ -759,6 +801,84 @@ public final class Tcl {
             }
         }
         return "";
+    }
+
+    private Object importCommand(Tcl ignored, List<Object> args) {
+        if (args.isEmpty()) wrongArgs("import className ?as name? ?className ?as name? ...?");
+        var names = new ArrayList<Object>();
+        var at = 0;
+        while (at < args.size()) {
+            var className = Values.string(args.get(at++));
+            var type = imported(className);
+            var alias = type.getSimpleName();
+            if (at < args.size() && Values.string(args.get(at)).equals("as")) {
+                if (at + 1 >= args.size()) wrongArgs("import className ?as name? ?className ?as name? ...?");
+                alias = Values.string(args.get(at + 1));
+                at += 2;
+            }
+            names.addAll(registerType(frame().namespace, alias, type));
+        }
+        return names;
+    }
+
+    private Object instanceofCommand(Tcl ignored, List<Object> args) {
+        arity("instanceof value class", args, 2, 2);
+        return classArgument(args.get(1)).isInstance(args.getFirst());
+    }
+
+    private Class<?> classArgument(Object value) {
+        if (value instanceof Class<?> type) return type;
+        var name = Values.string(value);
+        var found = commandRef(name, frame().namespace);
+        if (found != null && found.command instanceof ClassCommand(var type)) return type;
+        throw error("class \"" + name + "\" is not available", "TCL", "LOOKUP", "CLASS", name);
+    }
+
+    private Class<?> imported(String name) {
+        var type = classNamed(name);
+        if (type == null || !Modifier.isPublic(type.getModifiers()) || !permits(type)) {
+            throw error("class \"" + name + "\" is not available", "TCL", "LOOKUP", "CLASS", name);
+        }
+        return type;
+    }
+
+    private Class<?> classNamed(String name) {
+        var candidate = name;
+        while (true) {
+            try {
+                return Class.forName(candidate, false, loader);
+            } catch (ClassNotFoundException | LinkageError ignored) {
+                var dot = candidate.lastIndexOf('.');
+                if (dot < 0) return null;
+                candidate = candidate.substring(0, dot) + "$" + candidate.substring(dot + 1);
+            }
+        }
+    }
+
+    boolean permits(Class<?> type) {
+        if (types.contains(type)) return true;
+        var name = Methods.name(type);
+        return imports.stream().anyMatch(pattern -> Glob.matches(pattern, name, false));
+    }
+
+    private List<Object> registerType(Namespace namespace, String name, Class<?> type) {
+        var names = new ArrayList<Object>();
+        namespace.commands.put(name, ref(new ClassCommand(type), namespace, fullName(namespace, name), "native"));
+        types.add(type);
+        names.add(name);
+        var members = Arrays.stream(type.getClasses())
+                .filter(member -> member.getDeclaringClass() == type)
+                .sorted(Comparator.comparing(Class::getSimpleName)).toList();
+        for (var member : members) names.addAll(registerType(namespace, name + "." + member.getSimpleName(), member));
+        return names;
+    }
+
+    private record ClassCommand(Class<?> type) implements Command {
+
+        @Override
+        public Object call(Tcl tcl, List<Object> args) {
+            return Methods.call(tcl, type, args);
+        }
     }
 
     private Object runBody(Object value) {

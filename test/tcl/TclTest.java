@@ -1,9 +1,11 @@
 package tcl;
 
 import harness.Check;
+import json.Json;
 import java.io.IOException;
 import java.io.Reader;
 import java.io.StringReader;
+import java.util.ArrayList;
 import java.util.List;
 import java.util.concurrent.CountDownLatch;
 import java.util.concurrent.atomic.AtomicInteger;
@@ -20,6 +22,9 @@ public final class TclTest {
         resolvesNamespacesAndEnsembles();
         carriesErrorsAndReturnOptions();
         callsJavaAndBuildsCallbacks();
+        createsJavaObjects();
+        importsClasses();
+        testsTypes();
         streamsSourceCommands();
         rejectsConcurrentUse();
     }
@@ -144,6 +149,99 @@ public final class TclTest {
                 set filtered [$values filter positive]
                 $filtered toList
                 """));
+    }
+
+    private static void createsJavaObjects() {
+        var tcl = Tcl.of().types(Json.class, ArrayList.class);
+        Check.equal("a class command runs a constructor with new", new Json.Str("admin"), tcl.eval("Json.Str new admin"));
+        Check.equal("text converts to a numeric constructor parameter", new Json.Num(3), tcl.eval("Json.Num new 3"));
+        Check.equal("text converts to a boolean constructor parameter", Json.TRUE, tcl.eval("Json.Bool new true"));
+        Check.equal("a class command runs a static method", Json.Object.of("name", "Ada"), tcl.eval("Json.Object of name Ada"));
+        Check.equal("text prefers a String overload", new Json.Str("41"), tcl.eval("[[Json.Object of] with age 41] get age"));
+        Check.equal("a number picks the numeric overload", new Json.Num(41), tcl.eval("[[Json.Object of] with age [expr 41]] get age"));
+        Check.equal("a permitted Class value accepts new", new Json.Str("x"), tcl.eval("[[Json of y] getClass] new x"));
+        Check.equal("a script builds a JSON document", "{\"name\":\"Ada\",\"age\":41,\"tags\":[\"admin\",\"ops\"]}", tcl.eval("""
+                set tags [ArrayList new]
+                $tags add [Json of admin]
+                $tags add [Json of ops]
+                set user [Json.Object of name Ada]
+                set user [$user with age [expr 41]]
+                set user [$user with tags [Json.Array of $tags]]
+                $user text
+                """));
+
+        tcl.set("nothing", null);
+        try {
+            tcl.eval("Json.Array new $nothing");
+            Check.that("a constructor exception leaves eval", false);
+        } catch (TclException.Error error) {
+            Check.equal("a constructor exception has a JAVA code", List.of("JAVA", "java.lang.NullPointerException"), error.errorCode());
+        }
+        try {
+            tcl.eval("Json new");
+            Check.that("an interface cannot be instantiated", false);
+        } catch (TclException.Error error) {
+            Check.equal("an interface names itself", "cannot instantiate \"json.Json\"", error.getMessage());
+        }
+        tcl.set("builder", StringBuilder.class);
+        try {
+            tcl.eval("$builder new");
+            Check.that("new needs a permitted class", false);
+        } catch (TclException.Error error) {
+            Check.equal("a refused new has a class lookup code", List.of("TCL", "LOOKUP", "CLASS", "java.lang.StringBuilder"), error.errorCode());
+        }
+    }
+
+    private static void importsClasses() {
+        var tcl = Tcl.of();
+        try {
+            tcl.eval("import java.util.HashMap");
+            Check.that("import needs a permitted pattern", false);
+        } catch (TclException.Error error) {
+            Check.equal("a refused import has a class lookup code", List.of("TCL", "LOOKUP", "CLASS", "java.util.HashMap"), error.errorCode());
+        }
+        tcl.imports("java.util.*", "json.*");
+        Check.equal("import registers the simple name", List.of("HashMap"), tcl.eval("import java.util.HashMap"));
+        Check.equal("import as renames", List.of("Items"), tcl.eval("import java.util.ArrayList as Items"));
+        Check.that("an imported class creates objects", tcl.eval("Items new") instanceof ArrayList);
+        Check.equal("import resolves a member class by its Java name", new Json.Str("hi"), tcl.eval("import json.Json.Str as S; S new hi"));
+        Check.equal("import registers member classes", List.of("Map", "Map.Entry"), tcl.eval("namespace eval app {import java.util.Map}"));
+        Check.equal("import registers in the current namespace", List.of("::app::Map"), tcl.eval("info commands ::app::Map"));
+        Check.equal("import does not register in the root", List.of(), tcl.eval("info commands Map"));
+        try {
+            tcl.eval("import java.util.NoSuchClass");
+            Check.that("an unknown class cannot be imported", false);
+        } catch (TclException.Error error) {
+            Check.equal("an unknown class has a class lookup code", List.of("TCL", "LOOKUP", "CLASS", "java.util.NoSuchClass"), error.errorCode());
+        }
+    }
+
+    private static void testsTypes() {
+        var tcl = Tcl.of().types(Json.class);
+        tcl.set("nothing", null);
+        Check.equal("instanceof is true for the class of the value", true, tcl.eval("instanceof [Json of x] Json.Str"));
+        Check.equal("instanceof is false for another class", false, tcl.eval("instanceof [Json of x] Json.Num"));
+        Check.equal("instanceof accepts a Class value", true, tcl.eval("instanceof [Json of x] [[Json of y] getClass]"));
+        Check.equal("instanceof of null is false", false, tcl.eval("instanceof $nothing Json.Str"));
+        Check.equal("instanceof works in if", "yes", tcl.eval("if {[instanceof [Json of x] Json]} {set r yes} else {set r no}"));
+        tcl.eval("""
+                proc describe {v} {
+                    switch -instanceof $v {
+                        Json.Num { return "number [$v value]" }
+                        Json.Str { return "text [$v value]" }
+                        default { return other }
+                    }
+                }
+                """);
+        Check.equal("switch -instanceof selects by class", "text x", tcl.eval("describe [Json of x]"));
+        Check.equal("switch -instanceof tries patterns in order", "number 2.0", tcl.eval("describe [Json.Num new 2]"));
+        Check.equal("switch -instanceof falls back to default", "other", tcl.eval("describe hello"));
+        try {
+            tcl.eval("instanceof 1 NoSuchClass");
+            Check.that("instanceof needs a class command", false);
+        } catch (TclException.Error error) {
+            Check.equal("an unknown class command has a class lookup code", List.of("TCL", "LOOKUP", "CLASS", "NoSuchClass"), error.errorCode());
+        }
     }
 
     private static void streamsSourceCommands() throws IOException {

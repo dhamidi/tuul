@@ -29,6 +29,7 @@ Terms keep one meaning. See [Glossary](#glossary).
 | origin | A name the host gives an eval, often a path. `info script` returns it. |
 | options | The return-options dictionary of one evaluation. A `Map`. |
 | busy | Another thread called `eval` or `call` while this interpreter was running. |
+| class command | A command that holds a `Class`. `import` and `types` create one. Its first argument is `new` or a static method name. |
 
 ## Public types
 
@@ -80,6 +81,8 @@ The caller closes the input and output streams. The REPL does not close them.
 | `exists(name)` | Return whether the name is set. `null` is set. Unset is not. |
 | `command(name, Command)` | Register a command. Resolve `name` from `::`. Create intermediate namespaces. A second register under the same name replaces the first. |
 | `command(name, Object)` | Register a host object as a command. The first argument is the method name. The rest are method arguments. |
+| `types(classes…)` | Register each class as a command in `::` under its simple name, and each public member class as `Outer.Inner`. Permit `new` on them. Return this interpreter. |
+| `imports(patterns…)` | Permit `import` and `new` for every class whose canonical name matches one of the glob patterns. The default permits none. Return this interpreter. |
 | `eval(script)` | Parse and run `script` in the current frame. Return the result of the last command. An empty script returns `""`. |
 | `eval(script, origin)` | Same as `eval(script)`. `origin` is the name `info script` and `info frame` report. |
 | `eval(Reader)` | Parse one command at a time from the reader. Run each command. Return the result of the last command. Throw `IOException` if the reader fails. |
@@ -106,8 +109,8 @@ Do not build a script string in Java.
 
 `eval(Reader)` does not close the reader. The host closes it.
 
-`set`, `get`, `exists`, `command`, `eval`, `invoke`, `call`, and the adapters
-take a reentrant lock. See [Threads](#threads).
+`set`, `get`, `exists`, `command`, `types`, `imports`, `eval`, `invoke`,
+`call`, and the adapters take a reentrant lock. See [Threads](#threads).
 
 `get` and `exists` distinguish unset from `null`. A variable that holds `null`
 exists.
@@ -521,10 +524,16 @@ After substitution:
 
 Commands and variables are separate. `set set 1` is valid.
 
+A class command is a command. Rule 2 finds it. Its first argument is `new`
+or a static method name. See [Class commands](#class-commands).
+
 ## Java methods
 
-Public methods only. No `setAccessible`. No fields. No constructors.
+Public methods and public constructors only. No `setAccessible`. No
+fields.
 
+- First word is a `Class` and the second word is `new` → constructor. See
+  [Class commands](#class-commands).
 - First word is a `Class` → static method on that class.
 - First word is any other object → instance method on `getClass()`.
 - Inherited public methods are included.
@@ -534,6 +543,35 @@ Public methods only. No `setAccessible`. No fields. No constructors.
 
 Overload: same arity, then one best conversion. Zero matches or two equal
 matches is an error.
+
+### Class commands
+
+`import` and `types` register a `Class` as a command. The first argument
+selects what runs:
+
+| First argument | Runs | Example |
+|---|---|---|
+| `new` | a public constructor of the class | `Json.Str new admin` |
+| a method name | a public static method of the class | `Json of admin` |
+
+`new` is a Java keyword, so no static method has that name.
+
+A `Class` value as the first word of a command follows the same table.
+`[$v getClass] new x` runs a constructor.
+
+`new` runs only for a class the host passed to `types`, or whose canonical
+name matches a pattern the host passed to `imports`. Any other class is an
+error with code `TCL LOOKUP CLASS`. An interface, an abstract class, an
+array type, or a primitive type is an error.
+
+Overload choice for a constructor is the method rule: same arity, then one
+best conversion. Zero matches or two equal matches is an error. A
+constructor that throws becomes `TclException.Error` with that cause and
+`-errorcode` `{JAVA className}`.
+
+Instance methods of `java.lang.Class` are not reachable through a class
+command. `Json.Str getSimpleName` looks for a static method of `Json.Str`
+and fails. This keeps class loaders and reflection out of a script.
 
 ### Argument conversion
 
@@ -546,6 +584,13 @@ matches is an error.
 | remaining values | Java varargs array |
 | `null` | any reference. Error on a primitive. |
 | command name or `Command` | a functional interface with one abstract method. See [SAM](#sam). |
+| `String` that `Values.integer` or `Values.number` parses | numeric primitive or box |
+| `String` that `Values.bool` accepts | `boolean` or `Boolean` |
+
+The last two rows have the lowest preference. A `String` parameter wins
+over them. `$o with age 41` picks `with(String, String)`, not
+`with(String, double)`. Write `[expr 41]` for the numeric overload.
+`Json.Num new 3` works, because `Num` has no `String` constructor.
 
 A Java exception becomes `-errorcode` `{JAVA className}` and `getCause()` on
 `TclException.Error`. The Java stack is the cause. It is not copied into
@@ -619,6 +664,7 @@ does not `subscribe` with a Tcl proc.
 | `Optional` | stays `Optional`. Not unwrapped. Not a boolean. `info exists` is true if the variable holds it. |
 | `AutoCloseable` | `$x close` in `finally`. `eval(Reader)` does not close the reader. |
 | `Path` | a value. No `file` command. Do not pass `Files.class` unless the script may read files. |
+| `Class` | a value. As the first word, `new` or a static method. See [Class commands](#class-commands). |
 | `Appendable` / `Writer` | `$out write $text`. That is how a script prints. |
 | `CompletionStage` / `Future` | `$f get` blocks. The host should join. |
 | `java.time`, `Pattern`, `Matcher`, `SequencedCollection` | objects and methods. |
@@ -722,6 +768,7 @@ Ordinary variables in `::`. After an error they hold `-errorinfo` and
 | `ARITH DOMAIN msg` | argument outside a function domain |
 | `TCL LOOKUP COMMAND name` | unknown command |
 | `TCL LOOKUP VARNAME name` | unset variable |
+| `TCL LOOKUP CLASS name` | a class that does not exist, is not public, or is not permitted by the host |
 | `TCL WRONGARGS` | wrong number of arguments |
 | `TCL BUSY` | another thread called this interpreter while it was running |
 | `TCL INTERRUPTED` | `Thread.interrupted()` was set between commands |

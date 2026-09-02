@@ -15,6 +15,8 @@ This index lists each implemented top-level command.
 | `for` | [for](reference-for.md) |
 | `foreach` | [foreach](reference-foreach.md) |
 | `switch` | [switch](reference-switch.md) |
+| `import` | [import](reference-import.md) |
+| `instanceof` | [instanceof](reference-instanceof.md) |
 | `proc` | [proc](reference-proc.md) |
 | `return` | [return](reference-return.md) |
 | `break` | [break](reference-break.md) |

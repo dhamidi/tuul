@@ -287,6 +287,39 @@ is the method name.
 
 That rule is the whole bridge. It does not stringify the object first.
 
+## Why a class is a command
+
+A script that builds a JSON document needs `Json.Str`, `Json.Num`, and
+`Json.Object`. A host that passes six `Class` values under six names has
+done the script's work in Java.
+
+`tcl.command("Json", Json.class)` already ran static methods. `import`
+and `types` finish that idea. A class is a command. Its member classes are
+commands with the Java name, `Json.Str`. Dots are legal in a command name,
+because `::` is the only separator.
+
+`new` is a subcommand of that command. It cannot collide with a static
+method, because `new` is a Java keyword. That is also the TclOO shape:
+`Point new 1 2`.
+
+`instanceof` takes a command name. The only place a class name string is
+resolved is `import`. A typo in a command name is still `invalid command
+name`. It never becomes a class lookup.
+
+## Why the host permits classes
+
+A script reaches only what the host passed. `import` by name would break
+that. `[ProcessBuilder new ls] start` is one line.
+
+So `Tcl.of()` permits nothing. `types` passes classes. `imports` opens
+glob patterns, the same glob as `namespace export`. `import` registers only
+a permitted class. `new` runs only for a permitted class, whatever object
+returned the `Class`.
+
+Instance methods of `java.lang.Class` stay out of reach for the same
+reason. `getClassLoader` and `getMethods` are the door to every other
+class.
+
 ## What v1 does not include
 
 No `list`, `lindex`, `dict`, or `eval` as a command.
@@ -300,7 +333,9 @@ No `rename`, no `unknown` as a command, no `apply`.
 coroutine subcommands.
 
 No sandbox. A public method on an object you passed is callable. Do not pass
-an object you do not want a script to call.
+an object you do not want a script to call. A constructor runs only for a
+class you passed to `types` or permitted with `imports`. `import` follows
+the same list.
 
 No `thread` command. No Tcl Flow subscriber. No parallel stream with a Tcl
 callback.
@@ -330,3 +365,6 @@ Implement in this order. Each step uses the tree. No step assumes a flat map.
 14. Expand `{*}`. The reentrant lock, `Tcl.current()`, and interrupt checks
     belong in eval from step 4. `invoke` and `eval(List)` are dispatch
     without parse. Add them with eval.
+15. Register classes as commands. Add `types`, `imports`, `import`, `new`,
+    `instanceof`, and `switch -instanceof`. Constructors share the method
+    overload rule.

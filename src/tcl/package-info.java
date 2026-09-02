@@ -7,6 +7,8 @@
 /// Use [tcl.Tcl#invoke(java.lang.Object...)] when the host already has command
 /// words. This avoids source construction and keeps each object unchanged.
 /// Use [tcl.Repl] when a caller needs one result for each complete command.
+/// Pass classes to [tcl.Tcl#types(java.lang.Class...)] when a script must
+/// create objects with `Name new` or test them with `instanceof`.
 ///
 /// ```
 /// var tcl = Tcl.of();

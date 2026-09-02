@@ -4,8 +4,9 @@ A Tcl interpreter that holds JVM objects as values. This directory also
 contains a stream-friendly REPL driver. These documents are the design and
 the contract.
 
-The host passes objects into the interpreter. A script finds those objects,
-calls procs and Java methods, and returns an object.
+The host passes objects and classes into the interpreter. A script finds
+those objects, calls procs and Java methods, creates objects with `new`,
+tests them with `instanceof`, and returns an object.
 
 There is no I/O in this package. The host reads and writes. `eval` accepts a
 `Reader`. The interpreter does not open a file.
