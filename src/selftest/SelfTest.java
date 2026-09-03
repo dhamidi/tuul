@@ -45,16 +45,13 @@ public final class SelfTest {
 
         scaffolds(root, project, checks);
         addsAndUsesDependency(project, checks);
-        // The scaffold includes a reloadable web entrypoint. Vendor tuul before
-        // the first build so that its reload/application contracts are on the
-        // project's compile path. `vendors` also exercises the same install
-        // path and remains part of the report below.
-        vendors(project, checks);
+        installs(project, checks);
         builds(project, checks);
         hotReloads(project, checks);
         runs(project, checks);
         tests(project, checks);
         documents(project, checks);
+        usesInstalledTuul(project, checks);
         recovers(project, checks);
 
         var ok = checks.stream().allMatch(Report.Check::ok);
@@ -78,20 +75,20 @@ public final class SelfTest {
             throws IOException, InterruptedException {
         Files.writeString(project.resolve("test/demo/DependencyTest.java"), DEPENDENCY_TEST);
         Files.writeString(project.resolve("test/run.java"), DEPENDENCY_RUNNER);
-        var added = tuul(project, "add", MSGPACK_COORDINATE);
+        var added = tuul(project, "add", ANNOTATIONS_COORDINATE);
         if (added.status() != 0 && repositoryUnavailable(added.output())) {
             check(checks, "Maven dependency unavailable; dependency checks skipped", true, added.output());
             return;
         }
         check(checks, "tuul add exits cleanly", added.status() == 0, added.output());
         check(checks, "it vendors the dependency jar",
-                exists(project, "vendor/org.msgpack/msgpack-core/0.9.12/msgpack-core-0.9.12.jar"),
+                exists(project, "vendor/org.jetbrains/annotations/26.0.2/annotations-26.0.2.jar"),
                 listing(project.resolve("vendor")));
         check(checks, "it vendors the dependency sources",
-                exists(project, "vendor/org.msgpack/msgpack-core/0.9.12/msgpack-core-0.9.12-sources.jar"),
+                exists(project, "vendor/org.jetbrains/annotations/26.0.2/annotations-26.0.2-sources.jar"),
                 listing(project.resolve("vendor")));
         check(checks, "it reports the dependency resolution",
-                added.output().contains("add.resolved " + MSGPACK_COORDINATE), added.output());
+                added.output().contains("add.resolved " + ANNOTATIONS_COORDINATE), added.output());
     }
 
     private static void builds(Path project, List<Report.Check> checks) throws IOException, InterruptedException {
@@ -157,36 +154,44 @@ public final class SelfTest {
     /// The whole point of `tuul install`: a project that vendors tuul writes an
     /// application on tuul's own libraries, and SQLite works without anybody
     /// fetching a binary for their machine.
-    private static void vendors(Path project, List<Report.Check> checks) throws IOException, InterruptedException {
+    private static void installs(Path project, List<Report.Check> checks) throws IOException, InterruptedException {
         var installed = tuul(project, "install");
+        var directory = installedTuul(project);
         check(checks, "tuul install exits cleanly", installed.status() == 0, installed.output());
         check(checks, "it vendors a jar and its sources",
-                exists(project, "vendor/tuul/tuul-" + Version.NUMBER + ".jar")
-                        && exists(project, "vendor/tuul/tuul-" + Version.NUMBER + "-sources.jar"),
+                Files.isRegularFile(directory.resolve(Version.artifact() + ".jar"))
+                        && Files.isRegularFile(directory.resolve(Version.artifact() + "-sources.jar")),
                 listing(project.resolve("vendor")));
         check(checks, "and a SQLite for this machine",
-                exists(project, "vendor/tuul/native/" + Platform.host().directory() + "/"
-                        + Platform.host().library("sqlite3")),
+                Files.isRegularFile(directory.resolve("native").resolve(Platform.host().directory())
+                        .resolve(Platform.host().library("sqlite3"))),
                 listing(project.resolve("vendor")));
         check(checks, "and for the machines this project will be cloned onto",
                 Platform.SHIPPED.stream().allMatch(platform ->
-                        exists(project, "vendor/tuul/native/" + platform.directory() + "/" + platform.library("sqlite3"))),
-                listing(project.resolve("vendor/tuul/native")));
+                        Files.isRegularFile(directory.resolve("native").resolve(platform.directory())
+                                .resolve(platform.library("sqlite3")))),
+                listing(directory.resolve("native")));
         check(checks, "and no C, since nothing here has to compile any",
-                !Files.isDirectory(project.resolve("vendor/tuul/native/sqlite3")),
-                listing(project.resolve("vendor/tuul/native")));
+                !Files.isDirectory(directory.resolve("native/sqlite3")),
+                listing(directory.resolve("native")));
         check(checks, "and Turbo and Stimulus, so a page has its behaviour without a package manager",
                 jarred(project, "web/assets/hotwired/turbo.js")
                         && jarred(project, "web/assets/hotwired/stimulus.js"),
-                listing(project.resolve("vendor/tuul")));
+                listing(directory));
         check(checks, "carried inside the jar rather than copied beside it",
-                !Files.exists(project.resolve("vendor/tuul/assets")),
-                listing(project.resolve("vendor/tuul")));
+                !Files.exists(directory.resolve("assets")),
+                listing(directory));
         check(checks, "the installed jar is the named module tuul",
-                named(project), listing(project.resolve("vendor/tuul")));
+                named(project), listing(directory));
         check(checks, "the installed sources carry the module declaration",
-                sourced(project, "module-info.java"), listing(project.resolve("vendor/tuul")));
+                sourced(project, "module-info.java"), listing(directory));
+    }
 
+    /// Uses the installed APIs after the scaffold's native module has already
+    /// built. Emptying `PATH` then proves that the installed SQLite is complete
+    /// without also asking the generated project to compile its own C code.
+    private static void usesInstalledTuul(Path project, List<Report.Check> checks)
+            throws IOException, InterruptedException {
         Files.writeString(project.resolve("src/module-info.java"), MODULE);
         Files.writeString(project.resolve("src/demo/Notes.java"), NOTES);
         Files.writeString(project.resolve("src/cli/main.java"), ENTRYPOINT);
@@ -439,25 +444,22 @@ import java.util.Map;
             }
             """;
 
-    private static final String MSGPACK_COORDINATE = "org.msgpack:msgpack-core:0.9.12";
+    private static final String ANNOTATIONS_COORDINATE = "org.jetbrains:annotations:26.0.2";
 
     private static final String DEPENDENCY_TEST = """
             package demo;
 
-            import org.msgpack.core.MessagePack;
+            import org.jetbrains.annotations.NotNull;
 
             public final class DependencyTest {
 
                 private DependencyTest() {}
 
-                public static void run() throws Exception {
-                    try (var packer = MessagePack.newDefaultBufferPacker()) {
-                        packer.packString("dependency");
-                        try (var unpacker = MessagePack.newDefaultUnpacker(packer.toByteArray())) {
-                            if (!"dependency".equals(unpacker.unpackString())) {
-                                throw new AssertionError("MessagePack returned the wrong value");
-                            }
-                        }
+                public static void run() {
+                    @NotNull var value = "dependency";
+                    if (!value.equals("dependency")
+                            || !NotNull.class.getName().equals("org.jetbrains.annotations.NotNull")) {
+                        throw new AssertionError("the dependency returned the wrong value");
                     }
                     System.out.println("dependency works");
                 }
@@ -543,7 +545,7 @@ import java.util.Map;
 
     private static boolean archived(Path project, String artifact, String entry) {
         try (var jar = new java.util.jar.JarFile(
-                project.resolve("vendor/tuul/" + artifact).toFile())) {
+                installedTuul(project).resolve(artifact).toFile())) {
             return jar.getEntry(entry) != null;
         } catch (IOException missing) {
             return false;
@@ -551,8 +553,12 @@ import java.util.Map;
     }
 
     private static boolean named(Path project) {
-        var jar = project.resolve("vendor/tuul/" + Version.artifact() + ".jar");
+        var jar = installedTuul(project).resolve(Version.artifact() + ".jar");
         return ModuleFinder.of(jar).find("tuul").filter(reference -> !reference.descriptor().isAutomatic()).isPresent();
+    }
+
+    private static Path installedTuul(Path project) {
+        return project.resolve("vendor/dev.tuul/tuul").resolve(Version.NUMBER);
     }
 
     /// What is actually there, for a check that expected something else.
