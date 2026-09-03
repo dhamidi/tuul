@@ -5,12 +5,19 @@ import java.io.IOException;
 import java.io.StringWriter;
 import java.io.UncheckedIOException;
 import java.lang.module.ModuleFinder;
+import java.net.URI;
+import java.net.http.HttpClient;
+import java.net.http.HttpRequest;
+import java.net.http.HttpResponse;
+import java.time.Duration;
 import java.nio.file.Files;
 import java.nio.file.Path;
 import java.util.ArrayList;
 import java.util.Comparator;
 import java.util.List;
 import java.util.Map;
+import java.util.concurrent.TimeUnit;
+import java.util.concurrent.locks.LockSupport;
 import ffi.Platform;
 import json.Json;
 import project.Launch;
@@ -38,11 +45,16 @@ public final class SelfTest {
 
         scaffolds(root, project, checks);
         addsAndUsesDependency(project, checks);
+        // The scaffold includes a reloadable web entrypoint. Vendor tuul before
+        // the first build so that its reload/application contracts are on the
+        // project's compile path. `vendors` also exercises the same install
+        // path and remains part of the report below.
+        vendors(project, checks);
         builds(project, checks);
+        hotReloads(project, checks);
         runs(project, checks);
         tests(project, checks);
         documents(project, checks);
-        vendors(project, checks);
         recovers(project, checks);
 
         var ok = checks.stream().allMatch(Report.Check::ok);
@@ -53,8 +65,11 @@ public final class SelfTest {
     private static void scaffolds(Path root, Path project, List<Report.Check> checks) throws IOException, InterruptedException {
         var created = tuul(root, "new", "demo");
         check(checks, "tuul new exits cleanly", created.status() == 0, created.output());
+        check(checks, "it prints the runnable dev next action",
+                created.output().contains("cd ./demo && tuul install && tuul dev"), created.output());
         check(checks, "it writes a library", exists(project, "src/demo/Greeting.java"), listing(project));
         check(checks, "it writes an entrypoint", exists(project, "src/cli/main.java"), listing(project));
+        check(checks, "it writes a reloadable web entrypoint", exists(project, "src/web/main.java"), listing(project));
         check(checks, "it writes a test", exists(project, "test/run.java"), listing(project));
         check(checks, "it writes the vendor directory", Files.isDirectory(project.resolve("vendor")), listing(project));
     }
@@ -227,6 +242,108 @@ public final class SelfTest {
         var again = tuul(project, "build");
         check(checks, "removing it builds again", again.status() == 0, again.output());
     }
+
+    /// Starts the real development command, talks to its HTTP server, changes
+    /// the entrypoint, and proves the process survives both a reload and a
+    /// rejected revision. Every wait has a deadline; the child is terminated
+    /// in the finally block even when an assertion or request fails.
+    private static void hotReloads(Path project, List<Report.Check> checks)
+            throws IOException, InterruptedException {
+        var port = freePort();
+        var child = new ProcessBuilder(command(List.of("dev", "--port", Integer.toString(port))))
+                .directory(project.toFile())
+                .redirectErrorStream(true)
+                .start();
+        var output = new StringBuilder();
+        var reader = Thread.ofVirtual().start(() -> capture(child, output));
+        var client = HttpClient.newBuilder().connectTimeout(Duration.ofMillis(300)).build();
+        var uri = URI.create("http://127.0.0.1:" + port + "/");
+        var source = project.resolve("src/web/main.java");
+        var original = Files.readString(source);
+        try {
+            var first = await(client, uri, "Hello from demo!", Duration.ofSeconds(20));
+            check(checks, "tuul dev serves the initial generation", first.reached(), detail(first.body(), output));
+
+            var changed = original.replace("Hello from demo!\\n", "Hello from changed!\\n");
+            Files.writeString(source, changed);
+            var second = await(client, uri, "Hello from changed!", Duration.ofSeconds(20));
+            check(checks, "saving Java activates a new generation", second.reached(), detail(second.body(), output));
+            var pid = child.pid();
+
+            Files.writeString(source, "public final class main implements reload.Program { broken }\\n");
+            // A rejected candidate must leave the last good generation serving.
+            var retained = await(client, uri, "Hello from changed!", Duration.ofSeconds(5));
+            check(checks, "a compiler failure keeps the last generation", retained.reached(), detail(retained.body(), output));
+            check(checks, "the compiler failure is reported", awaitOutput(output, "compile:", Duration.ofSeconds(5)),
+                    detail("no compile problem reported", output));
+
+            Files.writeString(source, changed.replace("Hello from changed!\\n", "Hello from repaired!\\n"));
+            var repaired = await(client, uri, "Hello from repaired!", Duration.ofSeconds(20));
+            check(checks, "fixing the source activates again", repaired.reached(), detail(repaired.body(), output));
+            check(checks, "reload keeps the host process", child.pid() == pid && child.isAlive(), detail("pid " + child.pid(), output));
+        } finally {
+            Files.writeString(source, original);
+            child.destroy();
+            if (!child.waitFor(3, TimeUnit.SECONDS)) child.destroyForcibly();
+            if (!child.waitFor(3, TimeUnit.SECONDS)) child.destroyForcibly();
+            reader.join(3_000);
+        }
+    }
+
+    private static void capture(Process process, StringBuilder output) {
+        try (var input = process.getInputStream()) {
+            input.transferTo(new java.io.OutputStream() {
+                @Override public void write(int value) {
+                    synchronized (output) { output.append((char) value); }
+                }
+            });
+        } catch (IOException ignored) {
+            // The host may close its stream as it shuts down.
+        }
+    }
+
+    private static HttpResult await(HttpClient client, URI uri, String expected, Duration timeout)
+            throws IOException, InterruptedException {
+        var deadline = System.nanoTime() + timeout.toNanos();
+        var request = HttpRequest.newBuilder(uri).timeout(Duration.ofMillis(500)).GET().build();
+        var last = "";
+        while (System.nanoTime() < deadline) {
+            try {
+                var response = client.send(request, HttpResponse.BodyHandlers.ofString());
+                last = response.body();
+                if (response.statusCode() == 200 && last.contains(expected)) return new HttpResult(true, last);
+            } catch (IOException transientFailure) {
+                last = transientFailure.getMessage() == null ? transientFailure.toString() : transientFailure.getMessage();
+            }
+            LockSupport.parkNanos(Duration.ofMillis(25).toNanos());
+        }
+        return new HttpResult(false, last);
+    }
+
+    private static int freePort() throws IOException {
+        try (var socket = new java.net.ServerSocket(0)) {
+            return socket.getLocalPort();
+        }
+    }
+
+    private static boolean awaitOutput(StringBuilder output, String expected, Duration timeout) {
+        var deadline = System.nanoTime() + timeout.toNanos();
+        while (System.nanoTime() < deadline) {
+            synchronized (output) {
+                if (output.indexOf(expected) >= 0) return true;
+            }
+            LockSupport.parkNanos(Duration.ofMillis(25).toNanos());
+        }
+        synchronized (output) { return output.indexOf(expected) >= 0; }
+    }
+
+    private static String detail(String response, StringBuilder output) {
+        synchronized (output) {
+            return response + (output.isEmpty() ? "" : "\n" + output);
+        }
+    }
+
+    private record HttpResult(boolean reached, String body) {}
 
     private static final String NOTES = """
             package demo;

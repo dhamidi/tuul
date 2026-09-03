@@ -15,7 +15,7 @@ It borrows:
 
 > **Status:** parts of this README are still the target, not a changelog.
 > What runs today is `tuul new`, `tuul add`, `tuul install`, `tuul build`, `tuul run`,
-> `tuul test`, `tuul docs`, `tuul bind` and `tuul self-test`, over seven
+> `tuul dev`, `tuul test`, `tuul docs`, `tuul bind` and `tuul self-test`, over seven
 > libraries: `json` (streaming
 > parser and serializer), `application` (the Elm Architecture runtime from
 > [ARCHITECTURE.md](./ARCHITECTURE.md)), `fetch` (streaming HTTP with sessions
@@ -32,8 +32,8 @@ It borrows:
 > `lib/src.zip` for the JDK. `tuul run [entry] -- <args>` runs an entrypoint;
 > running a file from `tasks/` is not implemented yet. `tuul new` scaffolds
 > the library, the entrypoint, the native module and the FFI wrapper
-> described below, but no vendored dependencies and no `tasks/`. `dev`,
-> `console`, `generate`, `release`, `deploy` and `doctor` do not exist.
+> described below, but no vendored dependencies and no `tasks/`. `console`,
+> `generate`, `release`, `deploy` and `doctor` do not exist.
 >
 > Today, `tuul build` compiles classes and native code into `build/`. It does
 > not assemble the runnable jar described below. `tuul release` does not exist
@@ -119,14 +119,15 @@ This also pulls in JDK 27, since Tuul only targets the current JDK.
 ```sh
 tuul new hello-world
 cd hello-world
+tuul install
 tuul dev
 ```
 
 The target `tuul new` command does not scaffold a blank project. It creates a
 working reference with libraries, entrypoints, tasks, tests, and native code.
 The target tree appears in [Project structure](#project-structure). Extend
-that reference instead of starting from nothing. `tuul dev` rebuilds and
-restarts it when a source file changes.
+that reference instead of starting from nothing. `tuul dev` compiles a new
+generation when source changes and activates it without restarting the host.
 
 ## Commands
 
@@ -135,7 +136,7 @@ restarts it when a source file changes.
 | `tuul new <name>` | Scaffold a new Tuul-managed project |
 | `tuul add <group:artifact:version>...` | Resolve and install one Maven dependency graph into `vendor/` |
 | `tuul remove <name>` | Delete a dependency from `vendor/` |
-| `tuul dev` | Run the application and restart it after a change |
+| `tuul dev` | Serve the application and hot reload a valid source change |
 | `tuul build` | Produce one runnable jar with all runtime and native dependencies |
 | `tuul release` | Produce a `jlink` image for the host platform |
 | `tuul release --target <platform>` | Produce a `jlink` image for one platform |

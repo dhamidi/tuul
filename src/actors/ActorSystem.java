@@ -9,6 +9,7 @@ import java.time.Instant;
 import java.util.ArrayList;
 import java.util.List;
 import java.util.Map;
+import java.util.Objects;
 import java.util.concurrent.CompletableFuture;
 import java.util.concurrent.ConcurrentHashMap;
 import java.util.concurrent.ExecutorService;
@@ -20,6 +21,7 @@ import java.util.concurrent.atomic.AtomicLong;
 import java.util.function.Predicate;
 import java.util.stream.Stream;
 import json.Json;
+import reload.StatePolicy;
 
 /// A named group of actors, and everything that decides how they run.
 ///
@@ -60,15 +62,14 @@ import json.Json;
 /// message. [#traces()] publishes what the system does as it happens, and
 /// [Flight] turns that into JDK Flight Recorder events.
 ///
-/// ## What is deliberately not here
+/// ## Reload integration
 ///
-/// Hot-reload generations and their class loaders, the browser inspector, the
-/// control socket, log snapshots, supervision trees, and links and monitors.
-/// Each of them is a real feature and none of them is needed to know whether the
-/// core is right. The design leaves room for all of them: [Definition] is
-/// already the unit a reload would swap, [Logs] is already the seam a snapshot
-/// would use, [#known()] is already what an inspector would read, and
-/// [#traces()] is already the feed it would subscribe to.
+/// [#reload(Map, Map, Map, Map)] replaces actor definitions and effect handlers
+/// at one awaited type boundary. The method gates new deliveries, drains loaded
+/// actors, replays durable logs without effects, and then admits the gated mail.
+/// [#generation()] identifies the active handoff for traces and operations.
+/// The reload coordinator owns class loaders and combines this boundary with
+/// web and application activation.
 public final class ActorSystem implements AutoCloseable {
 
     /// Envelope fields the message-sending effects are routed by.
@@ -90,12 +91,60 @@ public final class ActorSystem implements AutoCloseable {
 
     private static final Duration PATIENCE = Duration.ofSeconds(5);
 
+    /// Admission is temporarily detached from an actor mailbox while its
+    /// definition is replaced. The queue uses the candidate mailbox capacity
+    /// and returns busy when that capacity is full.
+    private static final class Gate {
+        private final Object lock = new Object();
+        private final List<Delivery> deliveries = new ArrayList<>();
+        private final List<MessageType> messageTypes;
+        private final int capacity;
+        private final boolean known;
+
+        private Gate(Definition<?> definition, int capacity) {
+            this.capacity = Math.max(1, capacity);
+            this.known = definition != null;
+            this.messageTypes = definition == null ? List.of() : declared(definition);
+        }
+
+        private DeliveryStatus offer(Delivery delivery) {
+            if (delivery.expired(Instant.now())) return DeliveryStatus.expired;
+            if (!known) return DeliveryStatus.unknown;
+            var messageType = messageTypes.stream()
+                    .filter(type -> type.type().equals(delivery.message().type())).findFirst().orElse(null);
+            if (messageType == null) return DeliveryStatus.unsupported;
+            if (!messageType.validate(delivery.message()).valid()) return DeliveryStatus.invalid;
+            synchronized (lock) {
+                if (deliveries.size() >= capacity) return DeliveryStatus.busy;
+                deliveries.add(delivery);
+                return DeliveryStatus.accepted;
+            }
+        }
+
+        private static List<MessageType> declared(Definition<?> definition) {
+            try {
+                return definition.instantiate(Address.of(definition.type(), "reload")).messageTypes();
+            } catch (RuntimeException failure) {
+                return List.of();
+            }
+        }
+
+        private List<Delivery> drain() {
+            synchronized (lock) {
+                var result = List.copyOf(deliveries);
+                deliveries.clear();
+                return result;
+            }
+        }
+    }
+
     private final String name;
     private final Object lifecycle = new Object();
     private final Map<String, Definition<?>> definitions = new ConcurrentHashMap<>();
     private final Map<String, Spawn> defaults = new ConcurrentHashMap<>();
     private final Map<Address, Spawn> overrides = new ConcurrentHashMap<>();
     private final Map<Address, Actor> loaded = new ConcurrentHashMap<>();
+    private final Map<String, Gate> gates = new ConcurrentHashMap<>();
     private final Map<Address, Ownership.Claim> claims = new ConcurrentHashMap<>();
     private final Map<Address, CompletableFuture<Message>> asks = new ConcurrentHashMap<>();
     private final Map<String, Effect.Handler> shared = new ConcurrentHashMap<>();
@@ -114,6 +163,7 @@ public final class ActorSystem implements AutoCloseable {
     private final java.util.concurrent.atomic.AtomicBoolean sweeping =
             new java.util.concurrent.atomic.AtomicBoolean();
     private volatile boolean closed;
+    private volatile long generation;
 
     private ActorSystem(String name) {
         this.name = name;
@@ -127,6 +177,12 @@ public final class ActorSystem implements AutoCloseable {
 
     public String name() {
         return name;
+    }
+
+    /// The active actor generation number. It starts at zero and increments
+    /// after each successful definition and handler handoff.
+    public long generation() {
+        return generation;
     }
 
     /// Keeps the logs of durable actors under this directory, one SQLite file
@@ -183,15 +239,25 @@ public final class ActorSystem implements AutoCloseable {
 
     /// Registers a definition and the spawn options its instances use.
     public ActorSystem define(Definition<?> definition, Spawn spawn) {
-        definitions.put(definition.type(), definition);
-        defaults.put(definition.type(), spawn);
+        Objects.requireNonNull(definition, "definition");
+        Objects.requireNonNull(spawn, "spawn");
+        synchronized (lifecycle) {
+            if (closed) throw new IllegalStateException("the actor system " + name + " is closed");
+            definitions.put(definition.type(), definition);
+            defaults.put(definition.type(), spawn);
+        }
         return this;
     }
 
     /// Overrides the spawn options for one address. This is how one instance of
     /// a durable type runs without a log, or the other way round.
     public ActorSystem spawn(Address address, Spawn spawn) {
-        overrides.put(address.here(), spawn);
+        Objects.requireNonNull(address, "address");
+        Objects.requireNonNull(spawn, "spawn");
+        synchronized (lifecycle) {
+            if (closed) throw new IllegalStateException("the actor system " + name + " is closed");
+            overrides.put(address.here(), spawn);
+        }
         return this;
     }
 
@@ -202,7 +268,12 @@ public final class ActorSystem implements AutoCloseable {
     /// evicted and summoned again. It also keeps definitions pure, which is
     /// what makes replay safe.
     public ActorSystem effect(String type, Effect.Handler handler) {
-        shared.put(type, handler);
+        Objects.requireNonNull(type, "type");
+        Objects.requireNonNull(handler, "handler");
+        synchronized (lifecycle) {
+            if (closed) throw new IllegalStateException("the actor system " + name + " is closed");
+            shared.put(type, handler);
+        }
         return this;
     }
 
@@ -249,7 +320,9 @@ public final class ActorSystem implements AutoCloseable {
     /// Publishes a trace, doing no work when nothing is listening.
     void trace(Address address, Trace.Kind kind, Json detail) {
         if (!traces.watched()) return;
-        traces.publish(Trace.of(address, kind, detail));
+        var withGeneration = detail instanceof Json.Object object
+                ? object.with("generation", generation) : detail;
+        traces.publish(Trace.of(address, kind, withGeneration));
     }
 
     /// How many `handle-delivery-error` notices had nowhere to go. A notice that
@@ -357,46 +430,66 @@ public final class ActorSystem implements AutoCloseable {
             waiting.complete(delivery.message());
             return DeliveryStatus.accepted;
         }
-        if (!definitions.containsKey(here.type())) {
-            refuse(delivery, Undeliverable.Cause.unknown);
-            return DeliveryStatus.unknown;
-        }
-        if (registry.quarantined(here)) {
-            refuse(delivery, Undeliverable.Cause.quarantined);
-            return DeliveryStatus.quarantined;
-        }
-        Actor target;
-        try {
-            target = load(here);
-        } catch (IllegalStateException stopped) {
-            if (closed) return DeliveryStatus.closed;
-            throw stopped;
-        }
-        var messageType = target.messageType(delivery.message().type());
-        if (messageType == null) {
-            refuse(delivery, Undeliverable.Cause.unsupported);
-            return DeliveryStatus.unsupported;
-        }
-        if (!messageType.validate(delivery.message()).valid()) {
-            refuse(delivery, Undeliverable.Cause.invalid);
-            return DeliveryStatus.invalid;
-        }
-        if (delivery.from() != null && here.equals(delivery.from().here()) && target.ownsCurrentThread()) {
-            target.self(delivery.to(here));
-            return DeliveryStatus.accepted;
-        }
-        var admission = target.offer(delivery.to(here));
-        return switch (admission) {
-            case accepted -> DeliveryStatus.accepted;
-            case busy -> {
-                refuse(delivery, Undeliverable.Cause.busy);
-                yield DeliveryStatus.busy;
+        synchronized (lifecycle) {
+            var gate = gates.get(here.type());
+            if (gate != null) {
+                var admission = gate.offer(delivery);
+                if (admission == DeliveryStatus.accepted) return admission;
+                if (admission == DeliveryStatus.expired) {
+                    dropped.incrementAndGet();
+                    return admission;
+                }
+                var cause = switch (admission) {
+                    case unknown -> Undeliverable.Cause.unknown;
+                    case unsupported -> Undeliverable.Cause.unsupported;
+                    case invalid -> Undeliverable.Cause.invalid;
+                    case busy -> Undeliverable.Cause.busy;
+                    default -> Undeliverable.Cause.unreachable;
+                };
+                refuse(delivery, cause);
+                return admission;
             }
-            case expired -> {
-                dropped.incrementAndGet();
-                yield DeliveryStatus.expired;
+            if (!definitions.containsKey(here.type())) {
+                refuse(delivery, Undeliverable.Cause.unknown);
+                return DeliveryStatus.unknown;
             }
-        };
+            if (registry.quarantined(here)) {
+                refuse(delivery, Undeliverable.Cause.quarantined);
+                return DeliveryStatus.quarantined;
+            }
+            Actor target;
+            try {
+                target = load(here);
+            } catch (IllegalStateException stopped) {
+                if (closed) return DeliveryStatus.closed;
+                throw stopped;
+            }
+            var messageType = target.messageType(delivery.message().type());
+            if (messageType == null) {
+                refuse(delivery, Undeliverable.Cause.unsupported);
+                return DeliveryStatus.unsupported;
+            }
+            if (!messageType.validate(delivery.message()).valid()) {
+                refuse(delivery, Undeliverable.Cause.invalid);
+                return DeliveryStatus.invalid;
+            }
+            if (delivery.from() != null && here.equals(delivery.from().here()) && target.ownsCurrentThread()) {
+                target.self(delivery.to(here));
+                return DeliveryStatus.accepted;
+            }
+            var admission = target.offer(delivery.to(here));
+            return switch (admission) {
+                case accepted -> DeliveryStatus.accepted;
+                case busy -> {
+                    refuse(delivery, Undeliverable.Cause.busy);
+                    yield DeliveryStatus.busy;
+                }
+                case expired -> {
+                    dropped.incrementAndGet();
+                    yield DeliveryStatus.expired;
+                }
+            };
+        }
     }
 
     /// Hands a delivery to the transport.
@@ -578,6 +671,253 @@ public final class ActorSystem implements AutoCloseable {
         var override = overrides.get(address.here());
         if (override != null) return override;
         return defaults.getOrDefault(address.type(), Spawn.durable());
+    }
+
+    /// Installs the actor definitions and effect handlers for one reload
+    /// generation. The operation is synchronous and its future form is useful
+    /// to a coordinator that must await several systems without blocking its
+    /// own control thread.
+    public ReloadResult reload(Map<String, Definition<?>> nextDefinitions,
+            Map<String, Spawn> nextSpawns, Map<String, Effect.Handler> nextEffects,
+            Map<String, StatePolicy> policies) {
+        return activate(nextDefinitions, nextSpawns, nextEffects, policies).join();
+    }
+
+    /// Reloads one complete set with the default durable replay and ephemeral
+    /// refusal policies.
+    public ReloadResult reload(Map<String, Definition<?>> nextDefinitions,
+            Map<String, Spawn> nextSpawns, Map<String, Effect.Handler> nextEffects) {
+        return reload(nextDefinitions, nextSpawns, nextEffects, Map.of());
+    }
+
+    /// Performs one type-level actor handoff. New deliveries for affected types
+    /// are accepted into a gate while loaded actors finish their current turn
+    /// and all mail accepted before the gate. Durable actors are then summoned
+    /// with the candidate definition and replay their logs without effects.
+    public CompletableFuture<ReloadResult> activate(Map<String, Definition<?>> nextDefinitions,
+            Map<String, Spawn> nextSpawns, Map<String, Effect.Handler> nextEffects,
+            Map<String, StatePolicy> policies) {
+        var result = new CompletableFuture<ReloadResult>();
+        Thread.startVirtualThread(() -> {
+            try {
+                result.complete(activateNow(nextDefinitions, nextSpawns, nextEffects, policies));
+            } catch (Throwable failure) {
+                result.completeExceptionally(failure);
+            }
+        });
+        return result;
+    }
+
+    /// Activates one complete set with the default state policies.
+    public CompletableFuture<ReloadResult> activate(Map<String, Definition<?>> nextDefinitions,
+            Map<String, Spawn> nextSpawns, Map<String, Effect.Handler> nextEffects) {
+        return activate(nextDefinitions, nextSpawns, nextEffects, Map.of());
+    }
+
+    /// Checks one complete proposed actor set without changing the running
+    /// system. The result is an immutable list of replay, definition, policy,
+    /// and loaded-state problems. An empty list means that activation may run.
+    /// Durable logs are replayed with effects suppressed. The caller still
+    /// needs to call [#activate(Map, Map, Map, Map)] to perform the handoff.
+    public List<String> preflight(Map<String, Definition<?>> nextDefinitions,
+            Map<String, Spawn> nextSpawns, Map<String, Effect.Handler> nextEffects,
+            Map<String, StatePolicy> policies) {
+        try {
+            var definitionsCopy = Map.copyOf(nextDefinitions == null ? Map.of() : nextDefinitions);
+            var spawnsCopy = Map.copyOf(nextSpawns == null ? Map.of() : nextSpawns);
+            var effectsCopy = Map.copyOf(nextEffects == null ? Map.of() : nextEffects);
+            var policyCopy = Map.copyOf(policies == null ? Map.of() : policies);
+            synchronized (lifecycle) {
+                return validateReload(definitionsCopy, spawnsCopy, effectsCopy, policyCopy);
+            }
+        } catch (RuntimeException failure) {
+            return List.of(failure.getMessage() == null ? failure.toString() : failure.getMessage());
+        }
+    }
+
+    /// Checks a proposed actor set with the default state policies.
+    public List<String> preflight(Map<String, Definition<?>> nextDefinitions,
+            Map<String, Spawn> nextSpawns, Map<String, Effect.Handler> nextEffects) {
+        return preflight(nextDefinitions, nextSpawns, nextEffects, Map.of());
+    }
+
+    private ReloadResult activateNow(Map<String, Definition<?>> nextDefinitions,
+            Map<String, Spawn> nextSpawns, Map<String, Effect.Handler> nextEffects,
+            Map<String, StatePolicy> policies) {
+        var definitionsCopy = Map.copyOf(nextDefinitions == null ? Map.of() : nextDefinitions);
+        var spawnsCopy = Map.copyOf(nextSpawns == null ? Map.of() : nextSpawns);
+        var effectsCopy = Map.copyOf(nextEffects == null ? Map.of() : nextEffects);
+        var policyCopy = Map.copyOf(policies == null ? Map.of() : policies);
+        var problems = validateReload(definitionsCopy, spawnsCopy, effectsCopy, policyCopy);
+        if (!problems.isEmpty()) return new ReloadResult(false, generation, problems);
+
+        var affected = affectedTypes(definitionsCopy, spawnsCopy, effectsCopy);
+        var queued = List.<Delivery>of();
+        synchronized (lifecycle) {
+            if (closed) return new ReloadResult(false, generation,
+                    List.of("the actor system " + name + " is closed"));
+            if (!gates.isEmpty()) return new ReloadResult(false, generation,
+                    List.of("an actor handoff is still draining"));
+            for (var type : affected) {
+                var definition = definitionsCopy.get(type);
+                var spawn = spawnsCopy.getOrDefault(type, defaults.getOrDefault(type, Spawn.durable()));
+                gates.put(type, new Gate(definition, spawn.mailbox()));
+            }
+            loaded.values().stream().filter(actor -> affected.contains(actor.address().type()))
+                    .forEach(Actor::stop);
+        }
+
+        try {
+            var deadline = System.nanoTime() + Duration.ofSeconds(30).toNanos();
+            while (true) {
+                var waiting = loaded.values().stream()
+                        .filter(actor -> affected.contains(actor.address().type()) && !actor.finished())
+                        .toList();
+                if (waiting.isEmpty()) break;
+                if (System.nanoTime() >= deadline) {
+                    return abortReload(affected, "actor handoff timed out");
+                }
+                for (var actor : waiting) {
+                    try { actor.await(Math.max(1, Math.min(50,
+                            (deadline - System.nanoTime()) / 1_000_000))); }
+                    catch (InterruptedException interrupted) {
+                        Thread.currentThread().interrupt();
+                        return abortReload(affected, "actor handoff interrupted");
+                    }
+                }
+            }
+            synchronized (lifecycle) {
+                definitions.clear();
+                definitions.putAll(definitionsCopy);
+                defaults.clear();
+                defaults.putAll(spawnsCopy);
+                shared.clear();
+                shared.putAll(effectsCopy);
+                generation++;
+                for (var type : affected) {
+                    var gate = gates.remove(type);
+                    if (gate != null) queued = concat(queued, gate.drain());
+                }
+            }
+            for (var delivery : queued) deliver(delivery);
+            return new ReloadResult(true, generation, List.of());
+        } catch (RuntimeException failure) {
+            return abortReload(affected, failure.getMessage() == null ? failure.toString() : failure.getMessage());
+        }
+    }
+
+    private ReloadResult abortReload(java.util.Set<String> affected, String problem) {
+        var queued = List.<Delivery>of();
+        var waiting = false;
+        synchronized (lifecycle) {
+            waiting = loaded.values().stream()
+                    .anyMatch(actor -> affected.contains(actor.address().type()) && !actor.finished());
+            if (!waiting) for (var type : affected) {
+                var gate = gates.remove(type);
+                if (gate != null) queued = concat(queued, gate.drain());
+            }
+        }
+        if (waiting) {
+            // Keep accepted deliveries behind the gate until every stopping
+            // actor has left its mailbox. Draining now would offer them to a
+            // mailbox that has already closed admission and would silently
+            // turn an awaited activation failure into message loss.
+            Thread.startVirtualThread(() -> awaitAbort(affected));
+        } else for (var delivery : queued) deliver(delivery);
+        return new ReloadResult(false, generation, List.of(problem));
+    }
+
+    private void awaitAbort(java.util.Set<String> affected) {
+        while (!closed && loaded.values().stream()
+                .anyMatch(actor -> affected.contains(actor.address().type()) && !actor.finished())) {
+            java.util.concurrent.locks.LockSupport.parkNanos(1_000_000);
+        }
+        if (closed) return;
+        var queued = List.<Delivery>of();
+        synchronized (lifecycle) {
+            for (var type : affected) {
+                var gate = gates.remove(type);
+                if (gate != null) queued = concat(queued, gate.drain());
+            }
+        }
+        for (var delivery : queued) deliver(delivery);
+    }
+
+    private List<String> validateReload(Map<String, Definition<?>> nextDefinitions,
+            Map<String, Spawn> nextSpawns, Map<String, Effect.Handler> nextEffects,
+            Map<String, StatePolicy> policies) {
+        var problems = new ArrayList<String>();
+        nextDefinitions.forEach((type, definition) -> {
+            if (definition == null) problems.add("definition for " + type + " is null");
+            else {
+                if (!type.equals(definition.type())) problems.add("definition key does not match type " + type);
+                try {
+                    definition.instantiate(Address.of(type, "preflight"));
+                } catch (RuntimeException failure) {
+                    problems.add("cannot instantiate " + type + ": "
+                            + (failure.getMessage() == null ? failure.toString() : failure.getMessage()));
+                }
+            }
+            if (!nextSpawns.containsKey(type)) problems.add("missing spawn options for " + type);
+        });
+        for (var entry : logs.catalogue().toList()) {
+            var definition = nextDefinitions.get(entry.type());
+            if (definition == null) {
+                problems.add("no definition for recorded actor type " + entry.type());
+                continue;
+            }
+            try {
+                validateReplay(definition, entry);
+            } catch (RuntimeException failure) {
+                problems.add("replay " + entry + ": " + (failure.getMessage() == null
+                        ? failure.toString() : failure.getMessage()));
+            }
+        }
+        for (var actor : loaded.values()) {
+            if (!affectedTypes(nextDefinitions, nextSpawns, nextEffects).contains(actor.address().type())) continue;
+            var policy = policies.getOrDefault(actor.address().type(),
+                    actor.spawn().keepsLog() ? StatePolicy.REPLAY : StatePolicy.REFUSE);
+            if (!actor.spawn().keepsLog() && policy == StatePolicy.REFUSE) {
+                problems.add("loaded ephemeral actor " + actor.address() + " refuses reload");
+            }
+            if (policy == StatePolicy.TRANSFER) problems.add("state transfer is not supported for " + actor.address());
+        }
+        return List.copyOf(problems);
+    }
+
+    private <S> void validateReplay(Definition<S> definition, Address address) {
+        var behavior = definition.instantiate(address);
+        var application = behavior.application();
+        try (var commands = logs.open(address).replay()) {
+            commands.forEach(command -> {
+                var declared = behavior.messageType(command.type());
+                if (declared == null || !declared.validate(command).valid()) {
+                    throw new IllegalArgumentException("unknown or invalid command " + command.type());
+                }
+                application.advance(command);
+            });
+        }
+    }
+
+    private java.util.Set<String> affectedTypes(Map<String, Definition<?>> nextDefinitions,
+            Map<String, Spawn> nextSpawns, Map<String, Effect.Handler> nextEffects) {
+        var affected = new java.util.HashSet<String>();
+        definitions.forEach((type, definition) -> {
+            if (!Objects.equals(definition, nextDefinitions.get(type))
+                    || !Objects.equals(defaults.get(type), nextSpawns.get(type))) affected.add(type);
+        });
+        nextDefinitions.keySet().forEach(type -> {
+            if (!Objects.equals(definitions.get(type), nextDefinitions.get(type))) affected.add(type);
+        });
+        if (!shared.equals(nextEffects)) loaded.values().forEach(actor -> affected.add(actor.address().type()));
+        return affected;
+    }
+
+    private static List<Delivery> concat(List<Delivery> first, List<Delivery> second) {
+        if (first.isEmpty()) return List.copyOf(second);
+        var all = new ArrayList<>(first);
+        all.addAll(second);
+        return List.copyOf(all);
     }
 
     /// Adds the external handlers to one actor application. The runtime runs

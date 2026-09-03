@@ -66,6 +66,9 @@ static Command tuul() {
             .command(Command.named("run", "run an entrypoint, arguments and all")
                     .optional("entrypoint", "which entrypoint (default: cli)")
                     .passthrough("arguments", "what to pass to the application"))
+            .command(Command.named("dev", "serve and hot reload an entrypoint")
+                    .optional("entrypoint", "which web entrypoint (default: web, or the only one)")
+                    .value("port", "which port to listen on (default: 8080)", "8080"))
             .command(Command.named("test", "compile and run test/")
                     .flag("all", "run the complete suite, including integration tests")
                     .flag("integration", "run the complete suite, including integration tests"))
@@ -105,6 +108,7 @@ static int dispatch(Parsed.Values parsed, Writer out, Writer err) throws IOExcep
         case "new" -> manage(Message.of("project.new", values), out, err);
         case "build" -> manage(Message.of("project.build", values), out, err);
         case "run" -> manage(Message.of("project.run", values), out, err);
+        case "dev" -> dev(values, out, err);
         case "test" -> manage(Message.of("project.test", values), out, err);
         case "bind" -> manage(Message.of("project.bind", values), out, err);
         case "self-test" -> manage(Message.of("project.selftest", values), out, err);
@@ -136,6 +140,21 @@ static int browse(Json.Object values, Writer out, Writer err) {
         browser.Browser.serve(paths(values, "source-path", "src"), paths(values, "vendor", "vendor"),
                 Integer.parseInt(values.string("port", "8080")), out);
         return 0;
+    } catch (NumberFormatException notAPort) {
+        return complain("--port must be a number: " + values.string("port", ""), err);
+    } catch (Exception failed) {
+        return complain(failed.getMessage() == null ? failed.toString() : failed.getMessage(), err);
+    }
+}
+
+/// `tuul dev` owns one host process and stays there. The reload coordinator
+/// handles generation activation. [project.Dev] compiles, watches the project,
+/// and owns the HTTP listener. This method only translates command options.
+static int dev(Json.Object values, Writer out, Writer err) {
+    try {
+        var port = Integer.parseInt(values.string("port", "8080"));
+        if (port < 0 || port > 65535) return complain("--port must be between 0 and 65535", err);
+        return project.Dev.run(new project.Layout(Path.of(".")), values.string("entrypoint", ""), port, out, err);
     } catch (NumberFormatException notAPort) {
         return complain("--port must be a number: " + values.string("port", ""), err);
     } catch (Exception failed) {

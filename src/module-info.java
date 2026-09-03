@@ -27,6 +27,7 @@ module tuul {
     exports markdown;
     exports peg;
     exports project;
+    exports reload;
     exports selftest;
     exports settings;
     exports sqlite3;

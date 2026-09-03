@@ -329,14 +329,13 @@
 /// replays, and it is visible in [ActorSystem#history(Address, long, int)] beside
 /// everything else.
 ///
-/// ## What is deliberately not built
+/// ## Reload integration
 ///
-/// Hot-reload generations and their class loaders, a browser inspector, a
-/// control socket, log snapshots, supervision trees, and links and monitors.
-/// Each is a real feature and none is needed to know whether the core is right.
-/// The seams are there: [Definition] is the unit a reload would swap, [Logs] is
-/// where a snapshot or a tiered store would go, [ActorSystem#known()] is what an
-/// inspector would read, and [ActorSystem#traces()] is the live feed it would show.
+/// [ActorSystem#reload(Map, Map, Map, Map)] replaces actor definitions and
+/// effect handlers at one awaited type boundary. It gates new deliveries,
+/// drains loaded actors, replays durable logs without effects, and admits the
+/// gated mail after activation. The [reload] package combines this boundary
+/// with web and application activation and owns class-loader lifetimes.
 ///
 /// Log growth is the known limit. Nothing compacts a log and nothing snapshots
 /// one, so replay time grows with history for as long as an actor lives. That is

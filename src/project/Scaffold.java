@@ -34,6 +34,17 @@ public final class Scaffold {
         return library;
     }
 
+    /// Adds the conventional reloadable web entrypoint to an existing project.
+    ///
+    /// This is separate from [#create(Path, String)] so callers that only need
+    /// the small command-line fixture keep its original shape. The `new`
+    /// command calls this after creating the project, making the web host the
+    /// next useful action without changing the existing `cli` entrypoint.
+    public static void reloadable(Path directory, String name) throws IOException {
+        if (!Files.isDirectory(directory)) throw new IOException(directory + " does not exist");
+        write(directory.resolve("src/web/" + Layout.ENTRYPOINT), webEntrypoint(library(name)));
+    }
+
     /// A directory name is not a package name: `hello-world` holds the library
     /// `helloworld`.
     public static String library(String name) {
@@ -100,6 +111,30 @@ public final class Scaffold {
                     for (var name : names) Greeter.greet(name, greeted -> System.out.println(greeting.greet(greeted)));
                 }
                 """.formatted(library, library);
+    }
+
+    private static String webEntrypoint(String name) {
+        return """
+                import reload.Generation;
+                import reload.Program;
+                import web.Responses;
+                import web.RouteRef;
+                import web.Router;
+
+                /// The default web application. Change this file and save it;
+                /// `tuul dev` compiles and activates the next generation.
+                public final class main implements Program {
+
+                    private static final RouteRef HOME = RouteRef.of("home", "/");
+
+                    @Override
+                    public Generation define() {
+                        var routes = Router.of().get(HOME,
+                                (request, response) -> Responses.text("Hello from %s!\\n", response));
+                        return Generation.of(routes);
+                    }
+                }
+                """.formatted(name);
     }
 
     /// The native module: C that takes a function pointer and calls it back.
@@ -264,6 +299,8 @@ public final class Scaffold {
                 tuul run -- tuul    # run src/cli/main.java
                 tuul test           # compile and run test/
                 tuul docs %s.Greeting
+                tuul install        # vendor the web/reload libraries
+                tuul dev            # serve src/web/main.java with hot reload
                 ```
 
                 `src/%s/` is the library — the application lives there.

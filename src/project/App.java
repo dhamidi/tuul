@@ -18,6 +18,8 @@ import selftest.SelfTest;
 /// The project commands as one application: `new`, `add`, `build`, `run`,
 /// `test` and `self-test`.
 ///
+/// The `dev` host stays in [Dev] because it owns a long-running server.
+///
 /// They share a pipeline rather than repeating one. `run` and `test` both start
 /// by compiling, and what happens when the compile succeeds is decided by what
 /// the application was asked for — the build is one message, and the answer to
@@ -95,7 +97,7 @@ public final class App {
     private static Step<State> created(State state, Message message) {
         var directory = message.string("directory", "");
         return Step.of(state, report("created " + directory
-                + "\n  cd " + directory + " && tuul run"));
+                + "\n  cd " + directory + " && tuul install && tuul dev"));
     }
 
     /// Every build starts with the native modules: they are what the Java is
@@ -266,6 +268,7 @@ public final class App {
     private static void scaffold(Effect effect, Effect.Emitter emit) throws IOException {
         var directory = Path.of(effect.string("directory", ".")).resolve(effect.string("name", ""));
         var library = Scaffold.create(directory, effect.string("name", ""));
+        Scaffold.reloadable(directory, effect.string("name", ""));
         emit.emit(Message.of("project.created")
                 .with("directory", directory.toString())
                 .with("library", library));

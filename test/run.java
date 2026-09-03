@@ -18,6 +18,10 @@ void main(String[] arguments) {
             Named.integration("actors.ActorsTest", actors.ActorsTest::run),
             Named.fast("markdown.MarkdownTest", markdown.MarkdownTest::run),
             Named.fast("application.ApplicationTest", application.ApplicationTest::run),
+            Named.fast("reload.ReloadTest", reload.ReloadTest::run),
+            Named.fast("reload.ApplicationReloadTest", reload.ApplicationReloadTest::run),
+            Named.integration("reload.HttpRevisionSourceTest", reload.HttpRevisionSourceTest::run),
+            Named.integration("reload.RevisionCompilerIntegrationTest", reload.RevisionCompilerIntegrationTest::run),
             Named.fast("peg.PegTest", peg.PegTest::run),
             Named.fast("argparse.ArgparseTest", argparse.ArgparseTest::run),
             Named.fast("symbols.SymbolsTest", symbols.SymbolsTest::run),
@@ -50,6 +54,7 @@ void main(String[] arguments) {
             Named.fast("project.MavenTest", project.MavenTest::run),
             Named.integration("project.AddIntegrationTest", project.AddIntegrationTest::run),
             Named.integration("project.ProjectIntegrationTest", project.ProjectTest::integration),
+            Named.integration("project.DevIntegrationTest", project.DevIntegrationTest::run),
             Named.integration("project.SpecsTest", project.SpecsTest::run),
             Named.integration("sqlite3.SqliteTest", sqlite3.SqliteTest::run),
             Named.integration("sqlite3.ApiTest", sqlite3.ApiTest::run));
