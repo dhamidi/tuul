@@ -128,6 +128,16 @@ timeout, the call fails with `executor.gone`, and the run waits for a person.
 Output goes through the `live` actor in both cases, so a teammate on the web
 watches a terminal-driven run as it happens.
 
+## A turn with many tools
+
+The model asks for several calls at once. Each gets an ephemeral tool actor.
+Every outcome, success or failure, arrives as one `tool.finished` command,
+and a deadline the run set for itself covers the actor that never reports.
+A call that runs too long moves to the background by a run decision the
+tool never sees, and the model gets a placeholder while the watcher keeps
+seeing progress. [turn.md](turn.md) walks through one such turn row by
+row.
+
 ## Streaming is ephemeral
 
 Recording each token as a command would multiply the journal by the number

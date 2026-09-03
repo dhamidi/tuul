@@ -148,8 +148,15 @@ Query `project.version {version}` replies with that version. A run records
 the version number it started with and never reads a later one.
 
 A `tools` entry is `{name, description, schema, idempotent, timeout,
-where}`. `where` is `deployment`, `surface`, or `any`. `idempotent` decides
-what a run does when it must re-issue the call. See *Resume rules*.
+foreground, background, where}`. `where` is `deployment`, `surface`, or
+`any`. `idempotent` decides what a run does when it must re-issue the call.
+See *Resume rules*. `foreground` is how long the turn waits for the call
+before `background: auto` moves it to the background, thirty seconds by
+default. `background` is `never`, `auto`, or `always`.
+
+`limits` is `{context, turns, parallel, wake}`. `parallel` bounds calls in
+flight per run, eight by default. `wake` says whether a background result
+starts a turn while the run is `idle`, true by default.
 
 ## Budget actor
 
@@ -221,7 +228,9 @@ Commands:
 | `model.answered` | `turn`, `text`, `calls`, `usage`, `stop` | From the model effect. Duplicate `turn` is refused. |
 | `model.failed` | `turn`, `error`, `retryable` | From the model effect. A retryable error schedules one retry. |
 | `tool.finished` | `turn`, `call`, `result`, `blob`, `error` | From a tool actor. Duplicate `call` is refused. |
-| `tool.cancelled` | `call`, `by` | Tells the tool actor `tool.cancel`. |
+| `tool.cancelled` | `call`, `by` | Tells the tool actor `tool.cancel`. Any surface. |
+| `call.backgrounded` | `call`, `reason` | `always`, `asked`, or `auto`. The call leaves the foreground set. The context shows the model a placeholder. |
+| `call.deadline` | `call` | Scheduled at `tool.start`. A call still pending records `tool.finished` with `error {kind: "lost"}`. Ignored otherwise. |
 | `permission.asked` | `call`, `tool`, `arguments` | The run needs a person's approval for this call. Status `waiting`. |
 | `permission.answered` | `call`, `allow`, `by`, `remember` | From any surface. `remember` records a rule for this run. |
 | `child.spawned` | `child`, `task` | Opens the child through the catalogue. |
@@ -246,7 +255,9 @@ children. The transcript entry for a blob carries the hash and the size and
 not the content. A surface streams a blob through `blob.get`.
 
 An entry is `{seq, at, kind, by, body}`. `kind` is one of `say`, `answer`,
-`call`, `result`, `permission`, `child`, `status`, `compaction`. `Entry.of`
+`result`, `backgrounded`, `permission`, `child`, `status`, `compaction`.
+An `answer` entry lists its calls. A `result` entry carries one call's
+outcome, error or not. `Entry.of`
 maps a recorded command to an entry. The live protocol sends the same shape.
 
 The context the run sends to the model is the transcript after the last
@@ -259,25 +270,39 @@ turn}`. Every recorded entry tells `live/{run}` `live.entry`.
 
 ## Turn protocol
 
-1. The run receives `run.say` while `idle`, or `tool.finished` completes the
-   last pending call while `acting`.
+A turn is one model call and the calls it requests. See
+[turn.md](turn.md) for the worked example.
+
+1. The run receives `run.say` while `idle`, or the last foreground call of
+   the previous turn reports, or a background call finishes while `idle`.
 2. The run tells `budget/{yyyy-mm}` `spend.reserve`. A refusal records
    `run.pause` with reason `budget.exhausted`.
-3. The run records `turn.requested` and emits the effect `model.complete`
-   with the context, the turn number as the idempotency key, and the live
-   address.
+3. The run records `turn.requested {turn, reason}` and emits the effect
+   `model.complete` with the context, the turn number as the idempotency
+   key, and the live address. Status `thinking`.
 4. The model effect tells `live/{run}` `live.delta` for each chunk and
    finally emits `model.answered` to the run.
 5. The run records the answer, tells the budget `spend.record`, and tells
    the live actor `live.entry`.
-6. For each requested call the run checks the project's permission rules.
-   A call that needs approval records `permission.asked`. An allowed call
-   spawns `tool/{run}/{call}` and tells it `tool.start` with the executor.
-   Status becomes `acting`.
-7. Each tool actor tells the run `tool.finished`. When no call is pending,
-   the run starts the next turn.
-8. An answer with no calls and a stop reason of `end` records `runs.status`
-   `idle` with a summary. The run waits for the next `run.say`.
+6. For each requested call, in list order, the run checks the project's
+   permission rules. A call that needs approval records `permission.asked`.
+   An allowed call enters the pending table as `foreground`, or `queued`
+   when `limits.parallel` calls are already running, or `background` when
+   the tool or the model asked for that. The run spawns
+   `tool/{run}/{call}`, tells it `tool.start`, and schedules
+   `call.deadline {call}` at the tool's `timeout`. Status `acting`.
+7. Each tool actor tells the run `tool.finished`. The run records it,
+   starts the next `queued` call if any, and checks the table.
+8. A foreground call that passes the tool's `foreground` budget records
+   `call.backgrounded {call, reason: "auto"}` when the tool allows it. The
+   run schedules that check at `tool.start`.
+9. When every call is `finished` or `background`, the action phase ends.
+   An answer that had calls requests the next turn with every result and
+   placeholder in the model's call order. An answer without calls and with
+   stop reason `end` tells the catalogue and the activity feed `idle`.
+
+The pending table is part of the run's state. Replay rebuilds it from
+`model.answered`, `call.backgrounded`, and `tool.finished`.
 
 ## Tool actor
 
@@ -285,19 +310,31 @@ turn}`. Every recorded entry tells `live/{run}` `live.entry`.
 |---|---|
 | `tool.start` | `name`, `arguments`, `timeout`, `run`, `turn`, `call`, `executor` |
 | `tool.cancel` | `by` |
-| `tool.output` | `chunk`. From the process effect or the surface. Buffered to 64 KiB, then streamed to a blob. |
+| `tool.output` | `chunk`. From the process effect or the surface. Buffered to 64 KiB, then streamed to a blob. Forwarded to the live actor. |
+| `tool.progress` | `fraction`, `message`. From the process effect or the surface. Forwarded to the live actor. Never recorded. |
 | `tool.exit` | `code`, `blob`. From the process effect or the surface. |
-| `tool.timeout` | Scheduled at `tool.start`. |
+| `tool.timeout` | Scheduled at `tool.start`. Kills the process or tells the surface to. |
 
 With executor `deployment` the actor emits the tool's process effect. With
 executor `surface` it tells `live/{run}` `live.request {call, name,
 arguments}`, which the cable sends to the executor's connection as a `tool`
-event. The surface posts `tool.output` and `tool.exit` back over HTTP with
-the call id.
+event. The surface posts `tool.output`, `tool.progress`, and `tool.exit`
+back over HTTP with the call id.
 
-On `tool.exit`, `tool.timeout`, or `tool.cancel` the actor tells the run
-`tool.finished` and evicts itself. It forwards `tool.output` to the live
-actor for display on every surface.
+The actor ends in exactly one way. It tells the run `tool.finished` and
+evicts itself. The body is one of:
+
+| Outcome | Body |
+|---|---|
+| success | `result` inline, or `blob` above 64 KiB, and `duration` |
+| tool error | `error {kind: "failed", code, message}` and the output so far |
+| timeout | `error {kind: "timeout"}` |
+| cancelled | `error {kind: "cancelled", by}` |
+| executor gone | `error {kind: "executor-gone"}` |
+| denied | `error {kind: "denied", by}` |
+
+A tool actor does not know whether its call is foreground or background.
+Backgrounding is a run decision and changes nothing in the tool actor.
 
 ## Live actor
 
@@ -307,16 +344,19 @@ actor for display on every surface.
 |---|---|
 | `live.entry` | An entry. From the run. Broadcast as `entry`. |
 | `live.delta` | `turn`, `text` or `call`. Appended and broadcast as `delta`. |
-| `live.output` | `call`, `chunk`. From a tool actor. Broadcast as `output`. |
+| `live.output` | `call`, `chunk`. From a tool actor. Broadcast as `output`. The last 64 KiB per running call is kept for `live.now`. |
+| `live.progress` | `call`, `fraction`, `message`. From a tool actor. Broadcast as `progress`. The last one per running call is kept. |
+| `live.call` | `call`, `state`. From the run: `started`, `queued`, `backgrounded`, `finished`. Broadcast as `call`. |
 | `live.request` | `call`, `name`, `arguments`. Sent as `tool` to the executor's connection only. |
 | `live.reset` | `turn`. From the run when it records the answer. |
 | `live.join` | `subject`, `connection`, `surface`. Broadcast as `presence`. Tells `activity`. |
 | `live.leave` | `subject`, `connection`. Broadcast as `presence`. Tells `activity`. |
 | `live.typing` | `subject`, `on`. Broadcast as `typing`. Expires after 5 seconds. |
 
-Query `live.now` replies with the partial output of the current turn, the
-viewers, and who is typing, so that a surface that opens mid-turn draws the
-present state before it follows the stream.
+Query `live.now` replies with the partial output of the current turn, every
+running call with its state, output tail, and last progress, the viewers,
+and who is typing, so that a surface that opens mid-turn draws the present
+state before it follows the stream.
 
 ## Activity actor
 
@@ -347,7 +387,7 @@ Topics:
 
 | Topic | Carries |
 |---|---|
-| `run:{run}` | `entry`, `delta`, `output`, `presence`, `typing`, `status`, and `message` for that run. `tool` to the executor's connection only. |
+| `run:{run}` | `entry`, `delta`, `output`, `progress`, `call`, `presence`, `typing`, `status`, and `message` for that run. `tool` to the executor's connection only. |
 | `workspace` | `activity` for every visible run and every connected member. |
 | `member:{subject}` | `activity` for that member's runs and presence. |
 
@@ -359,6 +399,8 @@ Events:
 | `entry` | An entry, as `inspect` returns it | Every non-browser surface. |
 | `delta` | `{turn, text}` or `{turn, call}` | Every non-browser surface. |
 | `output` | `{call, chunk}` | Every non-browser surface. |
+| `progress` | `{call, fraction, message}` | Every non-browser surface. |
+| `call` | `{call, name, state}` | Every non-browser surface. |
 | `presence` | `{viewers: [{subject, surface}]}` | Every surface. |
 | `typing` | `{subject, on}` | Every surface. |
 | `status` | `{status, turn, pending}` | Every surface. |
@@ -466,7 +508,8 @@ rebuild indexes an archived run from its catalogue summary only.
 | Actor | On resume |
 |---|---|
 | `run` in `thinking` | Re-emit `model.complete` for the pending turn with the same idempotency key. |
-| `run` in `acting` | For each pending call whose tool is `idempotent`, spawn the tool actor again. For each that is not, record `run.pause` with reason `tool.repeat` and wait for a person. |
+| `run` in `acting` | For each pending foreground call whose tool is `idempotent`, spawn the tool actor again and re-arm `call.deadline` from the recorded start. For each that is not, record `run.pause` with reason `tool.repeat` and wait for a person. A deadline that already passed records `lost` at once. |
+| `run` with a background call pending | The same rule per call, in any status. |
 | `run` in `waiting` | Nothing. The question stands until a surface answers it. |
 | `run` with a child in flight | Nothing. The child reports on its own. |
 | `runs` | Re-tell `run.open` for each run without `runs.started`. |
@@ -478,8 +521,10 @@ rebuild indexes an archived run from its catalogue summary only.
 
 - A model error with `retryable` true schedules one retry after 10 seconds.
   A second failure records `run.pause` with the error and status `waiting`.
-- A tool timeout records `tool.finished` with `error` `timeout`. The model
-  sees the error on the next turn.
+- A tool failure of any kind is one `tool.finished` command. It never
+  fails the turn or the run. The model sees the error on the next turn.
+- A tool actor that dies without reporting is covered by `call.deadline`,
+  which records `lost`.
 - A run that passes `limits.turns` in one response records `run.pause`
   with reason `turn-limit`.
 - A crash-looping run is quarantined by `actors`. The activity feed shows

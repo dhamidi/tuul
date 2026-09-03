@@ -12,7 +12,8 @@ person deletes it or moves it to cold storage.
 
 Read [tutorial.md](tutorial.md) to follow one run from start to archive. Read
 [howto.md](howto.md) for one task at a time. Read [reference.md](reference.md)
-for the exact rules. Read [explanation.md](explanation.md) for the reasons.
+for the exact rules. Read [explanation.md](explanation.md) for the reasons,
+and [turn.md](turn.md) for one turn with many tools in flight.
 
 ## One deployment is one workspace
 
@@ -82,7 +83,7 @@ follows it without exception.
 | `search` | ephemeral | Its state is a derived SQLite file. A rebuild replays the catalogue and the runs. |
 | `activity` | ephemeral | Who is doing what now is true only now. Recording it would be surveillance, not history. |
 | `live` | ephemeral | Partial tokens, viewers, and typing are discarded when the turn ends or the tab closes. |
-| `tool` | ephemeral | It owns a process or a surface connection. A restart kills both, and the run re-issues the call. |
+| `tool` | ephemeral | It owns a process or a surface connection. A restart kills both, and the run re-issues the call. Its result is a run command, so the run is the record. |
 
 ## Lifetime and size
 
@@ -108,7 +109,7 @@ transcript entries per year.
 | `search` | never evicted | none. The SQLite file is derived and can be deleted. | none. It writes through an effect. | none | The database is about 1.5 times the text it indexes. About 6 GB per year at the numbers above. |
 | `activity` | never evicted | none | one entry per active run and per connected surface. Under 100 KB. | none | Bounded by concurrent runs and open connections. |
 | `live/{run}` | 1 min after the last viewer leaves | one turn for deltas, one connection for presence | one turn's output plus one entry per viewer. Up to a few hundred KBs. | none | Reset at every turn. |
-| `tool/{run}/{call}` | never idle. Ends with the call. | one call | a process handle or a surface reference, and 64 KiB of buffered output | none | Output above 64 KiB streams to a blob. |
+| `tool/{run}/{call}` | never idle. Ends with the call. | one call, which may outlive its turn when backgrounded | a process handle or a surface reference, and 64 KiB of buffered output | none | Output above 64 KiB streams to a blob. Progress is never stored. |
 
 At the numbers above, a deployment holds about 50 loaded runs at a busy
 moment, about 60 open event streams, and about 200 MB of actor state in
