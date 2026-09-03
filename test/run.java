@@ -27,6 +27,7 @@ void main(String[] arguments) {
             Named.fast("ffi.PlatformTest", ffi.PlatformTest::run),
             Named.fast("uritemplates.TemplatesTest", uritemplates.TemplatesTest::run),
             Named.fast("eventstream.EventStreamTest", eventstream.EventStreamTest::run),
+            Named.fast("terminal.TerminalTest", terminal.TerminalTest::run),
             Named.integration("eventstream.EventStreamHttpTest", eventstream.EventStreamTest::integration),
             Named.fast("fetch.FetchTest", fetch.FetchTest::run),
             Named.integration("fetch.FetchHttpTest", fetch.FetchTest::integration),

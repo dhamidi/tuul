@@ -183,8 +183,11 @@ retry HTTP 404. At most eight downloads run at once, with at most four for one
 repository origin. Use `--repository URL` more than once to try repositories
 in order.
 
-When stdout is a terminal, `tuul add` replaces its one-line status with an ANSI
-progress bar. The line shows completed artifact jobs and the current transfer.
+When stdout is a terminal, `tuul add` replaces one bounded ANSI region. It
+batches concurrent updates into at most ten frames per second and flushes each
+complete frame once. One shared body bound covers tasks, outcomes, notices, and
+the overflow line. The overflow line summarizes work that does not fit, so many
+concurrent downloads do not flicker or overwhelm the terminal.
 When stdout is not a terminal, it keeps the plain lifecycle, plan, and
 diagnostic events so an agent can read them without terminal control codes.
 Byte-level progress events are omitted from this stream.

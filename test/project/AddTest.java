@@ -1,7 +1,5 @@
 package project;
 
-import actors.ActorSystem;
-import actors.Spawn;
 import harness.Check;
 import java.io.IOException;
 import java.io.StringWriter;
@@ -91,8 +89,6 @@ public final class AddTest {
         for (var bytes = 1; bytes < 100; bytes++) {
             progress.publish(new Add.Event("progress", "com.acme:library:1.0", bytes, 100, "", ""));
         }
-        progress.render(null, null);
-        var flushesDuringRender = ttyOutput.flushes;
         progress.publish(new Add.Event("done", "com.acme:library:1.0", 100, 100,
                 "memory/library.jar", ""));
         progress.publish(new Add.Event("done", "com.acme:library:1.0", 100, 100,
@@ -104,13 +100,14 @@ public final class AddTest {
         progress.publish(new Add.Event("done", "com.acme:third:1.0", 100, 100,
                 "memory/third.jar", ""));
         progress.close();
+        var finalFlushes = ttyOutput.flushes;
         var ttyText = ttyOutput.toString();
-        Check.that("TTY progress flushes a live frame", flushesDuringRender > 0);
-        Check.that("TTY progress stays on one bounded line", ttyText.contains("\n")
-                && ttyText.chars().filter(character -> character == '\n').count() == 1);
+        Check.that("TTY progress flushes its final batch", finalFlushes > 0);
+        Check.that("TTY progress stays within bounded batched lines", ttyText.contains("\n")
+                && ttyText.chars().filter(character -> character == '\n').count() <= MavenTransport.GLOBAL_LIMIT + 2);
         Check.that("TTY metadata does not create bars", !ttyText.contains("selected") && !ttyText.contains("omitted"));
         Check.that("TTY completion counts each artifact once", ttyText.contains("3/3")
-                && ttyText.contains("[####################] 3/3 complete")
+                && ttyText.contains("[####################] 3/3 finished")
                 && !ttyText.contains("4/3"));
 
         var eventsOutput = new FlushedWriter();
@@ -138,7 +135,8 @@ public final class AddTest {
         optional.publish(new Add.Event("optional-missing", "com.acme:library:1.0:sources", 0, 0, "", "404"));
         optional.close();
         Check.that("expected optional supplements stay out of TTY diagnostics",
-                !optionalOutput.toString().contains("optional-missing"));
+                optionalOutput.toString().contains("1/1 finished")
+                        && !optionalOutput.toString().contains("optional-missing"));
 
         var diagnosticOutput = new FlushedWriter();
         var diagnostic = new Progress(diagnosticOutput, Add.Mode.TTY);
@@ -156,34 +154,6 @@ public final class AddTest {
                 && diagnosticOutput.toString().indexOf("add.warning 100x")
                         == diagnosticOutput.toString().lastIndexOf("add.warning 100x"));
 
-        var actorOutput = new FlushedWriter();
-        var actorProgress = new Progress(actorOutput, Add.Mode.TTY);
-        try (var system = ActorSystem.named("test-progress")
-                .define(actorProgress, Spawn.ephemeral().mailbox(32))) {
-            actorProgress.attach(system, actorProgress.at("run"));
-            system.effect(Progress.RENDER, actorProgress::render);
-            system.effect(Progress.CLOSE, actorProgress::closeOutput);
-            actorProgress.schedule(1);
-            actorProgress.publish(new Add.Event("done", "com.acme:library:1.0", 100, 100,
-                    "memory/library.jar", ""));
-            actorProgress.close();
-        }
-        Check.that("actor path renders and closes TTY progress",
-                actorOutput.toString().contains("1/1") && actorOutput.toString().contains("\033[?7h"));
-
-        var barOutput = new FlushedWriter();
-        var bar = new ProgressBar(barOutput);
-        bar.close();
-        bar.close();
-        Check.equal("an unused progress bar writes nothing", "", barOutput.toString());
-        bar = new ProgressBar(barOutput);
-        bar.render(1, 2, "status\n", "detail\r");
-        bar.close();
-        bar.close();
-        Check.that("progress bar sanitizes text and closes once", barOutput.toString().contains("[##########----------] status  — detail ")
-                && barOutput.toString().contains("\033[?7h\r\n")
-                && barOutput.toString().indexOf("\033[?7h\r\n")
-                        == barOutput.toString().lastIndexOf("\033[?7h\r\n"));
     }
 
     private static final class FlushedWriter extends Writer {

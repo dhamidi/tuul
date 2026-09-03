@@ -274,8 +274,8 @@ public final class Add {
     /// Publication replaces selected version directories and preserves every
     /// other file under `vendor/`. It writes no dependency metadata.
     ///
-    /// `Mode.TTY` writes one flushed aggregate ANSI bar. `Mode.EVENTS` writes
-    /// one flushed semantic event per line and omits byte-level progress.
+    /// `Mode.TTY` writes one flushed, bounded batch of ANSI progress lines.
+    /// `Mode.EVENTS` writes one flushed semantic event per line and omits byte-level progress.
     /// Resolution and setup errors throw `IOException`. Download failures
     /// appear in the result. A required failure does not publish staged files.
     /// Duplicate classes throw `IOException` before publication.
@@ -319,14 +319,10 @@ public final class Add {
             return result;
         }
         try (var system = ActorSystem.named("tuul-add")
-                .define(new Coordinator(roots, artifacts), Spawn.ephemeral().effects(ACTOR_EFFECT_DEADLINE))
-                .define(progress, Spawn.ephemeral().mailbox(32).effects(ACTOR_EFFECT_DEADLINE))) {
+                .define(new Coordinator(roots, artifacts), Spawn.ephemeral().effects(ACTOR_EFFECT_DEADLINE))) {
             var root = Address.of(COORDINATOR, "run");
-            var progressAddress = progress.at("run");
-            system.effect(Progress.RENDER, progress::render);
-            system.effect(Progress.CLOSE, progress::closeOutput);
             system.effect(DOWNLOAD, (effect, emit) -> download(effect, emit, services, progress));
-            progress.attach(system, progressAddress);
+            progress.attach(system);
             system.tell(root, START.message());
             var answer = system.ask(root, GET_RESULT.message(), ASK_DEADLINE).join();
             var result = result(answer);
