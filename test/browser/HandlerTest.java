@@ -76,8 +76,14 @@ public final class HandlerTest {
         Check.that("it starts them", text.contains("type=\"module\""));
         Check.that("the shell keeps the page navigation controller across frame updates",
                 text.contains("data-controller=\"ui-sidebar page-navigation\""));
-        Check.that("the content frame owns the page layout and body",
-                text.contains("<turbo-frame id=\"content\"><div class=\"page-layout\"><div class=\"page-body\">"));
+        Check.that("the content frame owns the local navigation and page body",
+                text.contains("<turbo-frame id=\"content\"><div class=\"page-layout\">"
+                        + "<div class=\"local-nav\"><a class=\"ui-opener\" href=\"/tree\""));
+        Check.that("the mobile menu remains a link without JavaScript",
+                text.contains("aria-controls=\"sidebar\" aria-expanded=\"false\""
+                        + " data-action=\"click-&gt;ui-sidebar#open\">Menu</a>"));
+        Check.that("the page body follows the local navigation",
+                text.contains("</nav></div><div class=\"page-body\">"));
         Check.that("the page outline has an accessible navigation label",
                 text.contains("class=\"page-nav\" hidden aria-label=\"On this page\""));
         Check.that("it listens for the index being rebuilt", text.contains("data-controller=\"cable-stream\""));
@@ -86,8 +92,9 @@ public final class HandlerTest {
         Check.that("the home link carries the digested logo", text.contains(
                 "<img src=\"" + browser.assets().url(Views.LOGO) + "\" alt=\"tuul\""));
         Check.that("the search submit is a named icon button", text.contains(
-                "<button class=\"ui-button search-submit\" type=\"submit\" aria-label=\"Search\">"
-                        + "<img src=\"" + browser.assets().url(Views.SEARCH_ICON) + "\" alt=\"\""));
+                "<button class=\"ui-button search-submit\" type=\"submit\" aria-label=\"Search\""
+                        + " data-action=\"click-&gt;page-navigation#toggleSearch\"><img src=\""
+                        + browser.assets().url(Views.SEARCH_ICON) + "\" alt=\"\""));
         Check.that("the icon button has no visible text fallback", !text.contains(">Search</button>"));
         Check.that("the front page holds no results yet", !text.contains("itemtype=\"/Symbol\""));
 

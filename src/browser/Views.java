@@ -136,8 +136,6 @@ public final class Views {
                                 Stimulus.controller(Ui.CONTROLLER, PAGE_NAVIGATION),
                                 header(classes("bar"),
                                         Ui.group(Props.of("gap", "lg"),
-                                                Ui.opener(Props.of("href", routes.path(Routes.TREE)),
-                                                        text("Browse")),
                                                 Ui.anchor(Props.of("href", routes.path(Routes.HOME)),
                                                         classes("brand"),
                                                         img(src(wiring.assets().url(LOGO)), alt("tuul"))),
@@ -145,7 +143,7 @@ public final class Views {
                                 Html.element("div", classes("panes"),
                                         Ui.sidebar(Props.of("label", "What there is"), tree(routes, roots)),
                                         main(id(MAIN),
-                                                framed(Html.fragment(htmls(content))))))));
+                                                framed(routes, Html.fragment(htmls(content))))))));
     }
 
     /// What there is, as a tree: the three places symbols come from, each
@@ -180,10 +178,16 @@ public final class Views {
                 tree(routes, roots));
     }
 
-    /// The content pane on its own, for a request that asked for the frame
-    /// rather than the page.
+    /// The content pane for a frame request that uses the standard browser
+    /// routes. Use [#pane(Router,Html)] when the shell supplies another router.
     public static Html pane(Html content) {
-        return framed(content);
+        return framed(Routes.of(), content);
+    }
+
+    /// The content pane for a frame request. The router builds the mobile menu
+    /// fallback link that each frame update carries with the changed body.
+    public static Html pane(Router routes, Html content) {
+        return framed(routes, content);
     }
 
     /// The content pane.
@@ -199,13 +203,15 @@ public final class Views {
     /// not a pane swap. Saying it at each site rather than once on the frame is
     /// the price of a frame that can still be swapped, and it is the same thing
     /// the result links have always said.
-    private static Html framed(Html inside) {
+    private static Html framed(Router routes, Html inside) {
         return Turbo.frame(CONTENT,
                 Html.element("div", classes("page-layout"),
-                        Html.element("div", classes("page-body"), inside),
-                        Html.element("nav", classes("page-nav"), hidden(),
-                                aria("label", "On this page"),
-                                Stimulus.target(PAGE_NAVIGATION, "outline"))));
+                        Html.element("div", classes("local-nav"),
+                                Ui.opener(Props.of("href", routes.path(Routes.TREE)), text("Menu")),
+                                Html.element("nav", classes("page-nav"), hidden(),
+                                        aria("label", "On this page"),
+                                        Stimulus.target(PAGE_NAVIGATION, "outline"))),
+                        Html.element("div", classes("page-body"), inside)));
     }
 
     /// The search form, which lives in the bar on every page — one form, so
@@ -230,6 +236,7 @@ public final class Views {
                 Ui.button(Props.of().on("submit"),
                         classes("search-submit"),
                         aria("label", "Search"),
+                        Stimulus.action(Stimulus.on("click", PAGE_NAVIGATION, "toggleSearch")),
                         img(src(wiring.assets().url(SEARCH_ICON)), alt(""))));
     }
 

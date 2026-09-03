@@ -351,7 +351,7 @@ public final class Browser implements AutoCloseable {
     /// Sending only the frame is the same contract kept for a tenth of the
     /// bytes.
     private Html shell(Request request, String heading, Submission search, Html content) {
-        if (Views.CONTENT.equals(frame(request))) return Views.pane(content);
+        if (Views.CONTENT.equals(frame(request))) return Views.pane(routes(), content);
         return Views.page(wiring, heading, search,
                 index.roots(), content);
     }

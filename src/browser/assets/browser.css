@@ -196,26 +196,40 @@ main { max-width: var(--page); margin: 0; padding: var(--ui-space-6); }
 .search { display: flex; gap: var(--ui-space-2); align-items: center; flex: 1; min-width: 0; }
 .search .field { flex: 1; max-width: var(--browser-readable-measure); display: flex; gap: var(--ui-space-2); align-items: center; }
 
-/* Below the two-pane threshold the bar wraps and the search takes a line of its
-   own. Sharing one row with a brand, a burger and a submit button left the
-   field 68px wide at 375 and 18px at 320 — about a word, for the control the
-   whole application is driven from. Wrapping costs one row of height and gives
-   it the width back. */
+/* Below the two-pane threshold the bar keeps only the brand and search action
+   in its row. The field opens onto a second row on demand; sharing one row
+   with a brand and a submit button left it 68px wide at 375 and 18px at 320 —
+   about a word, for the control the whole application is driven from. */
 @media (max-width: 59.999rem) {
   .bar > .ui-group {
-    display: flex;
-    gap: var(--ui-space-6);
-    flex-wrap: wrap;
+    display: grid;
+    grid-template-columns: minmax(0, 1fr) auto;
+    grid-template-rows: auto auto;
+    gap: 0;
     padding: 0 var(--ui-space-6);
   }
-  .bar > .ui-group .brand,
+  .bar > .ui-group .brand { grid-column: 1; grid-row: 1; }
   .bar > .ui-group .search {
-    grid-column: auto;
+    grid-column: 1 / -1;
+    grid-row: 2;
+    padding: var(--ui-space-2) 0 0;
     margin-left: 0;
   }
-  .search { order: 3; flex-basis: 100%; }
-  .search .field { max-width: none; }
-  main { width: 100%; max-width: 100%; }
+  .page-navigation--ready .bar > .ui-group .search {
+    grid-column: 2;
+    grid-row: 1;
+    justify-content: flex-end;
+    padding: 0;
+  }
+  .page-navigation--ready .search .field { display: none; }
+  .page-navigation--ready .search.search--open {
+    grid-column: 1 / -1;
+    grid-row: 1;
+    z-index: 1;
+    background: var(--ui-paper);
+  }
+  .page-navigation--ready .search.search--open .field { display: flex; max-width: none; }
+  main { width: 100%; max-width: 100%; padding: 0; }
 }
 /* The label and the hint are said to a screen reader and not to the eye. They
    were `display: none`, which says them to neither: the control announced
@@ -282,35 +296,140 @@ turbo-frame { display: block; }
 .page-layout,
 .page-body { min-width: 0; }
 
+.local-nav { display: none; }
 .page-nav { display: none; }
 .page-nav[hidden] { display: none; }
+.page-nav-heading { display: none; }
+
+/* On a narrow screen the outline is the second navigation row, immediately
+   above the reading column. The links float over the page like VitePress's
+   mobile menu, so opening it does not move somebody's place in the document. */
+@media (max-width: 79.999rem) {
+  .local-nav {
+    position: sticky;
+    top: var(--browser-bar-height);
+    z-index: 1;
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+    min-height: 2.75rem;
+    border-bottom: 1px solid var(--ui-rule);
+    background: var(--ui-paper);
+  }
+  .local-nav > .ui-opener {
+    width: max-content;
+    border: 0;
+    border-radius: 0;
+  }
+  .local-nav > .ui-opener::before {
+    content: "☰";
+    font-size: var(--ui-text-sm);
+    line-height: 1;
+  }
+  .page-nav:not([hidden]) {
+    display: block;
+    position: static;
+    margin-left: auto;
+    width: auto;
+    max-width: none;
+  }
+  .page-nav-title {
+    display: flex;
+    align-items: center;
+    justify-content: flex-end;
+    gap: var(--ui-space-2);
+    width: 100%;
+    min-height: 2.75rem;
+    padding: var(--ui-space-1) var(--ui-space-2);
+    border: 0;
+    background: none;
+    color: var(--ui-ink);
+    font: inherit;
+    cursor: pointer;
+  }
+  .page-nav-title::after {
+    content: "⌄";
+    font-size: var(--ui-text-sm);
+    line-height: 1;
+  }
+  .page-nav--open .page-nav-title::after { content: "⌃"; }
+  .page-nav-title:focus-visible { outline: 2px solid var(--ui-link); outline-offset: -2px; }
+  .page-nav ol {
+    display: none;
+    position: absolute;
+    top: 100%;
+    left: 0;
+    right: 0;
+    max-height: calc(100vh - var(--browser-bar-height) - 5.5rem);
+    margin: 0;
+    padding: var(--ui-space-2) var(--ui-space-3);
+    overflow-y: auto;
+    list-style: none;
+    background: var(--ui-surface);
+    border: 1px solid var(--ui-rule);
+    border-radius: 0 0 var(--ui-radius) var(--ui-radius);
+    box-shadow: 0 var(--ui-space-2) var(--ui-space-6) rgb(0 0 0 / 0.14);
+  }
+  .page-nav--open ol { display: block; }
+  .page-nav li { min-width: 0; }
+  .page-nav a {
+    display: flex;
+    align-items: center;
+    min-height: 2.75rem;
+    padding: var(--ui-space-1) var(--ui-space-2);
+    border-radius: var(--ui-radius);
+    color: var(--ui-muted);
+    overflow-wrap: anywhere;
+    text-decoration: none;
+  }
+  .page-nav a:hover { background: var(--ui-wash); color: var(--ui-ink); }
+  .page-nav a:focus-visible { outline: 2px solid var(--ui-link); outline-offset: -2px; }
+  .page-nav a[aria-current="location"] {
+    background: var(--ui-wash);
+    color: var(--ui-ink);
+    font-weight: 600;
+  }
+  .page-body [id] { scroll-margin-top: calc(var(--browser-bar-height) + 2.75rem); }
+}
+
+@media (max-width: 59.999rem) {
+  .page-body { padding: var(--ui-space-6) var(--ui-space-4); }
+}
 
 @media (min-width: 60rem) {
   .panes { grid-template-columns: var(--sidebar) minmax(0, var(--page)); }
 }
 
-@media (min-width: 75rem) {
+@media (min-width: 80rem) {
   .page-layout {
     display: grid;
     grid-template-columns: minmax(0, 1fr) 16rem;
     gap: var(--ui-space-6);
     align-items: start;
   }
-  .page-nav:not([hidden]) {
+  .local-nav {
     display: block;
+    grid-column: 2;
+    grid-row: 1;
     position: sticky;
     top: calc(var(--browser-bar-height) + var(--ui-space-4));
     max-height: calc(100vh - var(--browser-bar-height) - var(--ui-space-8));
     overflow: auto;
   }
+  .page-body { grid-column: 1; grid-row: 1; }
+  .page-nav:not([hidden]) {
+    display: block;
+  }
   .page-nav ol { list-style: none; margin: 0; padding: 0; }
-  .page-nav-title {
+  .page-nav ol li:first-child { display: none; }
+  .page-nav-heading {
     display: block;
     margin: 0 0 var(--ui-space-2);
     color: var(--ui-muted);
     font-size: var(--ui-text-sm);
     font-weight: 600;
   }
+  .page-nav-title { display: none; }
   .page-nav li { min-width: 0; }
   .page-nav a {
     display: flex;
