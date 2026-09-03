@@ -4,14 +4,22 @@
 is a design document. It is not implemented, and no type, address, or message
 name in these documents is a public API.
 
-The package answers one question: which actors run an agent, and what each
-one keeps, for how long, and where. The answer must let every run be browsed
-and shared inside a workspace that several people use, and it must keep every
-run until a person deletes it or moves it to cold storage.
+The target is a team product that works like Claude: a team of 20 to 30
+people, one deployment per workspace, every run browsable and shared, every
+run streamed live to every surface that is watching it, and a feed that
+shows what teammates are doing right now. The system keeps every run until a
+person deletes it or moves it to cold storage.
 
 Read [tutorial.md](tutorial.md) to follow one run from start to archive. Read
 [howto.md](howto.md) for one task at a time. Read [reference.md](reference.md)
 for the exact rules. Read [explanation.md](explanation.md) for the reasons.
+
+## One deployment is one workspace
+
+A deployment runs one `ActorSystem`, one process, one log root, one blob
+directory, one search database, and one identity. There is no workspace id in
+any address. The workspace actor is the singleton `workspace`, addressed with
+an empty id. A second team is a second deployment.
 
 ## The hierarchy
 
@@ -21,25 +29,39 @@ index. The tree below is an ownership tree of names and messages. It is not a
 supervision tree. The `actors` package has none, because summoning is restart.
 
 ```
-workspace/{ws}                       durable    members, roles, settings
-├── member/{ws}/{subject}            durable    one person's choices in this workspace
-├── agent/{ws}/{agent}               durable    one agent definition and its versions
-├── budget/{ws}/{yyyy-mm}            durable    the spend ledger of one month
-├── runs/{ws}/{yyyy}                 durable    which runs exist, their visibility, hot or cold
-│   └── search/{ws}                  ephemeral  full-text index over runs, derived
-└── run/{ws}/{run}                   durable    the transcript and status of one run
-    ├── run/{ws}/{run}/{child}       durable    a subagent run, same type, nested id
-    ├── stream/{ws}/{run}            ephemeral  the tokens of the turn in flight
-    ├── tool/{ws}/{run}/{call}       ephemeral  one tool invocation
-    ├── presence/{ws}/{run}          ephemeral  who is watching right now
-    └── archive/{ws}/{run}           durable    one move to or from cold storage
+workspace                         durable    members, roles, settings, archive location
+├── member/{subject}              durable    one person's choices
+├── project/{project}             durable    instructions, files, tools, model, versions
+├── budget/{yyyy-mm}              durable    the spend ledger of one month
+├── runs/{yyyy-mm}                durable    which runs exist, visibility, hot or cold
+├── search                        ephemeral  full-text index over runs, derived
+├── activity                      ephemeral  what every member is doing right now
+└── run/{run}                     durable    the transcript and status of one run
+    ├── run/{run}/{child}         durable    a subagent run, same type, nested id
+    ├── live/{run}                ephemeral  deltas, presence, and typing for one run
+    ├── tool/{run}/{call}         ephemeral  one tool invocation
+    └── archive/{run}             durable    one move to or from cold storage
 ```
 
 Three things that hold state are not actors:
 
 - the **blob store** holds large tool outputs and files by content hash;
-- the **search database** is one derived SQLite file per workspace;
-- the **cable** carries live updates to open browser tabs.
+- the **search database** is one derived SQLite file;
+- the **cable** carries one event stream per connected surface.
+
+## Surfaces
+
+A surface is anything that shows a run: the web page, a terminal client, an
+editor extension, a phone. Every surface speaks HTTP and reads one
+`text/event-stream` connection through `web.cable`. The stream carries JSON
+events for every surface and Turbo Stream HTML for the browser, on the same
+topics and with the same sequence numbers. A surface that reconnects says
+where it got to and receives what it missed, or learns that it must reload.
+
+A surface can also execute tools. A run started from a terminal runs its
+shell and file tools on that machine. Every other surface still watches the
+output live, because the output passes through the run's `live` actor either
+way.
 
 ## Durable or ephemeral, and why
 
@@ -52,15 +74,15 @@ follows it without exception.
 |---|---|---|
 | `workspace` | durable | Who is a member is a decision. No store holds it twice. |
 | `member` | durable | Per-person choices must survive a restart. Read cursors do not, and they stay out of this log. |
-| `agent` | durable | An agent version is the recipe that a run must be able to cite forever. |
+| `project` | durable | A project version is the recipe that a run must be able to cite forever. |
 | `budget` | durable, `full` | A spend ledger cannot be reconstructed by anybody else. |
 | `runs` | durable | It decides that a run exists, is visible, is archived, or is deleted. |
 | `run` | durable, `full` | The transcript is the product. The model's answers and tool results are facts nobody can recompute. |
 | `archive` | durable | A move to cold storage must resume after a crash between its steps. |
 | `search` | ephemeral | Its state is a derived SQLite file. A rebuild replays the catalogue and the runs. |
-| `stream` | ephemeral | Partial tokens are discarded when the turn ends. The complete answer is one run command. |
-| `tool` | ephemeral | It owns a process. A restart kills the process, and the run re-issues the call. |
-| `presence` | ephemeral | Who is watching is true only while the connection is open. |
+| `activity` | ephemeral | Who is doing what now is true only now. Recording it would be surveillance, not history. |
+| `live` | ephemeral | Partial tokens, viewers, and typing are discarded when the turn ends or the tab closes. |
+| `tool` | ephemeral | It owns a process or a surface connection. A restart kills both, and the run re-issues the call. |
 
 ## Lifetime and size
 
@@ -69,24 +91,29 @@ Two lifetimes matter. Residency is how long the actor stays in memory before
 actor comes back from its log after eviction. An ephemeral actor comes back
 empty.
 
+The numbers assume 25 members, 20 runs per member per day, 250 working days,
+and 30 messages per run. That is 125,000 runs and about 4 million
+transcript entries per year.
+
 | Actor | Residency (`idle`) | Retention | State in memory | Log on disk | Growth |
 |---|---|---|---|---|---|
-| `workspace/{ws}` | 1 h | forever, until deleted | KBs. Members and settings. | KBs to low MBs | One command per membership or settings change. |
-| `member/{ws}/{subject}` | 10 min | forever, until the member or workspace is deleted | under 1 KB | KBs | One command per changed preference. |
-| `agent/{ws}/{agent}` | 30 min | forever, until deleted | tens of KBs. Every version's prompt. | tens of KBs to MBs | One command per version. |
-| `budget/{ws}/{yyyy-mm}` | 10 min | forever | under 1 KB. Totals per agent and person. | about 150 B per turn. 100k turns is 15 MB. | Bounded by the month. A new month is a new actor. |
-| `runs/{ws}/{yyyy}` | 1 h | forever | about 300 B per run. 50k runs is 15 MB. | about 1.5 KB per run | About five commands per run. Bounded by the year. |
-| `run/{ws}/{run}` | 15 min while active. Settled when finished. | forever, hot or cold, until deleted | The context window. 1 to 4 MB for a long conversation. | 0.5 to 2 MB for 50 turns. 10 to 40 MB for 1,000 turns. | One command per model answer, tool result, person's message, or status change. Inline bodies stop at 64 KiB. |
-| `run/{ws}/{run}/{child}` | as `run` | as `run` | as `run` | as `run` | A child holds its own transcript. The parent holds only the child's summary. |
-| `archive/{ws}/{run}` | 5 min. Settled when done. | forever | under 1 KB | under 4 KB | About ten commands per move. |
-| `search/{ws}` | 1 h | none. The SQLite file is derived and can be deleted. | none. It writes through an effect. | none | The database is about 1.5 times the text it indexes. |
-| `stream/{ws}/{run}` | 1 min | one turn | one turn's output. Up to a few hundred KBs. | none | Reset at every turn. |
-| `tool/{ws}/{run}/{call}` | never idle. Ends with the call. | one call | a process handle and 64 KiB of buffered output | none | Output above 64 KiB streams to a blob. |
-| `presence/{ws}/{run}` | 1 min | while a tab is open | bytes per viewer | none | One entry per open connection. |
+| `workspace` | never evicted | forever | KBs. Members and settings. | KBs to low MBs | One command per membership or settings change. |
+| `member/{subject}` | 10 min | forever, until the member is removed | under 1 KB | KBs | One command per changed preference. |
+| `project/{project}` | 30 min | forever, until deleted | tens of KBs. Every version's instructions. Files are blob references. | tens of KBs to MBs | One command per version or file change. |
+| `budget/{yyyy-mm}` | never evicted | forever | under 1 KB. Totals per project and person. | about 150 B per turn. 25 MB for a busy month. | Bounded by the month. |
+| `runs/{yyyy-mm}` | 1 h | forever | about 300 B per run. 3 MB for 10,000 runs. | about 1 KB per run. 10 MB per month. | Three commands per run, plus one per retitle or share. |
+| `run/{run}` | 15 min after the last message | forever, hot or cold, until deleted | The context window. 1 to 4 MB for a long conversation. | 0.3 to 1 MB for 30 messages. 10 to 20 MB for 500. | One command per person's message, model answer, tool result, or status change. Inline bodies stop at 64 KiB. |
+| `run/{run}/{child}` | as `run` | as `run` | as `run` | as `run` | A child holds its own transcript. The parent holds only the child's summary. |
+| `archive/{run}` | 5 min. Settled when done. | forever | under 1 KB | under 4 KB | About ten commands per move. |
+| `search` | never evicted | none. The SQLite file is derived and can be deleted. | none. It writes through an effect. | none | The database is about 1.5 times the text it indexes. About 6 GB per year at the numbers above. |
+| `activity` | never evicted | none | one entry per active run and per connected surface. Under 100 KB. | none | Bounded by concurrent runs and open connections. |
+| `live/{run}` | 1 min after the last viewer leaves | one turn for deltas, one connection for presence | one turn's output plus one entry per viewer. Up to a few hundred KBs. | none | Reset at every turn. |
+| `tool/{run}/{call}` | never idle. Ends with the call. | one call | a process handle or a surface reference, and 64 KiB of buffered output | none | Output above 64 KiB streams to a blob. |
 
-The blob store keeps one file per content hash under the run's prefix. A
-blob lives as long as its run and moves with it. The search database is one
-file per workspace and is never moved to cold storage. A rebuild recreates it.
+At the numbers above, a deployment holds about 50 loaded runs at a busy
+moment, about 60 open event streams, and about 200 MB of actor state in
+memory. The hot store grows by about 60 GB of journals and blobs per year
+until runs are archived.
 
 ## What forever means
 
@@ -94,13 +121,13 @@ The system deletes nothing on its own. A run is kept hot until a person runs
 one of two explicit operations:
 
 - **archive** moves the run's journal and blobs to cold storage. The
-  catalogue keeps the run's title, agent, owner, dates, and final summary. The
-  run stays listed and its summary page stays browsable. **restore** moves
-  it back.
+  catalogue keeps the run's title, project, owner, dates, and final summary.
+  The run stays listed and its summary page stays browsable. **restore**
+  moves it back.
 - **delete** erases the journal and blobs, hot or cold, and records a
   tombstone in the catalogue. The id is never reused.
 
 Nothing compacts a log and nothing snapshots one. That is a known limit of
 `actors`, and this design bounds every log by construction instead: budgets
-by month, catalogues by year, runs by the size of a conversation, and
-subagent work by giving each child its own run.
+and catalogues by month, runs by the size of a conversation, and subagent
+work by giving each child its own run.
