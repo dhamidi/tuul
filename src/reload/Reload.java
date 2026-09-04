@@ -306,6 +306,7 @@ public final class Reload implements AutoCloseable {
         synchronized (monitor) {
             if (slot.closed || !slot.retired || slot.leases != 0) return;
             slot.closed = true;
+            retained.remove(slot);
             retired++;
         }
         closeQuietly(slot.generation);

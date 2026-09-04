@@ -13,4 +13,10 @@ public interface ClassSink {
     /// Opens the output for one binary name. Nested classes contain `$` in the
     /// name. A module declaration has the name `module-info`.
     OutputStream open(String binaryName) throws IOException;
+
+    /// Opens output for a binary name emitted by a named module.
+    /// The default preserves single-module sinks.
+    default OutputStream open(String module, String binaryName) throws IOException {
+        return open(binaryName);
+    }
 }

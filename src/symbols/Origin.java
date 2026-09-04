@@ -13,9 +13,13 @@ import java.util.Optional;
 /// the other two name an entry inside an archive, in the shape a jar URL uses:
 /// `vendor/x/x-sources.jar!/a/B.java`. Saying which archive and which entry is
 /// worth more than saying nothing, even where nothing can click it.
-public record Origin(byte[] classFile, Optional<String> source, String location) {
+public record Origin(byte[] classFile, Optional<String> source, String location, String module) {
 
     public Origin(byte[] classFile, Optional<String> source) {
-        this(classFile, source, "");
+        this(classFile, source, "", "");
+    }
+
+    public Origin(byte[] classFile, Optional<String> source, String location) {
+        this(classFile, source, location, "");
     }
 }

@@ -29,6 +29,19 @@ public final class ProjectTest {
 
     private ProjectTest() {}
 
+    private static Path app(Layout layout) throws IOException {
+        return layout.moduleOutput(layout.application().name());
+    }
+
+    private static Path entry(Layout layout, String name) throws IOException {
+        var module = layout.entrypointModule().orElseThrow();
+        return layout.moduleOutput(module.name());
+    }
+
+    private static Path tests(Layout layout) throws IOException {
+        return layout.moduleOutput(layout.testModule().orElseThrow().name());
+    }
+
     public static void run() throws IOException, InterruptedException {
         controlsProcesses();
         var root = Files.createTempDirectory("tuul-project");
@@ -85,25 +98,22 @@ public final class ProjectTest {
         var calls = new AtomicInteger();
         Compiler compiler = (request, classes) -> {
             calls.incrementAndGet();
-            var files = request.sources().stream().map(path -> path.getFileName().toString()).toList();
-            var name = files.contains("main.java")
-                    ? "main"
-                    : files.contains("run.java") ? "run" : "helloworld.Greeting";
-            try (var out = classes.open(name)) {
-                out.write(0);
-            }
-            return new Compiler.Result(1, List.of());
+            // Keep the injected seam while emitting real named-module output;
+            // strict graph validation must inspect a genuine descriptor.
+            return Compiler.system().compile(new Compiler.Request(request.sources(), request.modulePath(),
+                    request.module(), request.release(), request.debug(), request.patch(), request.addExports(),
+                    request.moduleSources()), classes);
         };
 
         var built = Build.compile(layout, compiler);
         Check.that("an injected Java compiler builds the project", built.ok());
         Check.that("the injected compiler writes library output",
-                Files.isRegularFile(layout.classes().resolve("helloworld/Greeting.class")));
+                Files.isRegularFile(app(layout).resolve("helloworld/Greeting.class")));
         Check.that("the injected compiler writes entrypoint output",
-                Files.isRegularFile(layout.entry("cli").resolve("main.class")));
+                Files.isRegularFile(entry(layout, "cli").resolve("cli/Main.class")));
         Check.that("an injected Java compiler builds tests", Build.compileTests(layout, compiler).ok());
         Check.that("the injected compiler writes test output",
-                Files.isRegularFile(layout.tests().resolve("run.class")));
+                Files.isRegularFile(tests(layout).resolve("helloworld/test/Run.class")));
 
         Build.compile(layout, compiler);
         Build.compileTests(layout, compiler);
@@ -131,55 +141,54 @@ public final class ProjectTest {
         Check.equal("a directory name is not a package name", "helloworld", Scaffold.library("hello-world"));
         Check.equal("scaffolding reports the library it made", "helloworld", Scaffold.create(project, "hello-world"));
         Check.that("it writes a library", Files.isRegularFile(project.resolve("src/helloworld/Greeting.java")));
-        Check.that("it writes an entrypoint", Files.isRegularFile(project.resolve("src/cli/main.java")));
-        Check.that("it writes a test", Files.isRegularFile(project.resolve("test/run.java")));
+        Check.that("it writes an entrypoint", Files.isRegularFile(project.resolve("entrypoints/cli/Main.java")));
+        Check.that("it writes a test", Files.isRegularFile(project.resolve("test/helloworld/test/Run.java")));
         Check.that("it writes the vendor directory", Files.isDirectory(project.resolve("vendor")));
         Check.throwing("it will not write over a project that exists",
                 () -> uncheck(() -> Scaffold.create(project, "hello-world")));
     }
 
-    /// The tree is the configuration: a directory holding main.java is an
-    /// entrypoint, the rest are libraries.
+    /// The tree is the configuration: a named Main entrypoint module is
+    /// separate from the application module.
     private static void reads(Layout layout) throws IOException {
-        Check.equal("entrypoints are the directories with a main.java", List.of("cli"), layout.entrypoints());
-        Check.equal("everything else is a library",
-                List.of("greet", "helloworld"),
-                layout.libraries().stream().map(path -> path.getFileName().toString()).toList());
-        Check.equal("cli is the entrypoint to run when none is named", "cli", layout.entrypoint(""));
-        Check.equal("and a named one is taken as given", "cli", layout.entrypoint("cli"));
+        Check.equal("entrypoints are the directories with a named Main", List.of("cli"), layout.entrypoints());
+        Check.equal("the application source root is one named module",
+                List.of("src"), layout.libraries().stream().map(path -> path.getFileName().toString()).toList());
+        Check.equal("cli is the entrypoint to run when none is named", "cli", layout.runEntrypoint("").name());
+        Check.equal("and a named one is taken as given", "cli", layout.runEntrypoint("cli").name());
     }
 
     private static void builds(Layout layout) throws IOException {
         Files.createDirectories(layout.resources());
         Files.writeString(layout.resources().resolve("application.properties"), "spring.application.name=hello\n");
         Files.writeString(layout.src().resolve("helloworld/package.txt"), "package-local\n");
-        Files.writeString(layout.src().resolve("cli/index.html"), "<h1>Hello</h1>\n");
+        Files.writeString(layout.entrypointsRoot().resolve("cli/index.html"), "<h1>Hello</h1>\n");
         var built = Build.compile(layout);
         Check.that("a scaffolded project compiles: " + built.problems(), built.ok());
-        Check.that("the library lands in build/classes",
-                Files.isRegularFile(layout.classes().resolve("helloworld/Greeting.class")));
-        Check.that("each entrypoint lands apart from it, since every main.java is class main",
-                Files.isRegularFile(layout.entry("cli").resolve("main.class")));
-        Check.that("root resources land at the classpath root",
-                Files.isRegularFile(layout.classes().resolve("application.properties")));
+        Check.that("the library lands in its named module output",
+                Files.isRegularFile(app(layout).resolve("helloworld/Greeting.class")));
+        Check.that("each entrypoint lands in its named module",
+                Files.isRegularFile(entry(layout, "cli").resolve("cli/Main.class")));
+        Check.that("root resources land at the module root",
+                Files.isRegularFile(app(layout).resolve("application.properties")));
         Check.that("a Spring-style root lookup finds application.properties",
                 rootResource(layout, "application.properties"));
         Check.that("package-local resources remain beside library classes",
-                Files.isRegularFile(layout.classes().resolve("helloworld/package.txt")));
-        Check.that("entrypoint resources retain their classpath-root path",
-                Files.isRegularFile(layout.entry("cli").resolve("index.html")));
+                Files.isRegularFile(app(layout).resolve("helloworld/package.txt")));
+        Check.that("entrypoint resources retain their module-root path",
+                Files.isRegularFile(entry(layout, "cli").resolve("cli/index.html")));
 
         var tests = Build.compileTests(layout);
         Check.that("and its tests compile against it: " + tests.problems(), tests.ok());
     }
 
     private static void caches(Layout layout) throws IOException {
-        var classes = layout.classes().resolve("helloworld/Greeting.class");
+        var classes = app(layout).resolve("helloworld/Greeting.class");
         var classesBefore = Files.getLastModifiedTime(classes);
         Check.that("a current project does not invoke javac again", Build.compile(layout).ok());
         Check.equal("the cached library output is left alone", classesBefore, Files.getLastModifiedTime(classes));
 
-        var tests = layout.tests().resolve("run.class");
+        var tests = tests(layout).resolve("helloworld/test/Run.class");
         var testsBefore = Files.getLastModifiedTime(tests);
         Check.that("current tests do not invoke javac again", Build.compileTests(layout).ok());
         Check.equal("the cached test output is left alone", testsBefore, Files.getLastModifiedTime(tests));
@@ -187,28 +196,39 @@ public final class ProjectTest {
         Files.writeString(layout.resources().resolve("application.properties"), "spring.application.name=changed\n");
         Check.that("changing a root resource invalidates the library build", Build.compile(layout).ok());
         Check.equal("the changed root resource reaches build output", "spring.application.name=changed\n",
-                Files.readString(layout.classes().resolve("application.properties")));
+                Files.readString(app(layout).resolve("application.properties")));
     }
 
     private static boolean rootResource(Layout layout, String name) throws IOException {
-        try (var loader = new java.net.URLClassLoader(new java.net.URL[] {layout.classes().toUri().toURL()})) {
-            return loader.getResource(name) != null;
+        try {
+            var module = layout.application().name();
+            var configuration = ModuleLayer.boot().configuration().resolve(
+                    ModuleFinder.of(), ModuleFinder.of(app(layout)), java.util.Set.of(module));
+            var controller = ModuleLayer.defineModulesWithOneLoader(configuration,
+                    List.of(ModuleLayer.boot()), ProjectTest.class.getClassLoader());
+            return controller.layer().findLoader(module).getResource(name) != null;
+        } catch (RuntimeException failure) {
+            throw new IOException("cannot load project module " + layout.application().name(), failure);
         }
     }
 
     private static void launches(Layout layout) throws IOException, InterruptedException {
         var out = new StringWriter();
         var status = Launch.run(
-                Launch.java(List.of(), List.of(layout.classes(), layout.entry("cli")), "main", List.of("tuul")),
+                Launch.javaModule(List.of("--enable-native-access=" + layout.application().name()),
+                        List.of(app(layout), entry(layout, "cli")),
+                        layout.entrypointModule().orElseThrow().name(), "cli.Main", List.of("tuul")),
                 layout.root(),
                 out);
         Check.equal("a built entrypoint runs", 0, status);
         Check.equal("with the arguments it was given", "Hello, tuul!\n", out.toString());
 
         var tests = new StringWriter();
+        var testModule = layout.testModule().orElseThrow();
         Check.equal("so do the tests",
                 0,
-                Launch.run(Launch.java(List.of(), List.of(layout.classes(), layout.tests()), "run", List.of()),
+                Launch.run(Launch.javaModule(List.of("--enable-native-access=" + layout.application().name()),
+                                List.of(app(layout), tests(layout)), testModule.name(), layout.testMain(), List.of()),
                         layout.root(), tests));
         Check.that("and they say so", tests.toString().contains("all tests passed"));
     }
@@ -262,15 +282,15 @@ public final class ProjectTest {
                 !Build.compile(new Layout(project.resolve("nowhere"))).ok());
     }
 
-    /// A dependency that is on the classpath to compile and missing to run is a
-    /// dependency that fails on its first call. This runs the project the way
-    /// `tuul run` and `tuul test` do — through the application — because that is
-    /// where the classpath is assembled.
+    /// A dependency is resolved on the module path for both compilation and
+    /// execution. This runs the project through the same named launches as
+    /// `tuul run` and `tuul test`.
     private static void vendored(Layout layout, Path project) throws IOException {
         var classes = new LinkedHashMap<String, byte[]>();
         var source = Files.createTempDirectory("tuul-tiny");
         source.toFile().deleteOnExit();
         Files.createDirectories(source.resolve("tiny"));
+        Files.writeString(source.resolve("module-info.java"), "module tiny { exports tiny; }\n");
         Files.writeString(source.resolve("tiny/Tiny.java"), """
                 package tiny;
 
@@ -291,23 +311,49 @@ public final class ProjectTest {
             }
         }
 
-        Files.writeString(project.resolve("src/cli/main.java"), """
+        Files.writeString(project.resolve("src/module-info.java"), """
+                module helloworld.app {
+                    requires tiny;
+                    exports helloworld;
+                    exports greet;
+                }
+                """);
+        Files.writeString(project.resolve("entrypoints/module-info.java"), """
+                module helloworld.entrypoints {
+                    requires helloworld.app;
+                    requires tiny;
+                }
+                """);
+        Files.writeString(project.resolve("test/module-info.java"), """
+                module helloworld.test {
+                    requires helloworld.app;
+                    requires tiny;
+                }
+                """);
+
+        Files.writeString(project.resolve("entrypoints/cli/Main.java"), """
+                package cli;
                 import tiny.Tiny;
 
-                void main(String[] args) {
+                public final class Main {
+                public static void main(String[] args) {
                     System.out.println(Tiny.hello());
                 }
+                }
                 """);
-        Files.writeString(project.resolve("test/run.java"), """
-                void main() {
+        Files.writeString(project.resolve("test/helloworld/test/Run.java"), """
+                package helloworld.test;
+                public final class Run {
+                public static void main(String[] args) {
                     if (!tiny.Tiny.hello().isBlank()) System.out.println("all tests passed");
+                }
                 }
                 """);
 
-        Check.equal("a vendored jar is on the classpath that runs the application",
+        Check.equal("a vendored jar is on the module path for the application",
                 "from a vendored jar\n",
                 ran(layout, Message.of("project.run")));
-        Check.that("and on the one that runs the tests",
+        Check.that("and on the module path for the tests",
                 ran(layout, Message.of("project.test")).contains("all tests passed"));
     }
 
@@ -320,10 +366,11 @@ public final class ProjectTest {
         var sources = installed.directory().resolve(Version.artifact() + "-sources.jar");
         Check.that("it writes a jar named for the version", Files.isRegularFile(jar));
         Check.that("and a sources jar beside it", Files.isRegularFile(sources));
-        Check.that("the vendor contents put the binary on the classpath and keep sources off it",
-                Vendor.of(List.of(layout.vendor())).runtime().contains(jar)
-                        && !Vendor.of(List.of(layout.vendor())).runtime().contains(sources)
-                        && Vendor.of(List.of(layout.vendor())).sources().contains(sources));
+        var vendor = Vendor.of(List.of(layout.vendor()));
+        var graph = vendor.graph(List.of("tuul"));
+        Check.that("the vendor graph puts the binary on the module path and keeps sources off it",
+                graph.module("tuul").flatMap(module -> module.origin().path()).orElseThrow().equals(jar)
+                        && !vendor.artifacts().containsKey(sources) && vendor.sources().contains(sources));
         Check.equal("it vendors a library for every platform tuul ships, because vendor/ is committed",
                 Platform.SHIPPED.stream().map(Platform::directory).toList(),
                 installed.platforms());
@@ -338,7 +385,7 @@ public final class ProjectTest {
         Check.that("the libraries are in it", entries.contains("json/Json.class"));
         Check.that("the named module declaration is in it", entries.contains("module-info.class"));
         Check.that("the sources carry the same module declaration", entries(sources).contains("module-info.java"));
-        Check.that("no entrypoint is: a default-package class would take a name it does not own",
+        Check.that("no entrypoint is: a named module owns its entrypoint class",
                 entries.stream().noneMatch(entry -> entry.endsWith(".class")
                         && !entry.contains("/") && !entry.equals("module-info.class")));
         var module = ModuleFinder.of(jar).find("tuul").orElseThrow().descriptor();

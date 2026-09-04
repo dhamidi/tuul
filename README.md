@@ -13,9 +13,9 @@ It borrows:
 - **from mise** — CLI ergonomics: a simple, predictable task-running surface
   (`tuul run <task>`), not its config format.
 
-> **Status:** parts of this README are still the target, not a changelog.
-> What runs today is `tuul new`, `tuul add`, `tuul install`, `tuul build`, `tuul run`,
-> `tuul dev`, `tuul test`, `tuul docs`, `tuul bind` and `tuul self-test`, over seven
+> **Current status:** What runs today is `tuul new`, `tuul add`, `tuul install`,
+> `tuul build`, `tuul run`, `tuul dev`, `tuul test`, `tuul docs`, `tuul bind`,
+> `tuul browse`, `tuul hyperspec`, `tuul message` and `tuul self-test`, over seven
 > libraries: `json` (streaming
 > parser and serializer), `application` (the Elm Architecture runtime from
 > [ARCHITECTURE.md](./ARCHITECTURE.md)), `fetch` (streaming HTTP with sessions
@@ -31,17 +31,18 @@ It borrows:
 > read from the matching source — a `-sources.jar` for a dependency,
 > `lib/src.zip` for the JDK. `tuul run [entry] -- <args>` runs an entrypoint;
 > running a file from `tasks/` is not implemented yet. `tuul new` scaffolds
-> the library, the entrypoint, the native module and the FFI wrapper
-> described below, but no vendored dependencies and no `tasks/`. `console`,
-> `generate`, `release`, `deploy` and `doctor` do not exist.
+> the named application and entrypoint modules, a reloadable web entrypoint,
+> the native module and the FFI wrapper described below, but no vendored
+> dependencies and no tasks. `console`, `generate`, `release`, `deploy` and
+> `doctor` do not exist.
 >
-> Today, `tuul build` compiles classes and native code into `build/`. It does
-> not assemble the runnable jar described below. `tuul release` does not exist
-> yet.
+> Today, `tuul build` compiles named modules into `build/modules/` and native
+> code into `build/native/`. It does not assemble a runnable jar or release
+> image.
 >
-> Today, Tuul compiles its libraries as the explicit module `tuul`. It compiles
-> its CLI separately and runs that CLI from the classpath. The `tuul.tasks`
-> split described below is the target.
+> Tuul compiles its libraries as the explicit module `tuul` and its CLI as the
+> explicit module `tuul.cli`. A project application graph includes `tuul` only
+> when its source descriptor requires it; it never needs the CLI module.
 >
 > `tuul install` vendors tuul into a project the way anything else gets
 > there — a jar, a sources jar, and a compiled SQLite for each of the six
@@ -75,22 +76,37 @@ request and response bodies.
   second.
 - There is exactly one step between intent and action: `tuul add`, not
   "edit this XML file, then re-import the project."
-- No external config language, and no dependency manifest to keep in sync.
-  Deploy targets are declared in a plain Java file `tuul` runs directly — not
-  TOML, not YAML, not a Groovy/Kotlin DSL. Tasks are files under `tasks/`.
-  Build, release, and other task Java files contain their inputs. The files
-  under `vendor/` are the complete dependency set. These two inputs contain
-  all project and dependency state.
+- No external config language or dependency manifest to keep in sync. The
+  module descriptors and source files contain project state. The files under
+  `vendor/` are the complete dependency set.
 - The file tree *is* the documentation. A library holds the application;
   entrypoints are thin call-throughs. Open the tree and you can see what the
   app does before reading a line of code.
 - Java modules follow runtime boundaries, not package boundaries. Tuul's
-  runtime libraries form the module `tuul`. Tuul's CLI and build commands
-  form `tuul.tasks`.
+  runtime libraries form the module `tuul`. The CLI entrypoint is the separate
+  named module `tuul.cli`.
 - A managed project separates application code, runtime entrypoints, tests,
   and development tasks. Each source set is an explicit Java module.
 
 See [AGENTS.md](./AGENTS.md) for the full set of commandments.
+
+## Module invariant
+
+Maven coordinates acquire artifacts. The resolved JPMS module graph decides
+how every application compiles, runs, tests, reloads, documents, analyzes,
+packages, and releases.
+
+Tuul preserves module identity and JPMS rules across each command. It does not
+flatten named modules into a classpath or a class graph. Tuul does not compile
+or launch application code on the classpath or in the unnamed module. A source
+root without `module-info.java` is invalid. Reload compiles the complete named
+module closure into memory and defines a fresh layer for each generation.
+
+Tuul-aware modules provide `reload.Program`. An external HTTP module can use
+only `jdk.httpserver` and provide `com.sun.net.httpserver.HttpHandler`.
+`web.reload` serves either provider through one stable listener. Requests lease
+one generation, old generations drain, and the last good generation remains
+active after a failed change.
 
 ## Library design: fetch
 
@@ -123,10 +139,10 @@ tuul install
 tuul dev
 ```
 
-The target `tuul new` command does not scaffold a blank project. It creates a
-working reference with libraries, entrypoints, tasks, tests, and native code.
-The target tree appears in [Project structure](#project-structure). Extend
-that reference instead of starting from nothing. `tuul dev` compiles a new
+`tuul new` does not scaffold a blank project. It creates a working reference
+with application and entrypoint modules, tests, and native code. The current
+tree appears in [Project structure](#project-structure). Extend that reference
+instead of starting from nothing. `tuul dev` compiles a new
 generation when source changes and activates it without restarting the host.
 
 ## Commands
@@ -135,25 +151,16 @@ generation when source changes and activates it without restarting the host.
 |---|---|
 | `tuul new <name>` | Scaffold a new Tuul-managed project |
 | `tuul add <group:artifact:version>...` | Resolve and install one Maven dependency graph into `vendor/` |
-| `tuul remove <name>` | Delete a dependency from `vendor/` |
 | `tuul dev` | Serve the application and hot reload a valid source change |
-| `tuul build` | Produce one runnable jar with all runtime and native dependencies |
-| `tuul release` | Produce a `jlink` image for the host platform |
-| `tuul release --target <platform>` | Produce a `jlink` image for one platform |
-| `tuul release --all` | Produce a `jlink` image for each supported platform |
+| `tuul build` | Compile each named source module into `build/modules/` and native code into `build/native/` |
 | `tuul test` | Run the test module |
-| `tuul run <name>` | Run a named entrypoint or development task |
-| `tuul console` | Open a REPL with the application's module path |
-| `tuul generate <what>` | Generate a library, entrypoint, task, native module, or test |
+| `tuul run <name>` | Run a named entrypoint |
 | `tuul docs <symbol>` | Query symbols, members, and package documents in the application, dependencies, and JDK |
 | `tuul docs <symbol> --code` | Print the source of a symbol, member, or document |
 | `tuul docs --search <text>` | Search the application, selected dependencies, and exported JDK types, grouped by package |
-| `tuul deploy` | Release and ship the application |
-| `tuul doctor` | Check the JDK, module graph, and `vendor/` |
 
-Entrypoint and task names share one command namespace. `tuul run` refuses a
-name that identifies both. Arguments after `--` go to the selected entrypoint
-or task.
+`tuul run` selects a named entrypoint. Arguments after `--` go to that
+entrypoint.
 
 ## Example: adding a dependency
 
@@ -168,7 +175,7 @@ add.complete 9 downloaded, 0 cached, 0 failed
 
 Tuul resolves all command-line roots as one graph. It uses breadth-first
 conflict mediation. The nearest version wins. Declaration order breaks a tie.
-The roots, exclusions, and duplicate exceptions apply only to that invocation.
+The roots and exclusions apply only to that invocation.
 Put repeatable dependency setup in a Java task. The published JARs then become
 the dependency set.
 
@@ -176,7 +183,7 @@ Tuul downloads to a temporary directory outside `vendor/`. It verifies
 SHA-256, or SHA-1 when SHA-256 metadata is not present. It reports a warning
 when a repository has no checksum metadata. It validates each JAR before
 publication. A required-file failure leaves `vendor/` unchanged. Source and
-javadoc JARs are optional and never enter a classpath.
+javadoc JARs are optional and never enter a module path.
 
 Maven GET requests use at most four attempts. Tuul retries transport failures,
 HTTP 408, 425, 429, 500, 502, 503, and 504. It honors `Retry-After`. It does not
@@ -200,7 +207,7 @@ add.complete 3 downloaded, 0 cached, 0 failed
 
 Commit the coordinate directories under `vendor/`. A fresh clone then builds
 and runs without a network request. Every binary JAR under `vendor/` enters
-the application and test classpaths. Source and javadoc JARs contribute only
+the application and test module paths. Source and javadoc JARs contribute only
 to documentation.
 
 Vendoring sources, not just compiled classes, is also what makes `tuul docs`
@@ -217,10 +224,9 @@ profiles are supported. Other profile activation, system scope, unresolved
 dependency properties, and unknown artifact types stop resolution with an
 explicit error.
 
-`tuul add` scans runtime binaries for duplicate class names. It reports every
-owning coordinate and stops before publication. Use `--exclude group:artifact`
-to remove a dependency path. Use `--allow-duplicate package.Type` only when the
-duplicate is intentional. Both choices apply only to the current invocation.
+`tuul add` resolves runtime binaries as named JPMS modules. It rejects invalid
+or unnamed artifacts, duplicate module names, and split packages before
+publication. Use `--exclude group:artifact` to remove a dependency path.
 
 Use `tuul add --dry-run <coordinates>` to see the selected graph and files that
 are missing from `vendor/`. An add preserves files from earlier invocations.
@@ -237,129 +243,87 @@ deployed change using only `tuul`:
 $ tuul new invoicing
 $ cd invoicing
 $ tuul add com.stripe:stripe-java:27.0.0
-$ tuul generate library billing
-# agent writes src/billing/*.java (the library),
-# then a small call from entrypoints/invoicing/cli/Main.java
+# agent writes src/billing/*.java and updates a named module descriptor
 $ tuul test
 $ tuul build
-$ java -jar build/invoicing.jar
-$ tuul release --target linux-x86_64
-$ tuul deploy
+$ java --module-path build/modules/invoicing.app:build/modules/invoicing.entrypoints:<vendor-module-paths> \
+    --module invoicing.entrypoints/cli.Main
 ```
+
+`<vendor-module-paths>` means the explicit JAR paths in the resolved vendor
+graph. A shell wildcard does not describe Tuul's nested vendor layout. Tuul's
+own `run` command constructs this module path from the graph.
 
 No build-file XML to hand-edit, no separate wrapper script, no IDE project
 files to keep in sync — the agent only ever needs to know `tuul`.
 
 ## Project structure
 
-This is the target output of `tuul new invoicing`. Each source root has one
+This is the current output of `tuul new invoicing`. Each source root has one
 module descriptor. Packages remain directories inside those source roots.
 
 ```
 invoicing/
-├── project.java                 # deploy target — plain Java, run by tuul
-├── vendor/                      # complete dependency set; no manifest
-│   └── com.fasterxml.jackson.core/
-│       └── jackson-databind/
-│           └── 2.18.1/
-│               ├── jackson-databind-2.18.1.jar
-│               └── jackson-databind-2.18.1-sources.jar
+├── vendor/                      # complete dependency set
 ├── native/
-│   └── hello.c                  # native module: hello world, callback via function pointer
+│   └── hello.c                  # native callback example
 ├── src/
-│   ├── module-info.java         # module invoicing
-│   ├── resources/
-│   │   └── application.properties # copied to the classpath root
-│   ├── invoicing/                # library: core domain logic
-│   │   ├── Invoice.java
-│   │   ├── Invoices.java
-│   │   └── Ledger.java
-│   ├── reporting/                 # library: built on invoicing
-│   │   ├── Report.java
-│   │   └── Renderer.java
-│   └── greet/                   # library: FFI wrapper around native/hello.c
-│       └── Greeter.java          # java.lang.foreign — no JNI or generated glue
+│   ├── module-info.java         # module invoicing.app
+│   ├── invoicing/
+│   │   └── Greeting.java       # application code
+│   └── greet/
+│       └── Greeter.java        # FFM wrapper around native/hello.c
 ├── entrypoints/
-│   ├── module-info.java         # module invoicing.entrypoints
-│   └── invoicing/
-│       ├── cli/
-│       │   └── Main.java        # command-line entrypoint
-│       ├── gui/
-│       │   └── Main.java        # desktop entrypoint
-│       └── web/
-│           └── Main.java        # HTTP entrypoint
-├── tasks/
-│   ├── module-info.java         # module invoicing.tasks
-│   └── invoicing/tasks/
-│       ├── Format.java
-│       ├── Native.java          # builds native/hello.c with zig cc
-│       └── Deploy.java
+│   ├── module-info.java         # module invoicing.entrypoints; provides reload.Program
+│   ├── cli/
+│   │   └── Main.java            # command-line entrypoint
+│   └── web/
+│       └── Main.java            # HTTP entrypoint and reload.Program provider
 └── test/
     ├── module-info.java         # module invoicing.test
-    └── invoicing/
-        ├── InvoicesTest.java
-        ├── RendererTest.java
-        └── GreeterTest.java
+    ├── invoicing/tests/GreetingTest.java
+    ├── greet/tests/GreeterTest.java
+    └── invoicing/test/Run.java
 ```
 
-**Application module.** The module `invoicing` contains the application
-packages. The `reporting` package can depend on the `invoicing` package. No
-application package depends on an entrypoint or development task.
+**Application module.** The module `invoicing.app` contains the application
+packages `invoicing` and `greet`. No application package depends on an
+entrypoint.
 
-**Entrypoint module.** The module `invoicing.entrypoints` contains the CLI,
-GUI, and web entrypoints. It requires `invoicing` and `tuul`. Each entrypoint
+**Entrypoint module.** The module `invoicing.entrypoints` contains the CLI and
+web entrypoints. It requires `invoicing.app` and `tuul`. Each entrypoint
 parses input, calls the application, and renders output. It contains no
 application rules.
 
-**Task module.** The module `invoicing.tasks` contains development tasks. It
-requires `invoicing` and `tuul.tasks`. A release does not include this module.
+Tasks are not implemented in the current command surface. A scaffolded
+project has no task module.
 
 **Test module.** The module `invoicing.test` contains the tests and test-only
-dependencies. A release does not include this module.
+dependencies. It is used by `tuul test` and is not part of application runtime.
 
 **Tuul modules.** `tuul install` vendors one jar. That jar is the explicit
 module `tuul`. Packages such as `application`, `json`, and `web` belong to it.
 A project declares `requires tuul`. It does not require each package.
 
-The module `tuul.tasks` requires `tuul`. It contains Tuul's CLI and the
-`project`, `symbols`, `docs`, `browser`, and `selftest` packages. These
-packages implement `Build`, `Run`, `Test`, `Install`, documentation, and
-self-test commands.
+The module `tuul.cli` requires `tuul` and contains only the Tuul CLI
+entrypoint. The `project`, `symbols`, `docs`, `browser`, and `selftest`
+packages belong to the library module `tuul`; they implement the command
+behavior used by that entrypoint.
 
-`tuul install` does not vendor `tuul.tasks`. Applications do not need that
+`tuul install` does not vendor `tuul.cli`. Applications do not need that
 module at run time. This boundary keeps compiler and build tools out of a
 release image.
 
-`tuul run` compiles a project task module against the tool's `tuul.tasks`
-module. It does not copy `tuul.tasks` into the project or its release.
+`tuul run` launches a named project entrypoint with its resolved module graph.
 
 Tuul compiles and tests each source root as an explicit module. It uses the
-module path for the application, entrypoints, tasks, tests, and dependencies.
-The regular runnable jar is the deliberate exception described below.
+module path for the application, entrypoints, tests, and dependencies.
+There is no classpath or runnable-jar exception.
 
 **Dependencies.** There is no hand-written manifest for these. Commands such as
 `tuul add com.fasterxml.jackson.core:jackson-databind:2.18.1` and
 `tuul add org.xerial:sqlite-jdbc:3.46.0.0` resolve a graph and populate
 coordinate directories. The JARs present under `vendor/` are the dependencies.
-
-**Tasks.** Each Java file under `tasks/` is one task. Tuul discovers the task
-from its class name. No registry or `project.java` entry is necessary.
-
-```java
-// tasks/invoicing/tasks/Deploy.java
-package invoicing.tasks;
-
-import tuul.tasks.Project;
-
-public final class Deploy {
-    public static void run(Project project) {
-        project.build();
-        project.upload("prod");
-    }
-}
-```
-
-`tuul run deploy` runs the task. Delete the file to remove the task.
 
 **Native module.** `native/hello.c` is the default hello-world: a C function
 that takes a function pointer and calls it back.
@@ -393,49 +357,44 @@ The C side calling back into the Java side through a real function pointer,
 with no JNI in between, is the whole point of the default: it's a template
 for wiring in an actual native library, not a toy that gets deleted.
 
-## Build and release artifacts
+## Build artifacts
 
-### Runnable jar
+### Modular build output
 
-`tuul build` writes one platform-neutral artifact:
+`tuul build` writes one output directory per named source module:
 
 ```text
-build/invoicing.jar
+build/modules/
+├── invoicing.app/
+└── invoicing.entrypoints/
 ```
 
-The jar contains:
+Each directory is an exploded named module. Runtime dependency modules remain
+separate files under `vendor/`; the resolved module graph is the complete
+runtime input.
 
-- the application and entrypoint classes,
-- all runtime dependency classes,
-- all runtime resources,
-- the native libraries for each supported platform.
+Put a module resource in `src/resources/`. For example,
+`src/resources/application.properties` is packaged in module `invoicing.app`.
+Resources remain owned by their module. Resource changes invalidate the
+related module output.
 
-Put a classpath-root resource in `src/resources/`. For example,
-`src/resources/application.properties` becomes
-`build/classes/application.properties`. A non-Java file in another `src/`
-package stays beside that package. An entrypoint resource stays relative to
-its entrypoint output. Resource changes invalidate the related build output.
-
-The manifest selects the CLI entrypoint when the project has one. Otherwise,
-it selects the only entrypoint. A machine with JDK 27 runs the application
-without Tuul:
+Tuul compiles the explicit module graph before it assembles modular artifacts.
+Run an entrypoint by naming its module and main class:
 
 ```sh
-java -jar build/invoicing.jar
+java --module-path build/modules/invoicing.app:build/modules/invoicing.entrypoints:<vendor-module-paths> \
+    --module invoicing.entrypoints/cli.Main
 ```
 
-Tuul compiles the explicit module graph before it assembles the jar. It then
-combines the runtime modules into one jar. `java -jar` runs that jar in the
-unnamed module. The manifest enables native access for `ALL-UNNAMED`.
+The module path preserves module identity and JPMS access checks. Tuul does not
+combine application modules into a flat jar or launch them in the unnamed
+module.
 
-The jar contains each supported native variant. At startup, the runtime
-selects the host variant. It extracts that variant to a content-addressed
-cache and loads it from there.
+Native libraries remain under `build/native` or the installed module's native
+directory. At startup, the runtime selects the host variant from those
+module-owned resources.
 
-The jar does not contain test modules, project task modules, or `tuul.tasks`.
-It needs a JDK, but it does not need a Tuul installation or a C compiler.
-
-### Release images
+## Target direction: release images (not implemented)
 
 `tuul release` writes a `jlink` application image under the host platform.
 The platform name contains the operating system and instruction set.
@@ -466,7 +425,7 @@ build/release/linux-x86_64/
 The image contains the application module, the entrypoint module, `tuul`,
 runtime dependencies, and the necessary JDK modules. It contains only the
 native libraries for its target. It excludes tests, development tasks, and
-`tuul.tasks`.
+`tuul.cli`.
 
 The generated launchers preserve the named module graph. They enable native
 access for `tuul`. They also enable it for an application module that uses the
@@ -490,9 +449,10 @@ Cross-linking does not compile native code. Each native dependency must supply
 a binary for the selected platform. Tuul already uses this rule when it
 vendors SQLite.
 
-`jlink` accepts explicit modules only. `tuul doctor` reports each automatic
-module before a release. `tuul release` stops and names any automatic module
-that remains. A target environment or emulator must test each foreign image.
+Tuul accepts explicit modules only. A dependency artifact without
+`module-info.class` is rejected during graph resolution with an actionable
+diagnostic. This keeps compile, run, test, reload, and release on one explicit
+JPMS graph. A target environment or emulator must test each foreign image.
 
 ## Example: querying the code index
 

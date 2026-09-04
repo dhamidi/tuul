@@ -53,8 +53,8 @@ public record Home(Path root, Path classes, Path sources, Path natives) {
     /// This reads the directories above the classes and answers the first one
     /// that holds both `src/` and `native/`. It does not count levels, because
     /// the number of them depends on where the compiler was told to write.
-    /// `mise run build` writes `build/classes` and makes it two. An agent that
-    /// compiles into `build/mine/classes` to leave a running server alone makes
+    /// `mise run build` writes `build/modules/tuul` and makes it two. An agent
+    /// that compiles into `build/mine/modules/tuul` to leave a running server alone makes
     /// it three, and `tuul install` must still work there.
     ///
     /// When no directory above holds both, this answers two levels up. That is

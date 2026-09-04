@@ -136,34 +136,20 @@ them:
 
 ## Packages and Java modules
 
-This file used "module" for a package (`json`, `peg`). A Java module in the
-JPMS sense is only `tuul`.
+Tuul's library is the named module `tuul`. Its packages remain ordinary Java
+packages inside that module. A managed project has named application,
+entrypoint, test, and task modules, each with its own `module-info.java`.
 
-Each directory under `src/` is a Java package. `json`, `actors` and `web.ui`
-are packages. They are not Java modules.
+Maven coordinates acquire artifacts. The resolved JPMS graph owns module
+identity, package ownership, exports, opens, services, and readability. Build,
+run, test, reload, documentation, and release consume that graph. They do not
+flatten it into a classpath or a class graph.
 
-The jar that `tuul install` vendors is one Java module, named `tuul`. A
-project writes `requires tuul` or `import module tuul`. It does not require
-each package as a module.
-
-A Java module per package would add a `module-info.java` to every directory.
-Tuul has no third-party modules to isolate. The packages already call each
-other through `application` and `json`. That is one library, not a set of
-optional products.
-
-The CLI is an unnamed class in `src/cli/main.java`. The unnamed package
-cannot belong to a named module. `tuul install` leaves that class out of
-the library jar. The tool stays on the classpath. The library is
-`module tuul`.
-
-A project uses the same split. `src/web/main.java` is unnamed and stays on
-the classpath. The vendored jar is `tuul`. If the application has no native
-code of its own, native access is `--enable-native-access=tuul`.
-
-A custom runtime from `jlink` needs a named module. `tuul deploy` builds
-that runtime from `module tuul`. The source tree has one `module-info.java`.
-The build compiles the library as that module. It compiles the CLI separately
-and keeps the CLI on the classpath.
+The CLI is the named module `tuul.cli`. It requires the library module and the
+JDK modules that the CLI uses. The `project`, `symbols`, `docs`, `browser`, and
+`selftest` packages remain in `tuul`; `tuul.cli` contains the CLI entrypoint.
+A project entrypoint is also named and requires its application module and the
+modules it calls.
 
 ## Reload and module layers
 
@@ -171,20 +157,22 @@ UI code is Java that implements `web.ui.Component`. `web.Page` builds a new
 application for each request. The next request can load new classes. A
 request that is already running keeps the old classes.
 
-The JDK type for that swap is a child class loader. When the application is
-a named module, it is a `ModuleLayer`. The parent holds tuul: `application`,
-`actors`, `web`, `sqlite3`, `json`. The child holds the application's views
-and pages.
+The JDK type for that swap is a fresh `ModuleLayer`. The parent holds Tuul's
+stable contracts. The child holds the complete application module closure.
+Compilation defines the layer from in-memory class bytes and writes no class
+files to disk.
 
-A change to those sources compiles into a new child. The server replaces
-the handler that `Http.start` calls. Pages that are open refresh through
-Turbo. This reload is not built yet. `tuul dev` in the README restarts the
-process instead.
+A Tuul-aware entrypoint provides `reload.Program`. An external HTTP module can
+provide only `com.sun.net.httpserver.HttpHandler` from `jdk.httpserver`.
+`web.reload` adapts either service to the stable listener. A source change
+defines a new layer, validates it, and replaces the leased handler. Requests
+already admitted finish on the old layer; the last good layer remains active
+when compilation or activation fails.
 
-The child must not load `web.ui`. Views implement types from the parent.
-A second copy of `Component` in the child makes a cast fail.
+The child must not load a second copy of host contracts. Views implement types
+from the parent module.
 
-Actor state does not live in the child. `Definition.inspect` returns JSON
-so a caller never holds the state class across a reload. To change an
-actor, register a new `Definition` and evict it. That path does not use a
-new loader.
+Actor state does not live in the child. `Definition.inspect` returns JSON so a
+caller never holds the state class across a reload. To change an actor,
+register a new `Definition` and evict it. That path uses the same layer
+boundary.

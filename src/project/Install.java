@@ -25,9 +25,9 @@ import tuul.Version;
 /// a compiled SQLite for each supported platform. The jar is the named module
 /// `tuul`. These files are the installed dependency.
 ///
-/// A modular project reads the jar from its module path. An unnamed project
-/// reads the same jar from its classpath. The sources jar supplies comments to
-/// `tuul docs`. The native libraries let `sqlite3` run without a C compiler.
+/// A modular project reads the jar from its module path. The sources jar
+/// supplies comments to `tuul docs`. The native libraries let `sqlite3` run
+/// without a C compiler.
 ///
 /// Every platform, not just this one, because `vendor/` is committed: the
 /// person who clones this next is on a different machine, and a dependency that
@@ -36,9 +36,8 @@ import tuul.Version;
 /// `--source` vendors the C instead, for a platform tuul has no library for.
 /// That one needs a compiler in the project.
 ///
-/// Entrypoints are left out. `main.java` compiles to a class in the default
-/// package, and a library that puts one of those on a consumer's classpath is a
-/// library that has taken a name it does not own.
+/// Entrypoints are left out. A project owns its named entrypoint modules and
+/// launches them beside this `tuul` module.
 public final class Install {
 
     /// What was written. `platforms` names the libraries that landed, and is
@@ -87,8 +86,8 @@ public final class Install {
         return new Result(directory, Version.NUMBER, classes, written, platforms);
     }
 
-    /// An older tuul in the same directory would be a second copy of every class
-    /// on the project's classpath, so it goes before the new one arrives — and
+    /// An older tuul in the same directory would be a second copy of every
+    /// module, so it goes before the new one arrives — and
     /// so does whatever native shape the last install left, since the two are
     /// alternatives rather than additions.
     private static void forget(Path directory) throws IOException {
@@ -197,8 +196,8 @@ public final class Install {
     }
 
     /// A module declaration lives at the archive root. All other library
-    /// entries live in a package. This excludes each default-package CLI class
-    /// and the `cli/main.java` source.
+    /// entries live in a package. This excludes CLI entrypoint classes, which
+    /// belong to the separate `tuul.cli` module.
     private static boolean library(String entry) {
         if (entry.equals("module-info.class") || entry.equals("module-info.java")) return true;
         return entry.contains("/") && !entry.startsWith("cli/");
@@ -229,7 +228,7 @@ public final class Install {
     }
 
     /// The library half of tuul: everything in a package, which leaves out the
-    /// default-package entrypoints and the directories they live in.
+    /// CLI entrypoints and the directories they live in.
     ///
     /// A classes tree wants all of it, not only the `.class` files: a package
     /// that ships a stylesheet keeps it beside its own code, so the assets are

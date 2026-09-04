@@ -75,8 +75,8 @@ public final class Hyperspec {
         return run(Files.readString(spec, StandardCharsets.UTF_8), service);
     }
 
-    /// A spec that travels with the code that runs it, found the way the JDK
-    /// finds anything else on the classpath.
+    /// A spec that travels in the named module that runs it, found through the
+    /// owning class.
     ///
     /// A spec is a file — that is the point of it, and a file somebody can edit
     /// without a compiler — but a *path* only resolves when the process happens
@@ -91,7 +91,7 @@ public final class Hyperspec {
         return run(source(near, resource), service);
     }
 
-    /// The text of a spec on the classpath.
+    /// The text of a spec in the owning class's named module.
     ///
     /// A missing one is an [IOException] naming what was looked for and beside
     /// what — a null here would surface as a NullPointerException three frames
@@ -101,7 +101,8 @@ public final class Hyperspec {
         try (var found = near.getResourceAsStream(resource)) {
             if (found == null) {
                 throw new IOException("no spec at " + resource + " beside " + near.getName()
-                        + " — it has to be on the classpath, not only in the source tree");
+                        + " — it has to be in module " + near.getModule().getName()
+                        + ", not only in the source tree");
             }
             return new String(found.readAllBytes(), StandardCharsets.UTF_8);
         }

@@ -2,6 +2,9 @@ package symbols;
 
 import java.io.IOException;
 import java.io.UncheckedIOException;
+import java.lang.module.ModuleFinder;
+import java.util.Collection;
+import modules.ModuleGraph;
 import java.nio.file.Files;
 import java.nio.file.Path;
 import java.util.ArrayList;
@@ -14,9 +17,10 @@ import java.util.LinkedHashSet;
 
 /// The dependencies of a tuul-managed project.
 ///
-/// Every binary JAR under `vendor/` enters the runtime and test classpaths.
-/// A source or javadoc JAR contributes documentation and does not enter a
-/// classpath. No manifest or generated file selects dependencies.
+/// Every binary JAR under `vendor/` is a named JPMS module candidate for the
+/// runtime and test module paths. A source or javadoc JAR contributes
+/// documentation and does not enter a module path. No manifest or generated
+/// file selects dependencies.
 public final class Vendor {
 
     private static final String SOURCES = "-sources.jar";
@@ -66,14 +70,36 @@ public final class Vendor {
         return List.copyOf(new LinkedHashSet<>(paths));
     }
 
-    /// The binary JARs for compilation and runtime, in path order.
-    public List<Path> runtime() {
-        return binaries;
+    /// The resolved JPMS graph for every binary in this vendor tree.
+    ///
+    /// This is the dependency view for modular consumers. Execution and
+    /// compilation must use this graph and its module-path artifacts. Maven
+    /// coordinates remain available as node provenance.
+    public ModuleGraph graph(Collection<String> roots) throws IOException {
+        var artifacts = new LinkedHashMap<Path, String>();
+        for (var binary : binaries) artifacts.put(binary, coordinates.get(binary));
+        return ModuleGraph.resolve(artifacts, roots);
     }
 
-    /// The binary JARs for test compilation and runtime, in path order.
-    public List<Path> test() {
-        return binaries;
+    /// Resolves all vendor binaries using every discovered module as a root.
+    /// This is useful for diagnostics and tests; a project should pass its
+    /// actual entry module roots to [#graph(Collection)].
+    public ModuleGraph graph() throws IOException {
+        var roots = new LinkedHashSet<String>();
+        for (var binary : binaries) {
+            try {
+                ModuleFinder.of(binary).findAll().stream()
+                        .map(reference -> reference.descriptor().name()).forEach(roots::add);
+            } catch (RuntimeException ignored) {
+                // graph(Collection) reports malformed artifacts precisely.
+            }
+        }
+        return graph(roots);
+    }
+
+    /// Binary artifacts and their Maven coordinate provenance.
+    public Map<Path, String> artifacts() {
+        return Map.copyOf(coordinates);
     }
 
     /// The source archives attached to binary JARs, in binary path order.
@@ -152,24 +178,6 @@ public final class Vendor {
         return stamp.toString();
     }
 
-    public String testStamp() {
-        return stamp(binaries);
-    }
-
-    private static String stamp(List<Path> jars) {
-        var stamp = new StringBuilder();
-        for (var jar : jars) {
-            stamp.append(jar).append(':');
-            try {
-                stamp.append(Files.size(jar)).append(':').append(Files.getLastModifiedTime(jar).toInstant());
-            } catch (IOException gone) {
-                stamp.append("gone");
-            }
-            stamp.append('\n');
-        }
-        return stamp.toString();
-    }
-
     /// A file inside a vendored jar: what it says, and where a reader would
     /// have to look to see it themselves.
     public record Found(String text, String location) {}
@@ -181,9 +189,27 @@ public final class Vendor {
             if (found.isEmpty()) continue;
             var source = source(jar, sourceFile);
             return found.map(path -> new Origin(read(path), source.map(Found::text),
-                    source.map(Found::location).orElse(jar + "!/" + classFile)));
+                    source.map(Found::location).orElse(jar + "!/" + classFile), module(jar).map(ModuleInfo::name).orElse("")));
         }
         return Optional.empty();
+    }
+
+    /// Named module descriptors carried by binary dependencies. Unnamed jars
+    /// are deliberately absent: there is no module ownership to report for
+    /// them, and inventing one would make readability look like a classpath.
+    public List<ModuleInfo> modules() {
+        var found = new ArrayList<ModuleInfo>();
+        for (var jar : binaries) module(jar).ifPresent(found::add);
+        return List.copyOf(found);
+    }
+
+    private Optional<ModuleInfo> module(Path jar) {
+        try {
+            return ModuleFinder.of(jar).findAll().stream().findFirst()
+                    .map(reference -> ModuleInfo.of(reference.descriptor(), jar.toString()));
+        } catch (RuntimeException unreadable) {
+            return Optional.empty();
+        }
     }
 
     /// The top-level types a package holds, across every vendored jar.

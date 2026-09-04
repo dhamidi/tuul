@@ -40,7 +40,7 @@ public final class Tcl {
     private final ArrayList<Frame> frames = new ArrayList<>();
     private final ArrayList<Evaluation> evaluations = new ArrayList<>();
     private final Object gate = new Object();
-    private final ClassLoader loader;
+    private final List<Module> modules;
     private final LinkedHashSet<Class<?>> types = new LinkedHashSet<>();
     private final ArrayList<String> imports = new ArrayList<>();
     private Thread owner;
@@ -48,16 +48,24 @@ public final class Tcl {
     private long commandCount;
     private List<Object> lastErrorStack = List.of();
 
-    private Tcl() {
-        var context = Thread.currentThread().getContextClassLoader();
-        loader = context == null ? Tcl.class.getClassLoader() : context;
+    private Tcl(ModuleLayer layer) {
+        this.modules = modules(Objects.requireNonNull(layer, "layer"));
         frames.add(new Frame(root, root.variables, false, "", List.of()));
         install();
     }
 
-    /// Creates an interpreter with builtins in the root namespace.
+    /// Creates an interpreter with builtins in the boot module layer.
+    /// Java classes are available to `import` only when they belong to a
+    /// named module in that layer. The thread context class loader is ignored.
     public static Tcl of() {
-        return new Tcl();
+        return of(ModuleLayer.boot());
+    }
+
+    /// Creates an interpreter whose `import` lookup is limited to `layer` and
+    /// its parents. Pass the candidate layer when evaluating a generation.
+    /// Classes in the unnamed module or on a class path are never searched.
+    public static Tcl of(ModuleLayer layer) {
+        return new Tcl(layer);
     }
 
     /// Returns the interpreter of the current nested evaluation.
@@ -845,14 +853,27 @@ public final class Tcl {
     private Class<?> classNamed(String name) {
         var candidate = name;
         while (true) {
-            try {
-                return Class.forName(candidate, false, loader);
-            } catch (ClassNotFoundException | LinkageError ignored) {
-                var dot = candidate.lastIndexOf('.');
-                if (dot < 0) return null;
-                candidate = candidate.substring(0, dot) + "$" + candidate.substring(dot + 1);
+            for (var module : modules) {
+                try {
+                    var type = Class.forName(module, candidate);
+                    if (type != null) return type;
+                } catch (LinkageError ignored) {}
             }
+            var dot = candidate.lastIndexOf('.');
+            if (dot < 0) return null;
+            candidate = candidate.substring(0, dot) + "$" + candidate.substring(dot + 1);
         }
+    }
+
+    private static List<Module> modules(ModuleLayer layer) {
+        var found = new LinkedHashSet<Module>();
+        addModules(layer, found);
+        return List.copyOf(found);
+    }
+
+    private static void addModules(ModuleLayer layer, Set<Module> found) {
+        found.addAll(layer.modules());
+        for (var parent : layer.parents()) addModules(parent, found);
     }
 
     boolean permits(Class<?> type) {

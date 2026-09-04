@@ -181,7 +181,9 @@ public final class BrowserTest {
     static Path sources() throws IOException {
         var root = Files.createTempDirectory("tuul-browser");
         root.toFile().deleteOnExit();
-        var sources = Files.createDirectories(root.resolve("src").resolve("json"));
+        var sourceRoot = Files.createDirectories(root.resolve("src"));
+        Files.writeString(sourceRoot.resolve("module-info.java"), "module browser.fixture { exports json; }\n");
+        var sources = Files.createDirectories(sourceRoot.resolve("json"));
         Files.writeString(sources.resolve("Json.java"), """
                 package json;
 

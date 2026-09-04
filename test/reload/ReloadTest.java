@@ -20,6 +20,7 @@ public final class ReloadTest {
     public static void run() throws Exception {
         leasesLatestGeneration();
         rejectsWithoutChangingTheActiveGeneration();
+        rejectsAndClosesCandidateResources();
         drainsBeforeClosingResources();
         reloadsAnEphemeralActorAtATypeBoundary();
         preflightDoesNotMutateLoadedActors();
@@ -63,10 +64,23 @@ public final class ReloadTest {
         reload.submit(Revision.of("new", Generation::empty));
         Check.equal("the leased generation remains open", 0, closed.get());
         open.close();
+        open.close();
         for (var until = System.nanoTime() + 1_000_000_000L; closed.get() == 0 && System.nanoTime() < until;) {
             Thread.yield();
         }
         Check.equal("the generation closes after its lease drains", 1, closed.get());
+        reload.close();
+    }
+
+    private static void rejectsAndClosesCandidateResources() {
+        var closed = new AtomicInteger();
+        var reload = new Reload();
+        reload.submit(Revision.of("good", Generation::empty));
+        reload.validate(candidate -> List.of(new Problem("validate", "reject")));
+        var status = reload.submit(Revision.of("bad", () ->
+                Generation.empty().closing(closed::incrementAndGet)));
+        Check.equal("a rejected candidate closes its resources", 1, closed.get());
+        Check.equal("resource rejection keeps the last good revision", "good", status.activeRevision());
         reload.close();
     }
 

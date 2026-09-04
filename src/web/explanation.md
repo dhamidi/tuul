@@ -120,8 +120,8 @@ server. The root does not import the UI package to render a response.
 `Feature` is the composition boundary. A feature carries routes, handlers,
 assets, import-map pins, markup contributions, middleware, and resources to
 close. `Features` composes these in declaration order. It also mounts the
-asset route and applies feature middleware. A feature is explicit; nothing is
-discovered from a class path.
+asset route and applies feature middleware. A feature is explicit; module
+contents are not scanned for features.
 
 ## Why authentication is session handling
 

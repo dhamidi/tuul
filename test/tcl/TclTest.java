@@ -24,6 +24,7 @@ public final class TclTest {
         callsJavaAndBuildsCallbacks();
         createsJavaObjects();
         importsClasses();
+        ignoresThreadContextClassLoader();
         testsTypes();
         streamsSourceCommands();
         rejectsConcurrentUse();
@@ -213,6 +214,23 @@ public final class TclTest {
             Check.that("an unknown class cannot be imported", false);
         } catch (TclException.Error error) {
             Check.equal("an unknown class has a class lookup code", List.of("TCL", "LOOKUP", "CLASS", "java.util.NoSuchClass"), error.errorCode());
+        }
+    }
+
+    private static void ignoresThreadContextClassLoader() {
+        var previous = Thread.currentThread().getContextClassLoader();
+        try {
+            Thread.currentThread().setContextClassLoader(new ClassLoader(null) {
+                @Override protected Class<?> loadClass(String name, boolean resolve)
+                        throws ClassNotFoundException {
+                    throw new ClassNotFoundException(name);
+                }
+            });
+            var tcl = Tcl.of(ModuleLayer.boot()).imports("java.util.*");
+            Check.equal("module-layer lookup ignores the thread context loader",
+                    List.of("ArrayList"), tcl.eval("import java.util.ArrayList"));
+        } finally {
+            Thread.currentThread().setContextClassLoader(previous);
         }
     }
 

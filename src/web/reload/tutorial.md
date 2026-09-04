@@ -5,12 +5,23 @@ source and observe the next request use the new generation.
 
 For exact adapter behavior, read [reference.md](reference.md).
 
-## Define the program
+## Define a Tuul-aware module
 
-Create `src/web/main.java`. Implement `reload.Program` so the development host
-can build one complete generation without starting a second server:
+Create a named application module and provide one `reload.Program` service. The
+host loads this service from each fresh module layer:
 
 ```java
+module example.web {
+    requires tuul;
+    provides reload.Program with example.WebProgram;
+}
+```
+
+Implement the provider in `src/example/WebProgram.java`:
+
+```java
+package example;
+
 import reload.Generation;
 import reload.Program;
 import web.Responses;
@@ -18,7 +29,7 @@ import web.RouteRef;
 import web.Router;
 import web.reload.ReloadHandler;
 
-public final class main implements Program {
+public final class WebProgram implements Program {
 
     private static final RouteRef HOME = RouteRef.of("home", "/");
 
@@ -36,13 +47,14 @@ to the generation when the values own something that must close after drain.
 
 ## Start the development host
 
-Run the web entrypoint on port 8080:
+Run the single named module on port 8080:
 
 ```sh
-tuul dev web --port 8080
+tuul dev --port 8080
 ```
 
-The command compiles classes and snapshots resources in memory. It prints the
+The command compiles the complete named module closure and snapshots resources
+in memory. It prints the
 active generation and listening URL. It then watches project sources and
 resources.
 
@@ -53,6 +65,61 @@ curl http://localhost:8080/
 ```
 
 The response is `hello`.
+
+## Use an external JDK-only module
+
+An application with no Tuul imports can use one named source module. Create
+this tree (there is no `entrypoints/` directory):
+
+```text
+src/
+├── module-info.java
+└── example/
+    └── ExternalHandler.java
+vendor/
+```
+
+Declare the JDK HTTP service in `src/module-info.java`:
+
+```java
+module example.external {
+    requires jdk.httpserver;
+    provides com.sun.net.httpserver.HttpHandler with example.ExternalHandler;
+}
+```
+
+Implement `example.ExternalHandler` in `src/example/ExternalHandler.java`:
+
+```java
+package example;
+
+import com.sun.net.httpserver.HttpExchange;
+import com.sun.net.httpserver.HttpHandler;
+import java.io.IOException;
+import java.nio.charset.StandardCharsets;
+
+public final class ExternalHandler implements HttpHandler {
+    @Override
+    public void handle(HttpExchange exchange) throws IOException {
+        var body = "hello\\n".getBytes(StandardCharsets.UTF_8);
+        exchange.sendResponseHeaders(200, body.length);
+        try (var output = exchange.getResponseBody()) {
+            output.write(body);
+        }
+    }
+}
+```
+
+Start the host without an entrypoint name:
+
+```sh
+tuul dev --port 8080
+```
+
+`tuul dev` compiles this single named module in-process. It discovers exactly
+one JDK HTTP provider from the fresh module layer and keeps the listener
+stable. If the provider implements `AutoCloseable`, the generation closes it
+after the last request admitted to that layer drains.
 
 ## Change the application
 
@@ -66,7 +133,7 @@ Request the page again:
 curl http://localhost:8080/
 ```
 
-The response is `hello again`. The server keeps its port and process. A request
+The response is `hello again`. The server keeps its port. A request
 that already started finishes on the prior generation.
 
 ## Keep the last valid generation

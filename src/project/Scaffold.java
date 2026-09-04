@@ -5,7 +5,7 @@ import java.nio.file.Files;
 import java.nio.file.Path;
 import java.util.Locale;
 
-/// Writes a new project: a library, an entrypoint that calls it, a test, and
+/// Writes a new project: named application, entrypoint, and test modules, plus
 /// the `vendor/` directory that will hold its dependencies.
 ///
 /// Not a blank slate — everything generated here is meant to be extended rather
@@ -21,13 +21,16 @@ public final class Scaffold {
         var library = library(name);
         if (library.isEmpty()) throw new IOException("a project name needs at least one letter or digit: " + name);
 
+        write(directory.resolve("src/module-info.java"), applicationModule(library));
         write(directory.resolve("src/" + library + "/Greeting.java"), greeting(library));
         write(directory.resolve("src/greet/Greeter.java"), greeter());
-        write(directory.resolve("src/cli/" + Layout.ENTRYPOINT), entrypoint(library));
+        write(directory.resolve("entrypoints/module-info.java"), entrypointModule(library));
+        write(directory.resolve("entrypoints/cli/Main.java"), entrypoint(library));
         write(directory.resolve("native/hello.c"), hello());
-        write(directory.resolve("test/" + library + "/GreetingTest.java"), test(library));
-        write(directory.resolve("test/greet/GreeterTest.java"), greeterTest());
-        write(directory.resolve("test/run.java"), runner(library));
+        write(directory.resolve("test/module-info.java"), testModule(library));
+        write(directory.resolve("test/" + library + "/tests/GreetingTest.java"), test(library));
+        write(directory.resolve("test/greet/tests/GreeterTest.java"), greeterTest());
+        write(directory.resolve("test/" + library + "/test/Run.java"), runner(library));
         write(directory.resolve(".gitignore"), "build/\n");
         write(directory.resolve("README.md"), readme(name, library));
         Files.createDirectories(directory.resolve("vendor"));
@@ -42,7 +45,17 @@ public final class Scaffold {
     /// next useful action without changing the existing `cli` entrypoint.
     public static void reloadable(Path directory, String name) throws IOException {
         if (!Files.isDirectory(directory)) throw new IOException(directory + " does not exist");
-        write(directory.resolve("src/web/" + Layout.ENTRYPOINT), webEntrypoint(library(name)));
+        write(directory.resolve("entrypoints/web/Main.java"), webEntrypoint(library(name)));
+        var descriptor = directory.resolve("entrypoints/module-info.java");
+        var source = Files.readString(descriptor);
+        if (!source.contains("provides reload.Program")) {
+            var close = source.lastIndexOf('}');
+            if (close < 0) throw new IOException("invalid entrypoints/module-info.java");
+            source = source.substring(0, close)
+                    + (source.contains("requires tuul;") ? "" : "    requires tuul;\n")
+                    + "    provides reload.Program with " + library(name) + ".web.Main;\n" + source.substring(close);
+            Files.writeString(descriptor, source);
+        }
     }
 
     /// A directory name is not a package name: `hello-world` holds the library
@@ -90,11 +103,25 @@ public final class Scaffold {
                         return opening + ", " + name + "!";
                     }
                 }
-                """.formatted(library);
+        """.formatted(library);
+    }
+
+    private static String applicationModule(String library) {
+        return "module " + library + ".app {\n    exports " + library + ";\n    exports greet;\n}\n";
+    }
+
+    private static String entrypointModule(String library) {
+        return "module " + library + ".entrypoints {\n    requires " + library + ".app;\n}\n";
+    }
+
+    private static String testModule(String library) {
+        return "module " + library + ".test {\n    requires " + library + ".app;\n}\n";
     }
 
     private static String entrypoint(String library) {
         return """
+                package cli;
+
                 import %s.Greeting;
                 import greet.Greeter;
 
@@ -105,16 +132,23 @@ public final class Scaffold {
                 /// Every name goes out through native/hello.c, which calls back
                 /// in to print it.
 
-                void main(String[] args) {
+                public final class Main {
+
+                    private Main() {}
+
+                    public static void main(String[] args) {
                     var greeting = new Greeting("Hello");
                     var names = args.length == 0 ? new String[] {"world"} : args;
                     for (var name : names) Greeter.greet(name, greeted -> System.out.println(greeting.greet(greeted)));
+                    }
                 }
                 """.formatted(library, library);
     }
 
     private static String webEntrypoint(String name) {
         return """
+                package %s.web;
+
                 import reload.Generation;
                 import reload.Program;
                 import web.reload.ReloadHandler;
@@ -124,7 +158,7 @@ public final class Scaffold {
 
                 /// The default web application. Change this file and save it;
                 /// `tuul dev` compiles and activates the next generation.
-                public final class main implements Program {
+                public final class Main implements Program {
 
                     private static final RouteRef HOME = RouteRef.of("home", "/");
 
@@ -135,7 +169,7 @@ public final class Scaffold {
                         return ReloadHandler.attach(Generation.empty(), routes);
                     }
                 }
-                """.formatted(name);
+                """.formatted(name, name);
     }
 
     /// The native module: C that takes a function pointer and calls it back.
@@ -228,10 +262,11 @@ public final class Scaffold {
 
     private static String greeterTest() {
         return """
-                package greet;
+                package greet.tests;
 
                 import java.util.ArrayList;
                 import java.util.List;
+                import greet.Greeter;
 
                 public final class GreeterTest {
 
@@ -249,7 +284,9 @@ public final class Scaffold {
 
     private static String test(String library) {
         return """
-                package %s;
+                package %s.tests;
+
+                import %s.Greeting;
 
                 public final class GreetingTest {
 
@@ -275,20 +312,24 @@ public final class Scaffold {
                         throw new AssertionError("a blank name should be refused");
                     }
                 }
-                """.formatted(library);
+        """.formatted(library, library);
     }
 
     private static String runner(String library) {
         return """
-                /// Every test, in one process. `tuul test` compiles this
-                /// directory and runs this file.
+                package %s.test;
 
-                void main() {
-                    %s.GreetingTest.run();
-                    greet.GreeterTest.run();
+                public final class Run {
+
+                    private Run() {}
+
+                public static void main(String[] args) {
+                    %s.tests.GreetingTest.run();
+                    greet.tests.GreeterTest.run();
                     System.out.println("all tests passed");
                 }
-                """.formatted(library);
+                }
+                """.formatted(library, library);
     }
 
     private static String readme(String name, String library) {
@@ -296,17 +337,18 @@ public final class Scaffold {
                 # %s
 
                 ```sh
-                tuul build          # compile src/ into build/
-                tuul run -- tuul    # run src/cli/main.java
+                tuul build          # compile named modules into build/modules/
+                tuul run -- tuul    # run the cli entrypoint module
                 tuul test           # compile and run test/
                 tuul docs %s.Greeting
                 tuul install        # vendor the web/reload libraries
-                tuul dev            # serve src/web/main.java with hot reload
+                tuul dev            # serve entrypoints/web/Main.java with hot reload
                 ```
 
-                `src/%s/` is the library — the application lives there.
-                `src/cli/main.java` is an entrypoint, and should stay thin.
-                `src/resources/` contains files for the classpath root.
+                `src/` is the named application module; `%s` is its package.
+                `entrypoints/` is the named entrypoint module. Each `Main.java`
+                below it is an entrypoint and should stay thin.
+                `src/resources/` contains application module resources.
                 Keep package-local resources beside their library classes.
                 `src/greet/` wraps `native/hello.c` through java.lang.foreign:
                 a downcall into C, and a Java method C calls back through.

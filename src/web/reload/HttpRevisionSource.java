@@ -31,12 +31,13 @@ import reload.RevisionSource;
 ///
 /// The request contains one `manifest` field and file parts. A file's
 /// `filename` is its relative entry name; it is validated before use. The
-/// manifest is a JSON object with `entrypoint`, `sources`, `resources`, and
-/// optional `dependencies` arrays. It may also contain an `identity` SHA-256
-/// value. Every listed entry must arrive exactly once, and no extra file is
-/// accepted. Files are streamed into a server-created staging directory, then
-/// submitted as a normal [Revision]. This type never loads or activates Java
-/// classes.
+/// manifest is a JSON object with a `rootModule` and a `modules` array. Each
+/// module has a name, a staging-root path, a descriptor, source paths, and
+/// optional resource paths. It may also contain a `dependencies` array and an
+/// `identity` SHA-256 value. Every listed entry must arrive exactly once, and
+/// no extra file is accepted. Files are streamed into a server-created
+/// staging directory, then submitted as a normal named-module [Revision].
+/// This type never loads or activates Java classes.
 public final class HttpRevisionSource implements RevisionSource {
 
     private static final String MANIFEST = "manifest";
@@ -46,6 +47,7 @@ public final class HttpRevisionSource implements RevisionSource {
     private final Limits limits;
     private final RevisionSubmissionPolicy policy;
     private final Object monitor = new Object();
+    private final Set<Path> submitted = new HashSet<>();
     private Consumer<Revision> consumer;
     private boolean closed;
 
@@ -80,14 +82,19 @@ public final class HttpRevisionSource implements RevisionSource {
         }
     }
 
-    /// Stops new uploads from reaching the callback. The host remains
-    /// responsible for staging trees already submitted.
+    /// Stops new uploads and removes every successfully submitted staging
+    /// tree. The callback must finish using a revision before it returns, or
+    /// copy the files that it needs elsewhere.
     @Override
     public void close() {
+        Set<Path> cleanup;
         synchronized (monitor) {
             closed = true;
             consumer = null;
+            cleanup = Set.copyOf(submitted);
+            submitted.clear();
         }
+        cleanup.forEach(HttpRevisionSource::remove);
     }
 
     private void handle(Request request, Response response) throws IOException {
@@ -114,6 +121,11 @@ public final class HttpRevisionSource implements RevisionSource {
             root = Files.createTempDirectory(staging, "revision-");
             var parsed = parse(request, root);
             submit.accept(parsed.revision());
+            synchronized (monitor) {
+                if (!closed) submitted.add(root);
+            }
+            if (closed()) remove(root);
+            root = null;
             Responses.json(Json.Object.of("revision", parsed.revision().identity())
                     .with("status", "submitted"), response);
         } catch (UploadException refused) {
@@ -126,6 +138,10 @@ public final class HttpRevisionSource implements RevisionSource {
             remove(root);
             throw failure;
         }
+    }
+
+    private boolean closed() {
+        synchronized (monitor) { return closed; }
     }
 
     private boolean allowed(Request request) {
@@ -195,13 +211,14 @@ public final class HttpRevisionSource implements RevisionSource {
     }
 
     private static Parsed revision(Json.Object manifest, LinkedHashMap<String, Path> entries, Path root) {
-        var entrypoint = required(manifest, "entrypoint");
-        var sources = paths(manifest, "sources", entries, root);
-        var resources = paths(manifest, "resources", entries, root);
+        var rootModule = required(manifest, "rootModule");
+        var modules = modules(manifest, entries, root);
         var dependencies = paths(manifest, "dependencies", entries, root);
         var all = new ArrayList<String>();
-        all.addAll(names(manifest, "sources"));
-        all.addAll(names(manifest, "resources"));
+        for (var module : modules) {
+            all.addAll(module.sourceNames());
+            all.addAll(module.resourceNames());
+        }
         all.addAll(names(manifest, "dependencies"));
         var expected = new HashSet<>(all);
         if (expected.size() != all.size()) throw invalid("manifest contains duplicate entries");
@@ -212,9 +229,10 @@ public final class HttpRevisionSource implements RevisionSource {
             extra.removeAll(expected);
             throw invalid("manifest entries do not match uploaded files (missing=" + missing + ", extra=" + extra + ")");
         }
-        if (sources.isEmpty()) throw invalid("manifest must list at least one source");
+        if (modules.isEmpty()) throw invalid("manifest must list at least one module");
         try {
-            var revision = Revision.from(root, entrypoint, sources, resources, dependencies);
+            var sourceModules = modules.stream().map(module -> module.revision(root, entries)).toList();
+            var revision = Revision.from(rootModule, sourceModules, dependencies);
             var declared = manifest.string("identity", "");
             if (!declared.isEmpty()) {
                 if (!declared.matches("[0-9a-fA-F]{64}")) throw invalid("manifest identity is not a SHA-256 digest");
@@ -224,6 +242,57 @@ public final class HttpRevisionSource implements RevisionSource {
         } catch (IOException failure) {
             throw new IllegalArgumentException("cannot read staged revision", failure);
         }
+    }
+
+    private static List<ModuleSpec> modules(Json.Object manifest,
+            LinkedHashMap<String, Path> entries, Path root) {
+        var value = manifest.get("modules");
+        if (!(value instanceof Json.Array(var items))) throw invalid("manifest field modules must be an array");
+        var found = new ArrayList<ModuleSpec>();
+        var names = new HashSet<String>();
+        for (var item : items) {
+            if (!(item instanceof Json.Object module)) throw invalid("manifest modules must contain objects");
+            var name = required(module, "name");
+            if (!names.add(name)) throw invalid("manifest contains duplicate module: " + name);
+            var moduleRoot = normalized(required(module, "root"));
+            var descriptor = normalized(required(module, "descriptor"));
+            var sources = namesRequired(module, "sources");
+            if (!sources.contains(descriptor)) throw invalid("module descriptor is not listed as a source: " + name);
+            var resources = namesOptional(module, "resources");
+            var all = new ArrayList<String>();
+            all.add(descriptor);
+            all.addAll(sources);
+            all.addAll(resources);
+            for (var path : all) {
+                if (!path.equals(moduleRoot) && !path.startsWith(moduleRoot + "/")) {
+                    throw invalid("module entry is outside its root: " + path);
+                }
+            }
+            found.add(new ModuleSpec(name, moduleRoot, descriptor, sources, resources));
+        }
+        return List.copyOf(found);
+    }
+
+    private static List<String> namesRequired(Json.Object object, String key) {
+        var value = object.get(key);
+        if (!(value instanceof Json.Array(var items))) throw invalid("module field " + key + " must be an array");
+        return names(items, key);
+    }
+
+    private static List<String> namesOptional(Json.Object object, String key) {
+        var value = object.get(key);
+        if (value == null) return List.of();
+        if (!(value instanceof Json.Array(var items))) throw invalid("module field " + key + " must be an array");
+        return names(items, key);
+    }
+
+    private static List<String> names(List<Json> values, String key) {
+        var names = new ArrayList<String>();
+        for (var item : values) {
+            if (!(item instanceof Json.Str(var name))) throw invalid("manifest field " + key + " must contain strings");
+            names.add(normalized(name));
+        }
+        return List.copyOf(names);
     }
 
     private static List<Path> paths(Json.Object manifest, String key, LinkedHashMap<String, Path> entries, Path root) {
@@ -242,6 +311,20 @@ public final class HttpRevisionSource implements RevisionSource {
             names.add(normalized(name));
         }
         return List.copyOf(names);
+    }
+
+    private record ModuleSpec(String name, String rootName, String descriptorName,
+            List<String> sourceNames, List<String> resourceNames) {
+        private Revision.SourceModule revision(Path staging, LinkedHashMap<String, Path> entries) {
+            var moduleRoot = staging.resolve(rootName).normalize();
+            var descriptor = entries.get(descriptorName);
+            var sources = sourceNames.stream().map(entries::get).toList();
+            var resources = resourceNames.stream().map(path -> {
+                var logical = moduleRoot.relativize(staging.resolve(path).normalize()).toString().replace('\\', '/');
+                return new Revision.ResourceEntry(logical, entries.get(path));
+            }).toList();
+            return new Revision.SourceModule(name, moduleRoot, descriptor, sources, resources);
+        }
     }
 
     private static String required(Json.Object manifest, String key) {

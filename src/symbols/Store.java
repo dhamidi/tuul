@@ -100,7 +100,9 @@ final class Store implements IndexStore {
     @Override
     public synchronized Optional<TypeInfo> type(long origin, String name) {
         try (var rows = database.query(
-                "select id, kind, modifiers, superclass, doc, source, line from type where origin = ? and name = ?",
+                "select id, kind, modifiers, superclass, doc, source, line, module, module_kind, module_origin,"
+                        + " module_requires, module_exports, module_opens, module_uses, module_provides"
+                        + " from type where origin = ? and name = ?",
                 origin, name)) {
             if (!rows.next()) return Optional.empty();
             var id = rows.integer(0);
@@ -118,8 +120,69 @@ final class Store implements IndexStore {
                     rows.text(4),
                     tags("select position, tag, name, text from tag where type = ? order by position", id),
                     rows.text(5),
-                    (int) rows.integer(6)));
+                    (int) rows.integer(6), rows.text(7), moduleInfo(rows.text(7), rows.text(8), rows.text(9),
+                            rows.text(10), rows.text(11), rows.text(12), rows.text(13), rows.text(14))));
         }
+    }
+
+    private static Optional<ModuleInfo> moduleInfo(String name, String kind, String origin, String requires,
+            String exports, String opens, String uses, String provides) {
+        if (kind.isEmpty()) return Optional.empty();
+        return Optional.of(new ModuleInfo(name, kind, origin, requires(requires), exports(exports), opens(opens),
+                split(uses), provides(provides)));
+    }
+
+    private static final String LIST = "\u001f";
+    private static final String FIELD = "\u001e";
+
+    private static String join(List<String> values) { return String.join(LIST, values); }
+
+    private static List<String> split(String values) {
+        return values.isEmpty() ? List.of() : List.of(values.split(LIST, -1));
+    }
+
+    private static String requires(List<ModuleInfo.Requires> values) {
+        return values.stream().map(value -> value.name() + FIELD + join(value.modifiers())).reduce((a, b) -> a + LIST + b).orElse("");
+    }
+
+    private static List<ModuleInfo.Requires> requires(String values) {
+        return split(values).stream().map(value -> {
+            var fields = value.split(FIELD, -1);
+            return new ModuleInfo.Requires(fields[0], fields.length == 1 ? List.of() : split(fields[1]));
+        }).toList();
+    }
+
+    private static String exports(List<ModuleInfo.Export> values) {
+        return values.stream().map(value -> value.packageName() + FIELD + join(value.targets())).reduce((a, b) -> a + LIST + b).orElse("");
+    }
+
+    private static List<ModuleInfo.Export> exports(String values) {
+        return split(values).stream().map(value -> {
+            var fields = value.split(FIELD, -1);
+            return new ModuleInfo.Export(fields[0], fields.length == 1 ? List.of() : split(fields[1]));
+        }).toList();
+    }
+
+    private static String opens(List<ModuleInfo.Open> values) {
+        return values.stream().map(value -> value.packageName() + FIELD + join(value.targets())).reduce((a, b) -> a + LIST + b).orElse("");
+    }
+
+    private static List<ModuleInfo.Open> opens(String values) {
+        return split(values).stream().map(value -> {
+            var fields = value.split(FIELD, -1);
+            return new ModuleInfo.Open(fields[0], fields.length == 1 ? List.of() : split(fields[1]));
+        }).toList();
+    }
+
+    private static String provides(List<ModuleInfo.Provides> values) {
+        return values.stream().map(value -> value.service() + FIELD + join(value.providers())).reduce((a, b) -> a + LIST + b).orElse("");
+    }
+
+    private static List<ModuleInfo.Provides> provides(String values) {
+        return split(values).stream().map(value -> {
+            var fields = value.split(FIELD, -1);
+            return new ModuleInfo.Provides(fields[0], fields.length == 1 ? List.of() : split(fields[1]));
+        }).toList();
     }
 
     @Override
@@ -397,8 +460,9 @@ final class Store implements IndexStore {
 
         private final Statement forget = Statement.of(database, "delete from type where origin = ? and name = ?");
         private final Statement type = Statement.of(database,
-                "insert into type (origin, name, kind, modifiers, superclass, doc, source, line)"
-                        + " values (?, ?, ?, ?, ?, ?, ?, ?)");
+                "insert into type (origin, name, kind, modifiers, superclass, doc, source, line, module, module_kind,"
+                        + " module_origin, module_requires, module_exports, module_opens, module_uses, module_provides)"
+                        + " values (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)");
         private final Statement parameter = Statement.of(database,
                 "insert into type_parameter (type, position, name) values (?, ?, ?)");
         private final Statement related = Statement.of(database,
@@ -413,8 +477,15 @@ final class Store implements IndexStore {
 
         private void put(long origin, String name, TypeInfo info) {
             forget.run(origin, name);
+            var descriptor = info.moduleInfo().orElse(null);
             var id = type.run(origin, name, info.kind().name(), String.join(" ", info.modifiers()),
-                    info.superclass(), info.doc(), info.source(), info.line());
+                    info.superclass(), info.doc(), info.source(), info.line(), info.module(),
+                    descriptor == null ? "" : descriptor.kind(), descriptor == null ? "" : descriptor.origin(),
+                    descriptor == null ? "" : requires(descriptor.requires()),
+                    descriptor == null ? "" : exports(descriptor.exports()),
+                    descriptor == null ? "" : opens(descriptor.opens()),
+                    descriptor == null ? "" : join(descriptor.uses()),
+                    descriptor == null ? "" : provides(descriptor.provides()));
 
             for (var at = 0; at < info.typeParameters().size(); at++) {
                 parameter.run(id, at, info.typeParameters().get(at));

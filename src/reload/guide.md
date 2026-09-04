@@ -5,13 +5,14 @@ is only evidence that a revision may exist. It is not a safe activation unit.
 
 ## A save is not an activation
 
-A Java source change can produce several class files. One class can define an
+A Java source change can produce several class definitions. One class can define an
 application update while another defines the effect handler that update
 requests. Activating the first class before the second creates behavior that no
 source revision described.
 
 A compiler adapter captures the complete revision in an isolated in-memory
-loader. The coordinator defines and validates the complete `Program` result.
+module layer. The coordinator defines and validates the complete generation
+result.
 Capability adapters and named applications then change through stable
 dispatchers. Actor systems perform their own gated turn boundary.
 
@@ -21,16 +22,16 @@ artifact service. Both use the same staging and activation state machine.
 
 ## The parent owns contracts
 
-Keep Tuul, reload contracts, and durable runtime objects in the parent loader.
-Load application implementations in a child.
+Keep Tuul, reload contracts, and durable runtime objects in the parent module
+layer. Load application implementations in a fresh child `ModuleLayer`.
 
-Java type identity includes the class loader. A child copy of
+Java type identity includes the defining loader. A child copy of
 `web.ui.Component` is not the parent's `web.ui.Component`, even when the bytes
 are identical. Parent delegation keeps framework interfaces singular and lets
 candidate classes implement them.
 
-The child boundary also gives application code a lifetime. Retirement removes
-runtime references to that child after work and resources drain. The boundary
+The layer boundary also gives application code a lifetime. Retirement removes
+runtime references to that layer after work and resources drain. The boundary
 does not constrain file, network, process, reflection, or native access.
 
 ## Work keeps one meaning
@@ -107,16 +108,16 @@ It does not compile, validate, activate, refresh browsers, or reload actors.
 Those actions belong to the coordinator. The `web.reload` HTTP adapter or an
 artifact receiver can replace the watcher without duplicating reload behavior.
 
-## The coordinator is an application
+## The coordinator has an application shape
 
-Model coordination as messages, state transitions, and effects. A submitted
+The coordinator models its work as messages, state transitions, and effects. A submitted
 revision changes state to staging and requests compilation. A compiler result
 changes state to validation and requests validators. An accepted candidate
 changes state to activation and requests the surface boundaries.
 
 This shape serializes decisions while compilation and validation use external
 work. It also makes every transition observable and testable without a watcher,
-compiler, socket, or class loader in the fast suite.
+compiler, socket, or module layer in the fast suite.
 
 The coordinator does not need a durable actor for local development. A
 production control plane may journal revision commands when it needs an audit

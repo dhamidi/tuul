@@ -10,8 +10,10 @@ import java.net.URI;
 import java.nio.file.Files;
 import java.nio.file.Path;
 import java.util.ArrayList;
+import java.util.LinkedHashSet;
 import java.util.List;
 import json.Json;
+import modules.ModuleGraph;
 import symbols.Vendor;
 import selftest.SelfTest;
 
@@ -162,7 +164,6 @@ public final class App {
                 .with("dependencies", Json.Array.strings(dependencies))
                 .with("repositories", Json.Array.of(message.list("repository")))
                 .with("exclusions", Json.Array.of(message.list("exclude")))
-                .with("duplicateExceptions", Json.Array.of(message.list("allow-duplicate")))
                 .with("dryRun", message.flag("dry-run")));
     }
 
@@ -301,31 +302,67 @@ public final class App {
 
     private static void launch(Effect effect, Effect.Emitter emit, Writer out, ProcessRunner processes) throws Exception {
         var layout = new Layout(Path.of(effect.string("directory", ".")));
-        var entrypoint = layout.entrypoint(effect.string("entrypoint", ""));
-        if (entrypoint.isEmpty()) throw new IOException("no entrypoint to run — add src/<name>/main.java");
+        var entrypoint = layout.runEntrypoint(effect.string("entrypoint", ""));
         var arguments = new ArrayList<String>();
         for (var argument : effect.list("arguments")) {
             if (argument instanceof Json.Str(var text)) arguments.add(text);
         }
-        start(Launch.java(List.of(), running(layout, layout.entry(entrypoint)), "main", arguments),
+        start(Launch.javaModule(nativeAccess(layout, layout.application().name(), entrypoint.module()),
+                running(layout, layout.moduleOutput(entrypoint.module())), entrypoint.module(), entrypoint.mainClass(), arguments),
                 layout, emit, out, processes);
     }
 
     private static void launchTests(Effect effect, Effect.Emitter emit, Writer out, ProcessRunner processes) throws Exception {
         var layout = new Layout(Path.of(effect.string("directory", ".")));
         var arguments = effect.flag("all") ? List.of("--mode", "all") : List.<String>of();
-        start(Launch.java(List.of(), running(layout, layout.tests()), "run", arguments), layout, emit, out, processes);
+        var test = layout.testModule().orElseThrow(() -> new IOException("no test module"));
+        var options = new ArrayList<String>();
+        var nativeModules = new ArrayList<String>();
+        nativeModules.add(test.name());
+        nativeModules.add(layout.application().name());
+        options.addAll(nativeAccess(layout, nativeModules.toArray(String[]::new)));
+        if (test.name().equals("tuul.test")) {
+            options.add("--patch-module");
+            options.add("tuul=" + layout.root().resolve("build/patches").resolve(layout.application().name()));
+            for (var packageName : layout.testPackages()) {
+                options.add("--add-exports");
+                options.add("tuul/" + packageName + "=tuul.test");
+            }
+        }
+        start(Launch.javaModule(options, running(layout, layout.moduleOutput(test.name())),
+                test.name(), layout.testMain(), arguments), layout, emit, out, processes);
     }
 
-    /// What a project runs against: its own classes, then the code it was
-    /// compiled against. A dependency that is on the classpath to compile and
-    /// missing to run is a dependency that fails on its first call, so the two
-    /// classpaths are the same list — with the project's own classes first, so
-    /// its class wins over a vendored one of the same name.
+    /// The module path for one project operation: its own module outputs and
+    /// every vendored module it was compiled against.
     private static List<Path> running(Layout layout, Path own) throws IOException {
-        var classpath = new ArrayList<Path>(List.of(layout.classes(), own));
-        classpath.addAll(Vendor.of(List.of(layout.vendor())).runtime());
-        return classpath;
+        var modulePath = new ArrayList<Path>();
+        modulePath.add(own);
+        modulePath.add(layout.moduleOutput(layout.application().name()));
+        layout.entrypointModule().ifPresent(module -> modulePath.add(layout.moduleOutput(module.name())));
+        var vendor = Vendor.of(List.of(layout.vendor()));
+        if (!vendor.artifacts().isEmpty()) {
+            modulePath.addAll(vendor.graph().modules().values().stream()
+                    .map(ModuleGraph.Node::origin)
+                    .flatMap(origin -> origin.path().stream())
+                    .toList());
+        }
+        return modulePath.stream().distinct().toList();
+    }
+
+    /// Grants FFM access to every named project module in this JVM and to a
+    /// reachable vendored tuul module. The sorted set keeps command lines
+    /// stable while never widening access to the unnamed module.
+    private static List<String> nativeAccess(Layout layout, String... projectModules) throws IOException {
+        var modules = new LinkedHashSet<String>();
+        for (var module : projectModules) {
+            if (module != null && !module.isBlank()) modules.add(module);
+        }
+        var vendor = Vendor.of(List.of(layout.vendor()));
+        if (!vendor.artifacts().isEmpty() && vendor.graph().module("tuul").isPresent()) modules.add("tuul");
+        if (modules.isEmpty()) return List.of();
+        return List.of("--enable-native-access=" + modules.stream().sorted()
+                .collect(java.util.stream.Collectors.joining(",")));
     }
 
     private static void start(List<String> command, Layout layout, Effect.Emitter emit, Writer out,
@@ -353,9 +390,7 @@ public final class App {
         var result = Add.into(new Layout(Path.of(effect.string("directory", "."))),
                 strings(effect.list("dependencies")), repositories, out,
                 tty ? Add.Mode.TTY : Add.Mode.EVENTS,
-                new Add.Options(java.util.Set.copyOf(strings(effect.list("exclusions"))),
-                        java.util.Set.copyOf(strings(effect.list("duplicateExceptions"))),
-                        effect.flag("dryRun")));
+                new Add.Options(java.util.Set.copyOf(strings(effect.list("exclusions"))), effect.flag("dryRun")));
         emit.emit(Message.of("project.added")
                 .with("downloaded", Json.Array.strings(result.downloaded()))
                 .with("cached", Json.Array.strings(result.cached()))

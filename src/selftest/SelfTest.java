@@ -1,6 +1,5 @@
 package selftest;
 
-import java.io.File;
 import java.io.IOException;
 import java.io.StringWriter;
 import java.io.UncheckedIOException;
@@ -65,21 +64,27 @@ public final class SelfTest {
         check(checks, "it prints the runnable dev next action",
                 created.output().contains("cd ./demo && tuul install && tuul dev"), created.output());
         check(checks, "it writes a library", exists(project, "src/demo/Greeting.java"), listing(project));
-        check(checks, "it writes an entrypoint", exists(project, "src/cli/main.java"), listing(project));
-        check(checks, "it writes a reloadable web entrypoint", exists(project, "src/web/main.java"), listing(project));
-        check(checks, "it writes a test", exists(project, "test/run.java"), listing(project));
+        check(checks, "it writes an entrypoint", exists(project, "entrypoints/cli/Main.java"), listing(project));
+        check(checks, "it writes a reloadable web entrypoint", exists(project, "entrypoints/web/Main.java"), listing(project));
+        check(checks, "it writes a test", exists(project, "test/demo/test/Run.java"), listing(project));
         check(checks, "it writes the vendor directory", Files.isDirectory(project.resolve("vendor")), listing(project));
     }
 
     private static void addsAndUsesDependency(Path project, List<Report.Check> checks)
             throws IOException, InterruptedException {
-        Files.writeString(project.resolve("test/demo/DependencyTest.java"), DEPENDENCY_TEST);
-        Files.writeString(project.resolve("test/run.java"), DEPENDENCY_RUNNER);
+        var dependencyTest = project.resolve("test/demo/tests/DependencyTest.java");
+        var runner = project.resolve("test/demo/test/Run.java");
+        var originalRunner = Files.readString(runner);
+        Files.writeString(dependencyTest, DEPENDENCY_TEST);
+        Files.writeString(runner, DEPENDENCY_RUNNER);
         var added = tuul(project, "add", ANNOTATIONS_COORDINATE);
         if (added.status() != 0 && repositoryUnavailable(added.output())) {
+            Files.deleteIfExists(dependencyTest);
+            Files.writeString(runner, originalRunner);
             check(checks, "Maven dependency unavailable; dependency checks skipped", true, added.output());
             return;
         }
+        requires(project.resolve("test/module-info.java"), "org.jetbrains.annotations");
         check(checks, "tuul add exits cleanly", added.status() == 0, added.output());
         check(checks, "it vendors the dependency jar",
                 exists(project, "vendor/org.jetbrains/annotations/26.0.2/annotations-26.0.2.jar"),
@@ -94,8 +99,8 @@ public final class SelfTest {
     private static void builds(Path project, List<Report.Check> checks) throws IOException, InterruptedException {
         var built = tuul(project, "build");
         check(checks, "tuul build exits cleanly", built.status() == 0, built.output());
-        check(checks, "it compiles the library", exists(project, "build/classes/demo/Greeting.class"), built.output());
-        check(checks, "it compiles the entrypoint apart from it", exists(project, "build/entry/cli/main.class"), built.output());
+        check(checks, "it compiles the library", exists(project, "build/modules/demo.app/demo/Greeting.class"), built.output());
+        check(checks, "it compiles the entrypoint apart from it", exists(project, "build/modules/demo.entrypoints/cli/Main.class"), built.output());
         check(checks, "it says what it did", built.output().contains("compiled"), built.output());
         check(checks, "it compiles the native module first",
                 exists(project, "build/native/" + System.mapLibraryName("hello")),
@@ -194,8 +199,9 @@ public final class SelfTest {
             throws IOException, InterruptedException {
         Files.writeString(project.resolve("src/module-info.java"), MODULE);
         Files.writeString(project.resolve("src/demo/Notes.java"), NOTES);
-        Files.writeString(project.resolve("src/cli/main.java"), ENTRYPOINT);
-        Files.writeString(project.resolve("test/run.java"), RUNNER);
+        Files.writeString(project.resolve("entrypoints/cli/Main.java"), ENTRYPOINT);
+        Files.writeString(project.resolve("test/demo/test/Run.java"), RUNNER);
+        requires(project.resolve("test/module-info.java"), "tuul");
 
         var built = without(project, "build");
         check(checks, "a project that requires tuul builds with no compiler on the PATH",
@@ -264,7 +270,7 @@ public final class SelfTest {
         var reader = Thread.ofVirtual().start(() -> capture(child, output));
         var client = HttpClient.newBuilder().connectTimeout(Duration.ofMillis(300)).build();
         var uri = URI.create("http://127.0.0.1:" + port + "/");
-        var source = project.resolve("src/web/main.java");
+        var source = project.resolve("entrypoints/web/Main.java");
         var original = Files.readString(source);
         try {
             var first = await(client, uri, "Hello from demo!", Duration.ofSeconds(20));
@@ -278,7 +284,7 @@ public final class SelfTest {
             check(checks, "saving Java activates a new generation", second.reached(), detail(second.body(), output));
             var pid = child.pid();
 
-            Files.writeString(source, "public final class main implements reload.Program { broken }\\n");
+            Files.writeString(source, "package demo.web; public final class Main implements reload.Program { broken }\\n");
             // A rejected candidate must leave the last good generation serving.
             var retained = await(client, uri, "Hello from changed!", Duration.ofSeconds(5));
             check(checks, "a compiler failure keeps the last generation", retained.reached(), detail(retained.body(), output));
@@ -397,7 +403,7 @@ public final class SelfTest {
             """;
 
     private static final String MODULE = """
-            module demo {
+            module demo.app {
                 requires tuul;
 
                 exports demo;
@@ -406,6 +412,8 @@ public final class SelfTest {
             """;
 
     private static final String ENTRYPOINT = """
+            package cli;
+
             import application.Message;
             import argparse.Command;
             import argparse.Parsed;
@@ -415,7 +423,8 @@ public final class SelfTest {
             import java.util.List;
 import java.util.Map;
 
-            void main(String[] args) throws Exception {
+            public final class Main {
+            public static void main(String[] args) throws Exception {
                 var out = new OutputStreamWriter(System.out);
                 var command = Command.named("demo", "keep notes")
                         .value("store", "where to keep them", "notes.db")
@@ -429,13 +438,17 @@ import java.util.Map;
                             .dispatch(Message.of("note.write").with("body", values.values().string("body", "")));
                 }
             }
+            }
             """;
 
     private static final String RUNNER = """
+            package demo.test;
+
             import java.io.StringWriter;
             import java.nio.file.Files;
 
-            void main() throws Exception {
+            public final class Run {
+            public static void main(String[] args) throws Exception {
                 var file = Files.createTempDirectory("demo").resolve("notes.db");
                 var out = new StringWriter();
                 try (var database = demo.Notes.open(file)) {
@@ -444,15 +457,16 @@ import java.util.Map;
                 }
                 if (!out.toString().contains("notes: 1")) throw new AssertionError(out.toString());
                 if (!Files.isRegularFile(file)) throw new AssertionError("no database on disk");
-                greet.GreeterTest.run();
+                greet.tests.GreeterTest.run();
                 System.out.println("all tests passed");
+            }
             }
             """;
 
     private static final String ANNOTATIONS_COORDINATE = "org.jetbrains:annotations:26.0.2";
 
     private static final String DEPENDENCY_TEST = """
-            package demo;
+            package demo.tests;
 
             import org.jetbrains.annotations.NotNull;
 
@@ -472,19 +486,32 @@ import java.util.Map;
             """;
 
     private static final String DEPENDENCY_RUNNER = """
+            package demo.test;
+
             /// Every test, in one process. `tuul test` compiles this
             /// directory and runs this file.
 
-            void main() throws Exception {
-                demo.GreetingTest.run();
-                greet.GreeterTest.run();
-                demo.DependencyTest.run();
+            public final class Run {
+            public static void main(String[] args) throws Exception {
+                demo.tests.GreetingTest.run();
+                greet.tests.GreeterTest.run();
+                demo.tests.DependencyTest.run();
                 System.out.println("all tests passed");
+            }
             }
             """;
 
     private static boolean repositoryUnavailable(String output) {
         return output.contains("HTTP 404 ") || output.contains("HTTP 500 ");
+    }
+
+    private static void requires(Path descriptor, String module) throws IOException {
+        var source = Files.readString(descriptor);
+        if (source.contains("requires " + module + ";")) return;
+        var close = source.lastIndexOf('}');
+        if (close < 0) throw new IOException("invalid module descriptor: " + descriptor);
+        Files.writeString(descriptor, source.substring(0, close)
+                + "    requires " + module + ";\n" + source.substring(close));
     }
 
     private static void check(List<Report.Check> checks, String what, boolean ok, String detail) {
@@ -511,8 +538,18 @@ import java.util.Map;
     }
 
     private static List<String> command(List<String> arguments) {
-        var classpath = List.of(System.getProperty("java.class.path").split(File.pathSeparator)).stream().map(Path::of).toList();
-        return Launch.java(List.of(), classpath, "main", arguments);
+        var tuul = codeSource(SelfTest.class);
+        var sibling = tuul.resolveSibling("tuul-cli.jar");
+        var cli = Files.exists(sibling) ? sibling : tuul.getParent().getParent()
+                .resolve("bootstrap/cli");
+        var modules = List.of(tuul, cli);
+        return Launch.javaModule(List.of("--enable-native-access=tuul"), modules,
+                "tuul.cli", "tuul.cli.Main", arguments);
+    }
+
+    private static Path codeSource(Class<?> type) {
+        try { return Path.of(type.getProtectionDomain().getCodeSource().getLocation().toURI()).toAbsolutePath().normalize(); }
+        catch (Exception failure) { throw new IllegalStateException("cannot locate named Tuul module", failure); }
     }
 
     private static Json.Object describe(String output) {

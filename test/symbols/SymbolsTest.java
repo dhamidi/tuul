@@ -14,7 +14,9 @@ import java.util.concurrent.CountDownLatch;
 import java.util.concurrent.TimeUnit;
 import java.util.jar.JarEntry;
 import java.util.jar.JarOutputStream;
+import java.lang.module.ModuleDescriptor;
 import compiler.Compiler;
+import json.Json;
 
 public final class SymbolsTest {
 
@@ -25,8 +27,40 @@ public final class SymbolsTest {
         spans();
         controlledCompilation();
         joinsCompilation();
+        sourceRootsAreNamedModules();
         markdownDoesNotCompile();
         javadocMarkup();
+        moduleDescriptor();
+    }
+
+    private static void moduleDescriptor() {
+        var descriptor = ModuleDescriptor.newModule("demo.app")
+                .requires(Set.of(ModuleDescriptor.Requires.Modifier.TRANSITIVE), "java.logging")
+                .exports("demo.http")
+                .opens("demo.http")
+                .uses("com.sun.net.httpserver.HttpHandler")
+                .provides("com.sun.net.httpserver.HttpHandler", List.of("demo.http.Handler"))
+                .build();
+        var info = ModuleInfo.of(descriptor, "src/demo/module-info.java");
+        var type = new TypeInfo("demo.app", TypeInfo.Kind.MODULE, List.of(), List.of(), "", List.of(), List.of(),
+                List.of("demo.http"), List.of(), List.of(), "", List.of(), "", 0, "demo.app",
+                java.util.Optional.of(info));
+        var json = Docs.describe(type, false);
+        Check.equal("module metadata has its origin", "src/demo/module-info.java", json.string("origin", ""));
+        Check.equal("module metadata has its kind", "explicit", json.string("moduleKind", ""));
+        var requires = json.list("requires").stream()
+                .map(value -> ((Json.Object) value).string("name", "")).toList();
+        Check.equal("module metadata retains all required modules in stable order",
+                List.of("java.base", "java.logging"), requires);
+        Check.that("module metadata has the declared required module", requires.contains("java.logging"));
+        Check.equal("module metadata has an exported package", "demo.http",
+                ((Json.Object) json.list("exports").get(0)).string("package", ""));
+        Check.equal("module metadata has an opened package", "demo.http",
+                ((Json.Object) json.list("opens").get(0)).string("package", ""));
+        Check.equal("module metadata has a service use", "com.sun.net.httpserver.HttpHandler",
+                ((Json.Str) json.list("uses").get(0)).value());
+        Check.equal("module metadata has a service provider", "demo.http.Handler",
+                ((Json.Str) ((Json.Object) json.list("provides").get(0)).list("providers").get(0)).value());
     }
 
     private static void documentNames() {
@@ -111,15 +145,16 @@ public final class SymbolsTest {
     private static void controlledCompilation() throws IOException {
         var root = Files.createTempDirectory("tuul-controlled-symbols");
         var source = Files.createDirectories(root.resolve("symbols"));
+        module(root, "symbols.fixture", "exports symbols;");
         Files.writeString(source.resolve("Fixture.java"), "package symbols; final class Fixture {}");
         Files.writeString(source.resolve("tutorial-01-first.md"), "# First document\n\nStart with one.\n");
         Files.writeString(source.resolve("README.md"), "# Not a package document\n");
-        Files.writeString(root.resolve("main.java"), "void main() {}");
         var calls = new AtomicInteger();
         Compiler compiler = (request, classes) -> {
             calls.incrementAndGet();
-            Check.equal("the symbol compiler does not receive an entrypoint",
-                    List.of("Fixture.java"), request.sources().stream().map(path -> path.getFileName().toString()).toList());
+            Check.equal("the symbol compiler receives the complete named source root",
+                    List.of("Fixture.java", "module-info.java"), request.sources().stream()
+                            .map(path -> path.getFileName().toString()).sorted().toList());
             try (var in = SymbolsTest.class.getResourceAsStream("SymbolsTest$Fixture.class");
                     var out = classes.open("symbols.SymbolsTest$Fixture")) {
                 in.transferTo(out);
@@ -141,6 +176,7 @@ public final class SymbolsTest {
     private static void joinsCompilation() throws IOException {
         var root = Files.createTempDirectory("tuul-joined-symbols");
         var source = Files.createDirectories(root.resolve("symbols"));
+        module(root, "symbols.joined", "exports symbols;");
         Files.writeString(source.resolve("Fixture.java"), "package symbols; final class Fixture {}");
         var indexFile = root.resolve("build/index.db");
         var calls = new AtomicInteger();
@@ -178,10 +214,23 @@ public final class SymbolsTest {
         }
     }
 
+    private static void sourceRootsAreNamedModules() throws IOException {
+        var root = Files.createTempDirectory("tuul-invalid-symbols");
+        Files.writeString(root.resolve("Main.java"), "class Main {}");
+        try {
+            Sources.files(List.of(root));
+            Check.that("a source root without a module descriptor is rejected", false);
+        } catch (IOException expected) {
+            Check.that("a source root without a module descriptor is rejected",
+                    expected.getMessage().contains("module-info.java"));
+        }
+    }
+
     /// Package prose has its own fingerprint and publication path.
     private static void markdownDoesNotCompile() throws IOException {
         var root = Files.createTempDirectory("tuul-markdown-symbols");
         var source = Files.createDirectories(root.resolve("symbols"));
+        module(root, "symbols.markdown", "exports symbols;");
         Files.writeString(source.resolve("Fixture.java"), "package symbols; final class Fixture {}");
         var guide = source.resolve("guide.md");
         Files.writeString(guide, "# First\n\nOne.\n");
@@ -207,28 +256,33 @@ public final class SymbolsTest {
         Check.equal("a Markdown-only refresh does not call javac", 1, calls.get());
     }
 
-    /// A project may have more than one entrypoint, and asking about it still
-    /// works.
-    ///
-    /// Every `main.java` compiles to the same implicitly declared class `main`,
-    /// so two of them made javac stop with `duplicate class: main` and every
-    /// question about the project — and about the JDK, which shares the
-    /// compile — failed with it.
+    /// A named source root may contain more than one ordinary entrypoint class.
+    /// Each class has a package and a distinct binary name, so indexing one
+    /// does not hide or collide with the other.
     private static void entrypoints() throws IOException {
         var root = Files.createTempDirectory("tuul-entrypoints");
         root.toFile().deleteOnExit();
+        module(root, "entrypoints.fixture", "exports cli; exports serve; exports greeting;");
         var cli = Files.createDirectories(root.resolve("cli"));
-        Files.writeString(cli.resolve("main.java"), """
+        Files.writeString(cli.resolve("Main.java"), """
+                package cli;
+
                 /// The command line.
-                void main(String[] args) {
+                public final class Main {
+                    public static void main(String[] args) {
                     java.lang.System.out.println("cli");
+                    }
                 }
                 """);
         var serve = Files.createDirectories(root.resolve("serve"));
-        Files.writeString(serve.resolve("main.java"), """
+        Files.writeString(serve.resolve("Main.java"), """
+                package serve;
+
                 /// The server.
-                void main(String[] args) {
+                public final class Main {
+                    public static void main(String[] args) {
                     java.lang.System.out.println("serve");
+                    }
                 }
                 """);
         var lib = Files.createDirectories(root.resolve("greeting"));
@@ -249,9 +303,8 @@ public final class SymbolsTest {
                     "greeting.Greeter", index.lookup("greeting.Greeter").orElseThrow().name());
             Check.that("a question about the JDK survives a second entrypoint too",
                     index.lookup("java.lang.String").isPresent());
-            Check.that("an entrypoint is not a symbol", index.lookup("main").isEmpty());
-            Check.that("and it is not in the listing either",
-                    index.names().stream().noneMatch(name -> name.equals("main")));
+            Check.that("the command entrypoint is a named symbol", index.lookup("cli.Main").isPresent());
+            Check.that("the server entrypoint is a named symbol", index.lookup("serve.Main").isPresent());
         }
     }
 
@@ -261,6 +314,10 @@ public final class SymbolsTest {
         var directory = Files.createTempDirectory("tuul-index");
         directory.toFile().deleteOnExit();
         return directory.resolve("index.db");
+    }
+
+    private static void module(Path root, String name, String body) throws IOException {
+        Files.writeString(root.resolve("module-info.java"), "module " + name + " {\n    " + body + "\n}\n");
     }
 
     private static void project(Index index) {
@@ -306,6 +363,7 @@ public final class SymbolsTest {
 
     private static void documentCollisions() throws IOException {
         var root = Files.createTempDirectory("tuul-document-collision");
+        module(root, "collision.fixture", "exports collision;");
         var source = Files.createDirectories(root.resolve("collision"));
         Files.writeString(source.resolve("One.java"), "package collision; public final class One {}");
         Files.writeString(source.resolve("guide.md"), "# Guide\n");
@@ -322,6 +380,7 @@ public final class SymbolsTest {
 
     private static void documentStamp() throws IOException {
         var root = Files.createTempDirectory("tuul-document-stamp");
+        module(root, "stamped.fixture", "exports stamped;");
         var source = Files.createDirectories(root.resolve("stamped"));
         Files.writeString(source.resolve("One.java"), "package stamped; public final class One {}");
         var tutorial = source.resolve("tutorial.md");
@@ -586,6 +645,11 @@ public final class SymbolsTest {
                     index.lookup("invoicing.Invoice").isPresent());
         }
 
+        // Removing the only type from an exported package would make the JPMS
+        // descriptor invalid. Remove that export as part of the same source
+        // revision so the named module remains valid and the symbol can leave
+        // the complete generation.
+        Files.writeString(root.resolve("module-info.java"), "module invoicing.app {}\n");
         Files.delete(file);
         try (var index = Index.of(List.of(root), List.of(), kept)) {
             Check.that("and a source that is gone takes its symbols with it",
@@ -665,6 +729,8 @@ public final class SymbolsTest {
     }
 
     private static Path source(Path project) throws IOException {
+        Files.createDirectories(project.resolve("src"));
+        module(project.resolve("src"), "using.app", "requires greeting.lib;\n    exports using;");
         var source = Files.createDirectories(project.resolve("src/using"));
         Files.writeString(source.resolve("Uses.java"), """
                 package using;
@@ -731,6 +797,9 @@ public final class SymbolsTest {
     private static void artifact(Path directory, String name, String file, String source, boolean sources) throws IOException {
         var built = Files.createTempDirectory("tuul-artifact");
         built.toFile().deleteOnExit();
+        var module = file.startsWith("greeting/") ? "greeting.lib" : "plain.lib";
+        var exported = file.substring(0, file.indexOf('/'));
+        module(built, module, "exports " + exported + ";");
         var path = built.resolve(file);
         Files.createDirectories(path.getParent());
         Files.writeString(path, source);
@@ -966,6 +1035,7 @@ public final class SymbolsTest {
 
     private static Path sources() throws IOException {
         var root = Files.createTempDirectory("tuul-symbols");
+        module(root, "invoicing.app", "exports invoicing;");
         var invoicing = Files.createDirectories(root.resolve("invoicing"));
         Files.writeString(invoicing.resolve("package-info.java"), """
                 /**

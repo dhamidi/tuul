@@ -32,15 +32,18 @@ import java.util.concurrent.ConcurrentHashMap;
 import java.util.function.Consumer;
 import java.util.jar.JarFile;
 import java.util.Properties;
+import java.lang.module.ModuleFinder;
+import modules.ModuleGraph;
+import symbols.Vendor;
 import json.Json;
 
 /// Resolves all requested Maven roots as one graph and installs the selected
 /// artifacts in `vendor/<group>/<artifact>/<version>/`.
 ///
 /// Downloads go to a temporary tree outside `vendor/`. Required JARs must pass
-/// checksum, archive, coordinate, and duplicate-class validation before
+/// checksum, archive, coordinate, and JPMS module-graph validation before
 /// publication. A failure leaves `vendor/` unchanged. Source and javadoc JARs
-/// are optional. Their names keep them off the runtime classpath.
+/// are optional. They never enter the runtime module path.
 ///
 /// One coordinator actor runs the selected downloads. Progress is live.
 /// Completion is ordered state. At most eight requests run at once and at most
@@ -61,18 +64,15 @@ public final class Add {
         EVENTS
     }
 
-    /// Selects graph exclusions, accepted duplicate classes, and write mode.
-    /// A dry run reports the selected graph and missing files without changing
+    /// Selects graph exclusions and write mode. A dry run reports the selected graph and missing files without changing
     /// `vendor/`. The other values apply only to this call.
-    public record Options(java.util.Set<String> exclusions, java.util.Set<String> duplicateExceptions,
-            boolean dryRun) {
+    public record Options(java.util.Set<String> exclusions, boolean dryRun) {
         public Options {
             exclusions = java.util.Set.copyOf(exclusions);
-            duplicateExceptions = java.util.Set.copyOf(duplicateExceptions);
         }
 
         public static Options defaults() {
-            return new Options(java.util.Set.of(), java.util.Set.of(), false);
+            return new Options(java.util.Set.of(), false);
         }
     }
 
@@ -247,7 +247,7 @@ public final class Add {
                 if (options.dryRun()) return services.preview(coordinates, out);
                 var result = run(coordinates, out, mode, services);
                 if (result.ok()) {
-                    services.validateDuplicates();
+                    services.validateModules();
                     services.publish();
                 }
                 return result;
@@ -278,7 +278,7 @@ public final class Add {
     /// `Mode.EVENTS` writes one flushed semantic event per line and omits byte-level progress.
     /// Resolution and setup errors throw `IOException`. Download failures
     /// appear in the result. A required failure does not publish staged files.
-    /// Duplicate classes throw `IOException` before publication.
+    /// Module-graph failures throw `IOException` before publication.
     public static Result into(Layout layout, List<String> coordinates,
             List<URI> repositories, Writer out, Mode mode) throws IOException {
         return into(layout, coordinates, repositories, out, mode, Options.defaults());
@@ -471,33 +471,32 @@ public final class Add {
             publishTree(vendor, tree, staging.resolve("backup"));
         }
 
-        private void validateDuplicates() throws IOException {
-            var owners = new LinkedHashMap<String, List<FileRecord>>();
-            var runtimeCoordinates = resolution.runtime().stream().map(node -> node.coordinate().text()).collect(
-                    java.util.stream.Collectors.toSet());
+        private void validateModules() throws IOException {
+            var artifacts = new LinkedHashMap<Path, String>();
+            // Validate the complete post-publication vendor set. A new add must
+            // not make an already broken module set look valid by only checking
+            // the newly selected coordinates.
+            artifacts.putAll(Vendor.of(List.of(vendor)).artifacts());
             for (var file : installed.values()) {
-                if (!file.kind().equals("binary") || !runtimeCoordinates.contains(file.coordinate())) continue;
-                var classes = new LinkedHashSet<String>();
-                try (var jar = new JarFile(tree.resolve(file.path()).toFile(), false)) {
-                    for (var entries = jar.entries(); entries.hasMoreElements();) {
-                        var entry = entries.nextElement();
-                        var name = binaryClass(entry.getName());
-                        if (!name.isEmpty()) classes.add(name);
-                    }
+                if (file.kind().equals("binary")) {
+                    artifacts.remove(vendor.resolve(file.path()));
                 }
-                for (var name : classes) owners.computeIfAbsent(name, ignored -> new ArrayList<>()).add(file);
             }
-            var duplicates = owners.entrySet().stream().filter(entry -> entry.getValue().size() > 1)
-                    .filter(entry -> !options.duplicateExceptions().contains(entry.getKey()))
-                    .sorted(Map.Entry.comparingByKey()).toList();
-            if (duplicates.isEmpty()) return;
-            var report = new StringBuilder("duplicate binary classes prevent publication");
-            for (var duplicate : duplicates) {
-                report.append("\n  ").append(duplicate.getKey());
-                for (var owner : duplicate.getValue()) report.append("\n    ").append(owner.coordinate())
-                        .append(" ").append(vendor.resolve(owner.path()));
+            for (var file : installed.values()) {
+                if (!file.kind().equals("binary")) continue;
+                var path = tree.resolve(file.path());
+                if (Files.isRegularFile(path)) artifacts.put(path, file.coordinate());
             }
-            throw new IOException(report.toString());
+            var roots = new LinkedHashSet<String>();
+            for (var path : artifacts.keySet()) {
+                try {
+                    ModuleFinder.of(path).findAll().stream()
+                            .map(reference -> reference.descriptor().name()).forEach(roots::add);
+                } catch (RuntimeException ignored) {
+                    // ModuleGraph collects the path-specific invalid-artifact diagnostic.
+                }
+            }
+            ModuleGraph.resolve(artifacts, roots);
         }
 
         private Maven.PomDocument pom(Coordinate coordinate) throws IOException {

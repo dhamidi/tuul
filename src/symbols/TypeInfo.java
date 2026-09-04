@@ -3,6 +3,7 @@ package symbols;
 import java.util.ArrayList;
 import java.util.List;
 import java.util.Locale;
+import java.util.Optional;
 
 /// What a class file says about a type: what it is, what it extends, and what
 /// it declares. Names are fully qualified — shortening them is a rendering
@@ -37,7 +38,21 @@ public record TypeInfo(
         String doc,
         List<Tag> tags,
         String source,
-        int line) {
+        int line,
+        String module,
+        Optional<ModuleInfo> moduleInfo) {
+
+    public TypeInfo(String name, Kind kind, List<String> modifiers, List<String> typeParameters, String superclass,
+            List<String> interfaces, List<String> permits, List<String> nested, List<Method> methods,
+            List<Field> fields, String doc, List<Tag> tags, String source, int line) {
+        this(name, kind, modifiers, typeParameters, superclass, interfaces, permits, nested, methods, fields, doc,
+                tags, source, line, "", Optional.empty());
+    }
+
+    public TypeInfo {
+        module = module == null ? "" : module;
+        moduleInfo = moduleInfo == null ? Optional.empty() : moduleInfo;
+    }
 
     public enum Kind {
         CLASS, INTERFACE, RECORD, ENUM, ANNOTATION, PACKAGE, MODULE;
@@ -134,13 +149,23 @@ public record TypeInfo(
 
     public TypeInfo documented(String doc, List<Tag> tags, List<Method> methods, List<Field> fields, int line) {
         return new TypeInfo(name, kind, modifiers, typeParameters, superclass, interfaces, permits, nested,
-                methods, fields, doc, tags, source, line);
+                methods, fields, doc, tags, source, line, module, moduleInfo);
     }
 
     /// The same type, saying where it is written. The location is known by
     /// whoever found the source, which is not whoever read the class file.
     public TypeInfo at(String source) {
         return new TypeInfo(name, kind, modifiers, typeParameters, superclass, interfaces, permits, nested,
-                methods, fields, doc, tags, source, line);
+                methods, fields, doc, tags, source, line, module, moduleInfo);
+    }
+
+    public TypeInfo inModule(String name) {
+        return new TypeInfo(this.name, kind, modifiers, typeParameters, superclass, interfaces, permits, nested,
+                methods, fields, doc, tags, source, line, name, moduleInfo);
+    }
+
+    public TypeInfo describingModule(ModuleInfo descriptor) {
+        return new TypeInfo(name, kind, modifiers, typeParameters, superclass, interfaces, permits, nested,
+                methods, fields, doc, tags, source, line, descriptor.name(), Optional.of(descriptor));
     }
 }

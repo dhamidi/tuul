@@ -125,7 +125,8 @@ public final class Library {
     }
 
     /// Where the running code keeps its own libraries. A classes directory has
-    /// them in its sibling `native` — `build/classes` and `build/native` — and a
+    /// them in its sibling `native` — the module output under `build/modules`
+    /// and `build/native` — and a
     /// jar has them beside it, or under a `native` directory beside it, which is
     /// where an installed tuul and a vendored one both put what they ship.
     ///

@@ -28,6 +28,7 @@ public final class Docs {
         return Json.Object.of()
                 .with("class", type.name())
                 .with("kind", type.kind().keyword())
+                .with("module", type.module())
                 .with("doc", type.doc())
                 .with("modifiers", Json.Array.strings(type.modifiers()))
                 .with("typeParameters", Json.Array.strings(type.typeParameters()))
@@ -39,7 +40,27 @@ public final class Docs {
                 .with("line", Json.of(type.line()))
                 .with("tags", tags(type.tags()))
                 .with("methods", methods(type, all))
-                .with("fields", fields(type, all));
+                .with("fields", fields(type, all))
+                .with("moduleKind", type.moduleInfo().map(ModuleInfo::kind).orElse(""))
+                .with("origin", type.moduleInfo().map(ModuleInfo::origin).orElse(""))
+                .with("requires", type.moduleInfo().map(info -> Json.Array.of(info.requires().stream()
+                        .map(item -> (Json) Json.Object.of().with("name", item.name())
+                                .with("modifiers", Json.Array.strings(item.modifiers()))).toList()))
+                        .orElse(Json.Array.of(List.of())))
+                .with("exports", type.moduleInfo().map(info -> Json.Array.of(info.exports().stream()
+                        .map(item -> (Json) Json.Object.of().with("package", item.packageName())
+                                .with("targets", Json.Array.strings(item.targets()))).toList()))
+                        .orElse(Json.Array.of(List.of())))
+                .with("opens", type.moduleInfo().map(info -> Json.Array.of(info.opens().stream()
+                        .map(item -> (Json) Json.Object.of().with("package", item.packageName())
+                                .with("targets", Json.Array.strings(item.targets()))).toList()))
+                        .orElse(Json.Array.of(List.of())))
+                .with("uses", type.moduleInfo().map(info -> Json.Array.strings(info.uses()))
+                        .orElse(Json.Array.of(List.of())))
+                .with("provides", type.moduleInfo().map(info -> Json.Array.of(info.provides().stream()
+                        .map(item -> (Json) Json.Object.of().with("service", item.service())
+                                .with("providers", Json.Array.strings(item.providers()))).toList()))
+                        .orElse(Json.Array.of(List.of())));
     }
 
     /// Describes one symbol and lists its package documents.

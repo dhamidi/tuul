@@ -1,3 +1,5 @@
+package tuul.cli;
+
 import application.Message;
 import argparse.Command;
 import argparse.Parsed;
@@ -23,7 +25,7 @@ import tuul.Version;
 /// definition read back — so a command that grows an option grows a line of
 /// help, and there is no second copy of the command surface to keep in step.
 
-public final class main {
+public final class Main {
 
 public static void main(String[] args) throws IOException {
     var out = new BufferedWriter(new OutputStreamWriter(System.out, StandardCharsets.UTF_8));
@@ -77,7 +79,6 @@ static Command tuul() {
             .command(Command.named("add", "download Maven dependencies into vendor/")
                     .repeated("repository", "Maven repository base URI (default: Maven Central)")
                     .repeated("exclude", "exclude a group:artifact from every dependency path")
-                    .repeated("allow-duplicate", "accept one duplicate binary class name")
                     .flag("dry-run", "print the selected graph and missing files without writing")
                     .rest("dependencies", "group:artifact:version[:classifier] coordinates"))
             .command(docs)

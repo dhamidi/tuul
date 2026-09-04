@@ -25,6 +25,7 @@ import java.util.concurrent.ConcurrentHashMap;
 import java.util.function.Supplier;
 import compiler.Compiler;
 import compiler.Compilation;
+import modules.ModuleGraph;
 import sqlite3.SqliteException;
 
 /// Every symbol tuul can answer questions about, in the order it looks: the
@@ -138,7 +139,7 @@ public final class Index implements Catalog {
     /// Dependency and platform class files still come from their archives.
     public static Index of(List<Path> sourceRoots, List<Path> vendorRoots, Path index, Compiler compiler)
             throws IOException {
-        var vendor = Vendor.of(vendorRoots);
+        var vendor = vendor(vendorRoots);
         return new Index(sourceRoots, vendor, IndexStore.open(index), Inventory.of(sourceRoots, vendor), index, compiler);
     }
 
@@ -146,8 +147,17 @@ public final class Index implements Catalog {
     /// index closes the store.
     public static Index of(List<Path> sourceRoots, List<Path> vendorRoots, Compiler compiler, IndexStore store)
             throws IOException {
-        var vendor = Vendor.of(vendorRoots);
+        var vendor = vendor(vendorRoots);
         return new Index(sourceRoots, vendor, Optional.of(store), Inventory.of(sourceRoots, vendor), INDEX, compiler);
+    }
+
+    /// Resolves dependency descriptors before analysis sees any dependency
+    /// class. This keeps docs and browse on the same explicit module graph as
+    /// build, run, test, and reload.
+    private static Vendor vendor(List<Path> roots) throws IOException {
+        var vendor = Vendor.of(roots);
+        if (!vendor.artifacts().isEmpty()) vendor.graph();
+        return vendor;
     }
 
     /// Opens only the last committed database. This catalog cannot compile,
@@ -270,6 +280,7 @@ public final class Index implements Catalog {
         if (name.isEmpty() || name.contains("$")) return Optional.empty();
         return module(name)
                 .or(() -> store.isEmpty() ? projectPackage(name) : Optional.empty())
+                .or(() -> vendorModule(name))
                 .or(() -> grouped("vendor", "vendor", vendor.stamp() + vendor.sourceStamp() + Javadoc.FORMAT, name,
                         () -> vendoredPackage(name)))
                 .or(() -> grouped("platform", System.getProperty("java.home"), platformStamp(), name,
@@ -305,10 +316,23 @@ public final class Index implements Catalog {
             var directory = modules().resolve(name);
             if (!Files.isDirectory(directory)) return Optional.empty();
             var exported = exports(directory);
-            return Optional.of(group(name, TypeInfo.Kind.MODULE,
-                    exported.isEmpty() ? packagesIn(directory) : exported,
-                    jdkSource(name, "module-info.java")));
+            var source = jdkSource(name, "module-info.java");
+            var grouped = group(name, TypeInfo.Kind.MODULE,
+                    exported.isEmpty() ? packagesIn(directory) : exported, source);
+            return descriptor(directory.resolve("module-info.class"), source, name)
+                    .map(grouped::describingModule).or(() -> Optional.of(grouped.inModule(name)));
         });
+    }
+
+    private static Optional<ModuleInfo> descriptor(Path declaration, Optional<Source> source, String fallback)
+    {
+        if (!Files.isRegularFile(declaration)) return Optional.empty();
+        try {
+            var origin = source.map(Source::location).orElse("jrt:/modules/" + fallback + "/module-info.class");
+            return Optional.of(ModuleInfo.read(read(declaration), origin));
+        } catch (IOException | RuntimeException unreadable) {
+            return Optional.empty();
+        }
     }
 
     private static List<String> exports(Path module) {
@@ -346,7 +370,10 @@ public final class Index implements Catalog {
         for (var name : visible.stream().map(Index::packageOf).filter(each -> !each.isEmpty()).distinct().toList()) {
             var contents = contents(name, visible);
             if (contents.isEmpty()) continue;
-            packages.put(name, group(name, TypeInfo.Kind.PACKAGE, contents, packageInfo(name)));
+            var module = types.entrySet().stream().filter(entry -> packageOf(entry.getKey()).equals(name))
+                    .map(entry -> entry.getValue().module()).filter(owner -> !owner.isEmpty()).findFirst();
+            packages.put(name, group(name, TypeInfo.Kind.PACKAGE, contents, packageInfo(name))
+                    .inModule(module.orElse("")));
         }
         return packages;
     }
@@ -366,7 +393,8 @@ public final class Index implements Catalog {
                 .toList();
         var contents = contents(name, visible);
         if (contents.isEmpty()) return Optional.empty();
-        return Optional.of(group(name, TypeInfo.Kind.PACKAGE, contents, packageInfo(name)));
+        var module = compile().get("module-info") == null ? "" : projectModule(compile()).map(ModuleInfo::name).orElse("");
+        return Optional.of(group(name, TypeInfo.Kind.PACKAGE, contents, packageInfo(name)).inModule(module));
     }
 
     private Optional<Source> packageInfo(String name) {
@@ -385,8 +413,10 @@ public final class Index implements Catalog {
     private Optional<TypeInfo> vendoredPackage(String name) {
         var contents = contents(name, vendor.types(name));
         if (contents.isEmpty()) return Optional.empty();
+        var module = vendor.modules().stream().filter(info -> info.exports().stream()
+                .anyMatch(export -> export.packageName().equals(name))).map(ModuleInfo::name).findFirst().orElse("");
         return Optional.of(group(name, TypeInfo.Kind.PACKAGE, contents,
-                vendor.packageInfo(name).map(found -> new Source(found.text(), found.location()))));
+                vendor.packageInfo(name).map(found -> new Source(found.text(), found.location()))).inModule(module));
     }
 
     private Optional<TypeInfo> platformPackage(String name) {
@@ -406,8 +436,9 @@ public final class Index implements Catalog {
         if (held.isEmpty() && packages.isEmpty()) return Optional.empty();
         var contents = new ArrayList<>(new TreeSet<>(packages));
         contents.addAll(new TreeSet<>(held));
+        var owner = moduleOf(path).orElse("");
         return Optional.of(group(name, TypeInfo.Kind.PACKAGE, List.copyOf(contents),
-                jdkSource(moduleOf(path).orElse(""), path + "/package-info.java")));
+                jdkSource(owner, path + "/package-info.java")).inModule(owner));
     }
 
     /// Subpackages first, then the types, because a reader scanning a package
@@ -668,7 +699,7 @@ public final class Index implements Catalog {
     }
 
     private Optional<TypeInfo> vendored(String name) {
-        var stamp = vendor.stamp() + vendor.testStamp() + vendor.sourceStamp() + Javadoc.FORMAT;
+        var stamp = vendor.stamp() + vendor.sourceStamp() + Javadoc.FORMAT;
         var origin = snapshot("vendor", "vendor", stamp);
         if (origin.isPresent() && origin.get().fresh()) {
             var kept = kept(origin.get().id(), name);
@@ -680,10 +711,18 @@ public final class Index implements Catalog {
         return built.map(Found::type);
     }
 
+    private Optional<TypeInfo> vendorModule(String name) {
+        return vendor.modules().stream().filter(module -> module.name().equals(name)).findFirst().map(module -> {
+            var contents = module.exports().stream().map(ModuleInfo.Export::packageName).sorted().toList();
+            return new TypeInfo(name, TypeInfo.Kind.MODULE, List.of(), List.of(), "", List.of(), List.of(), contents,
+                    List.of(), List.of(), "", List.of(), "", 0, name, Optional.of(module));
+        });
+    }
+
     /// Publishes one complete searchable generation for selected dependencies.
     private void indexVendor() {
         if (store.isEmpty()) return;
-        var stamp = vendor.stamp() + vendor.testStamp() + vendor.sourceStamp() + Javadoc.FORMAT;
+        var stamp = vendor.stamp() + vendor.sourceStamp() + Javadoc.FORMAT;
         var current = snapshot("vendor", "vendor", stamp);
         if (current.isPresent() && current.get().fresh() && current.get().complete()) return;
         var types = new LinkedHashMap<String, TypeInfo>();
@@ -692,6 +731,12 @@ public final class Index implements Catalog {
                     .ifPresent(found -> types.put(found.name(), searchableDependency(found.type())));
         }
         for (var name : vendor.packages()) vendoredPackage(name).ifPresent(type -> types.put(name, type));
+        for (var module : vendor.modules()) {
+            var contents = module.exports().stream().map(ModuleInfo.Export::packageName).sorted().toList();
+            types.put(module.name(), new TypeInfo(module.name(), TypeInfo.Kind.MODULE, List.of(), List.of(), "",
+                    List.of(), List.of(), contents, List.of(), List.of(), "", List.of(), "", 0,
+                    module.name(), Optional.of(module)));
+        }
         store.orElseThrow().publish("vendor", "vendor", stamp, types, List.of());
     }
 
@@ -708,7 +753,7 @@ public final class Index implements Catalog {
                         List.of(), field.line()))
                 .toList();
         return new TypeInfo(type.name(), type.kind(), type.modifiers(), List.of(), "", List.of(), List.of(), List.of(),
-                methods, fields, type.doc(), List.of(), type.source(), -type.line() - 1);
+                methods, fields, type.doc(), List.of(), type.source(), -type.line() - 1, type.module(), type.moduleInfo());
     }
 
     /// The JDK is stamped with its own version. A lightweight search row is
@@ -749,7 +794,8 @@ public final class Index implements Catalog {
                             var bytes = read(classFile);
                             if (!Classes.visible(bytes)) continue;
                             var inspected = Classes.inspect(bytes);
-                            types.put(inspected.name(), searchable(inspected, "jrt-name:" + classFile));
+                            types.put(inspected.name(), searchable(inspected, "jrt-name:" + classFile)
+                                    .inModule(module.getFileName().toString()));
                         }
                     }
                 }
@@ -803,9 +849,9 @@ public final class Index implements Catalog {
         var entry = sourceFile(type.name());
         var key = module + "/" + entry;
         var source = sources.computeIfAbsent(key, ignored -> jdk(module, entry).orElse(null));
-        if (source == null) return type.at(classLocation);
+        if (source == null) return type.at(classLocation).inModule(module);
         var docs = comments.computeIfAbsent(key, ignored -> Javadoc.of(source, file(type.name())));
-        return Javadoc.attach(type.at(jdkLocation(module, entry)), docs, path(type.name()));
+        return Javadoc.attach(type.at(jdkLocation(module, entry)).inModule(module), docs, path(type.name()));
     }
 
     /// Publishes the module and package rows the browser root points at. They
@@ -856,8 +902,12 @@ public final class Index implements Catalog {
 
         var groups = new LinkedHashMap<String, TypeInfo>();
         for (var module : modules.entrySet()) {
-            groups.put(module.getKey(), group(module.getKey(), TypeInfo.Kind.MODULE, module.getValue(),
-                    jdkSource(module.getKey(), "module-info.java")));
+            var name = module.getKey();
+            var source = jdkSource(name, "module-info.java");
+            var grouped = group(name, TypeInfo.Kind.MODULE, module.getValue(), source);
+            var directory = modules().resolve(name);
+            groups.put(name, descriptor(directory.resolve("module-info.class"), source, name)
+                    .map(grouped::describingModule).orElseGet(() -> grouped.inModule(name)));
         }
         for (var packageName : new TreeSet<>(packageTypes.keySet())) {
             groups.put(packageName, group(packageName, TypeInfo.Kind.PACKAGE,
@@ -883,7 +933,7 @@ public final class Index implements Catalog {
 
     private static TypeInfo searchable(TypeInfo type, String source) {
         return new TypeInfo(type.name(), type.kind(), type.modifiers(), List.of(), "", List.of(), List.of(), List.of(),
-                List.of(), List.of(), "", List.of(), source, 0);
+                List.of(), List.of(), "", List.of(), source, 0, type.module(), type.moduleInfo());
     }
 
     /// A type and the binary name it was found under, which is what it gets
@@ -1057,10 +1107,37 @@ public final class Index implements Catalog {
         }
         var comments = new HashMap<String, Map<String, Javadoc.Comment>>();
         var types = new LinkedHashMap<String, TypeInfo>();
-        compiled.forEach((name, bytes) -> types.put(name, documented(Classes.inspect(bytes), name, comments)));
+        compiled.forEach((name, bytes) -> {
+            if (!name.equals("module-info")) {
+                types.put(name, documented(Classes.inspect(bytes), name, comments));
+            }
+        });
+        projectModule(compiled).ifPresent(module -> {
+            var contents = module.exports().stream().map(ModuleInfo.Export::packageName).sorted().toList();
+            var moduleSource = roots.stream().map(root -> root.resolve("module-info.java"))
+                    .filter(Files::isRegularFile).findFirst().map(Index::text).map(text ->
+                            new Source(text, roots.stream().map(root -> root.resolve("module-info.java"))
+                                    .filter(Files::isRegularFile).findFirst().orElseThrow().toString()));
+            var grouped = group(module.name(), TypeInfo.Kind.MODULE, contents, moduleSource)
+                    .describingModule(module);
+            types.replaceAll((name, type) -> type.inModule(module.name()));
+            types.put(module.name(), grouped);
+        });
         types.putAll(packagesOf(types));
         store.orElseThrow().publish("project", "sources", sourceStamp, types, List.of());
         return true;
+    }
+
+    private Optional<ModuleInfo> projectModule(Map<String, byte[]> compiled) {
+        var bytes = compiled.get("module-info");
+        if (bytes == null) return Optional.empty();
+        try {
+            return Optional.of(ModuleInfo.read(bytes, roots.stream()
+                    .map(root -> root.resolve("module-info.java")).filter(Files::isRegularFile)
+                    .findFirst().map(Path::toString).orElse("memory:module-info.class")));
+        } catch (IOException | RuntimeException unreadable) {
+            return Optional.empty();
+        }
     }
 
     /// Publishes the package documents when a Markdown file changed. Two
@@ -1154,8 +1231,8 @@ public final class Index implements Catalog {
         return read.isEmpty() ? located : Javadoc.attach(located, read, path(name));
     }
 
-    /// The project's class files: what `tuul build` left in `build/classes`
-    /// when it built these exact sources, or javac's answer in memory.
+    /// The project's named-module class files: what `tuul build` left in the
+    /// matching directory below `build/modules`, or javac's answer in memory.
     /// Nothing is written to disk, since the facts go into the index and the
     /// class files are not needed after that.
     ///
@@ -1167,23 +1244,35 @@ public final class Index implements Catalog {
         if (!compileProblem.isEmpty()) return Map.of();
         try {
             var sources = Sources.files(roots);
-            var module = sources.stream().anyMatch(path -> path.getFileName().toString().equals("module-info.java"));
+            var module = Sources.moduleName(roots);
+            var modulePath = modulePath();
             var fingerprint = Compilation.fingerprint(
-                    sources, vendor.runtime(), module, Runtime.version().feature(), true);
+                    sources, modulePath, true, Runtime.version().feature(), true);
             var build = index.getParent() == null ? Path.of("build") : index.getParent();
-            var built = build.resolve("classes");
-            var builtStamp = build.resolve(".tuul/libraries.compile.stamp");
+            var built = build.resolve("modules").resolve(module);
+            var builtStamp = build.resolve(".tuul/module-" + module + ".stamp");
             if (Files.isDirectory(built) && Files.isRegularFile(builtStamp)
                     && Files.readString(builtStamp).equals(fingerprint)) {
                 classes = Sources.read(built);
                 return classes;
             }
-            classes = Sources.compile(roots, vendor.runtime(), compiler);
+            classes = Sources.compile(roots, modulePath, compiler);
         } catch (IOException | UncheckedIOException failed) {
             compileProblem = failed.getMessage() == null ? failed.toString() : failed.getMessage();
             return Map.of();
         }
         return classes;
+    }
+
+    /// The compiler sees the same resolved named artifacts that runtime tools
+    /// see. A raw vendor walk is not sufficient: it can include an unnamed
+    /// archive or an artifact outside the selected graph.
+    private List<Path> modulePath() throws IOException {
+        if (vendor.artifacts().isEmpty()) return List.of();
+        return vendor.graph().modules().values().stream()
+                .map(ModuleGraph.Node::origin)
+                .flatMap(origin -> origin.path().stream())
+                .distinct().toList();
     }
 
     private Optional<Origin> compiled(String name) {
@@ -1213,7 +1302,7 @@ public final class Index implements Catalog {
                     .map(path -> {
                         var module = path.getName(1).toString();
                         return new Origin(read(path), jdk(module, name), Archives.jdkSources().isPresent()
-                                ? jdkLocation(module, sourceFile(name)) : "jrt:" + path);
+                                ? jdkLocation(module, sourceFile(name)) : "jrt:" + path, module);
                     });
         } catch (IOException e) {
             return Optional.empty();
@@ -1228,7 +1317,7 @@ public final class Index implements Catalog {
     }
 
     private static TypeInfo document(TypeInfo type, String name, Origin origin) {
-        var located = type.at(origin.location());
+        var located = type.at(origin.location()).inModule(origin.module());
         return origin.source()
                 .map(text -> Javadoc.attach(located, Javadoc.of(text, file(name)), path(name)))
                 .orElse(located);
@@ -1247,8 +1336,7 @@ public final class Index implements Catalog {
                     for (var path : tree.filter(Files::isRegularFile).sorted().toList()) {
                         var line = path + ":" + Files.size(path) + ":"
                                 + Files.getLastModifiedTime(path).toInstant() + "\n";
-                        if (path.toString().endsWith(".java")
-                                && !path.getFileName().toString().equals(Sources.ENTRYPOINT)) {
+                        if (path.toString().endsWith(".java")) {
                             sources.append(line);
                         }
                         if (Document.name(path).isPresent()) documents.append(line);

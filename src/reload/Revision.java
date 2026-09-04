@@ -9,46 +9,31 @@ import java.util.HexFormat;
 import java.util.List;
 import java.util.Objects;
 
-/// One immutable source input and the program it produces.
+/// One immutable named-module source closure and the program it produces.
 public final class Revision {
 
     private final String identity;
-    private final Path root;
-    private final String entrypoint;
-    private final List<Path> sources;
-    private final List<Path> resources;
-    private final List<ResourceEntry> resourceEntries;
+    private final String rootModule;
+    private final List<SourceModule> modules;
     private final List<Path> dependencies;
     private final Program program;
 
     private Revision(String identity, Program program) {
-        this(identity, null, "", List.of(), List.of(), List.of(), program);
-    }
-
-    /// Creates a path-backed revision with an identity that the caller already
-    /// verified. Use [#from(Path, String, List, List, List)] to compute it.
-    public Revision(String identity, Path root, String entrypoint, List<Path> sources,
-            List<Path> resources, List<Path> dependencies) {
-        this(identity, root, entrypoint, sources, resources, dependencies, null);
-    }
-
-    private Revision(String identity, Path root, String entrypoint, List<Path> sources,
-            List<Path> resources, List<Path> dependencies, Program program) {
-        this(identity, root, entrypoint, sources, resources,
-                resources == null ? List.of() : resources.stream()
-                        .map(path -> new ResourceEntry(relative(root, path), path)).toList(),
-                dependencies, program);
-    }
-
-    private Revision(String identity, Path root, String entrypoint, List<Path> sources,
-            List<Path> resources, List<ResourceEntry> resourceEntries, List<Path> dependencies,
-            Program program) {
         this.identity = require(identity, "identity");
-        this.root = root == null ? null : root.toAbsolutePath().normalize();
-        this.entrypoint = entrypoint == null ? "" : entrypoint;
-        this.sources = paths(sources);
-        this.resources = paths(resources);
-        this.resourceEntries = List.copyOf(resourceEntries);
+        rootModule = "";
+        modules = List.of();
+        dependencies = List.of();
+        this.program = Objects.requireNonNull(program, "program");
+    }
+
+    private Revision(String identity, String rootModule, List<SourceModule> modules,
+            List<Path> dependencies, Program program) {
+        this.identity = require(identity, "identity");
+        this.rootModule = require(rootModule, "root module");
+        this.modules = List.copyOf(modules);
+        if (this.modules.stream().noneMatch(module -> module.name().equals(rootModule))) {
+            throw new IllegalArgumentException("root module is not in source closure: " + rootModule);
+        }
         this.dependencies = paths(dependencies);
         this.program = program;
     }
@@ -63,54 +48,52 @@ public final class Revision {
         return of("program-" + Integer.toHexString(System.identityHashCode(program)), program);
     }
 
-    /// Computes a content identity from normalized entry names and bytes.
-    public static Revision from(Path root, String entrypoint, List<Path> sources,
-            List<Path> resources, List<Path> dependencies) throws IOException {
-        var entries = resources == null ? List.<ResourceEntry>of() : resources.stream()
-                .map(path -> new ResourceEntry(relative(root, path), path)).toList();
-        return fromEntries(root, entrypoint, sources, entries, dependencies);
+    /// Computes an identity for a named project module closure.
+    public static Revision from(String rootModule, List<SourceModule> modules,
+            List<Path> dependencies) throws IOException {
+        var normalized = modules == null ? List.<SourceModule>of() : List.copyOf(modules);
+        var paths = dependencies == null ? List.<Path>of() : List.copyOf(dependencies);
+        return new Revision(digest(rootModule, normalized, paths), rootModule, normalized, paths, null);
     }
 
-    /// Computes a content identity from normalized source paths and logical resource entries.
-    public static Revision fromEntries(Path root, String entrypoint, List<Path> sources,
-            List<ResourceEntry> resources, List<Path> dependencies) throws IOException {
-        var sourceEntries = sources == null ? List.<Path>of() : List.copyOf(sources);
-        var namedResources = resources == null ? List.<ResourceEntry>of() : List.copyOf(resources);
-        var dependencyEntries = dependencies == null ? List.<Path>of() : List.copyOf(dependencies);
-        return new Revision(digest(root, sourceEntries, namedResources, dependencyEntries),
-                root, entrypoint, sourceEntries, allResources(namedResources), namedResources,
-                dependencyEntries, null);
-    }
-
-    /// Returns the content or caller-supplied revision identity.
+    /// Returns the content or caller-supplied identity.
     public String identity() { return identity; }
-    /// Returns the normalized staging root, or null for an in-process revision.
-    public Path root() { return root; }
-    /// Returns the selected project entrypoint name.
-    public String entrypoint() { return entrypoint; }
-    /// Returns the normalized Java source paths.
-    public List<Path> sources() { return sources; }
-    /// Returns the normalized resource paths.
-    public List<Path> resources() { return resources; }
-    /// Returns resources with the names used by the generation classloader.
-    public List<ResourceEntry> resourceEntries() { return resourceEntries; }
-    /// Returns the normalized compile and runtime dependency paths.
+
+    /// Returns the module whose resolved layer is passed to the generation factory.
+    public String rootModule() { return rootModule; }
+
+    /// Returns all source modules in the closure, including the root module.
+    public List<SourceModule> modules() { return modules; }
+
+    /// Returns dependency module paths acquired by the project manager.
     public List<Path> dependencies() { return dependencies; }
+
     /// Returns the attached host program, or null before compilation.
     public Program program() { return program; }
 
-    /// Returns this revision with the host-owned program attached. The source
-    /// metadata and content identity remain unchanged. A compiler uses this
-    /// method to keep materialization separate from loading and activation.
+    /// Returns this revision with the host-owned program attached.
     public Revision withProgram(Program program) {
-        return new Revision(identity, root, entrypoint, sources, resources, resourceEntries, dependencies,
+        return new Revision(identity, rootModule, modules, dependencies,
                 Objects.requireNonNull(program, "program"));
     }
 
-    /// One source file and its relative name in the generation classpath.
-    ///
-    /// A name cannot start or end with `/`. Empty, current, and parent path
-    /// segments are rejected.
+    /// One named module's descriptor, Java sources, and logical resources.
+    public record SourceModule(String name, Path root, Path descriptor,
+            List<Path> sources, List<ResourceEntry> resources) {
+        public SourceModule {
+            name = require(name, "module name");
+            root = Objects.requireNonNull(root, "module root").toAbsolutePath().normalize();
+            descriptor = Objects.requireNonNull(descriptor, "module descriptor")
+                    .toAbsolutePath().normalize();
+            sources = sources == null ? List.of() : sources.stream()
+                    .map(path -> Objects.requireNonNull(path, "source").toAbsolutePath().normalize()).toList();
+            resources = resources == null ? List.of() : List.copyOf(resources);
+            if (!sources.contains(descriptor)) throw new IllegalArgumentException(
+                    "module sources must contain its descriptor: " + name);
+        }
+    }
+
+    /// One resource path and its name inside its named module.
     public record ResourceEntry(String name, Path path) {
         public ResourceEntry {
             name = require(name, "resource name").replace('\\', '/');
@@ -124,40 +107,43 @@ public final class Revision {
     }
 
     private static List<Path> paths(List<Path> paths) {
-        if (paths == null) return List.of();
-        return paths.stream().map(path -> path.toAbsolutePath().normalize()).toList();
+        return paths == null ? List.of() : paths.stream()
+                .map(path -> Objects.requireNonNull(path, "dependency")
+                        .toAbsolutePath().normalize()).toList();
     }
 
-    private static List<Path> allResources(List<ResourceEntry> resources) {
-        return resources == null ? List.of() : resources.stream().map(ResourceEntry::path).toList();
-    }
-
-    private static String relative(Path root, Path path) {
-        if (root == null) return path.toString();
-        return root.toAbsolutePath().normalize().relativize(path.toAbsolutePath().normalize())
-                .toString().replace('\\', '/');
-    }
-
-    private static String digest(Path root, List<Path> sources, List<ResourceEntry> resources,
+    private static String digest(String rootModule, List<SourceModule> modules,
             List<Path> dependencies) throws IOException {
         var digest = sha256();
-        for (var source : normalized(sources)) {
-            file(digest, "source", relative(root, source), source);
+        digest.update(require(rootModule, "root module").getBytes(StandardCharsets.UTF_8));
+        for (var module : modules.stream().sorted(java.util.Comparator.comparing(SourceModule::name)).toList()) {
+            digest.update(module.name().getBytes(StandardCharsets.UTF_8));
+            for (var source : module.sources().stream().sorted().toList()) {
+                file(digest, "source", module.name() + "/" + module.root().relativize(source), source);
+            }
+            for (var resource : module.resources().stream()
+                    .sorted(java.util.Comparator.comparing(ResourceEntry::name)).toList()) {
+                file(digest, "resource", module.name() + "/" + resource.name(), resource.path());
+            }
         }
-        for (var resource : resources.stream()
-                .sorted(java.util.Comparator.comparing(ResourceEntry::name)
-                        .thenComparing(entry -> entry.path().toString()))
-                .toList()) {
-            file(digest, "resource", resource.name(), resource.path());
-        }
-        for (var dependency : normalized(dependencies)) {
-            file(digest, "dependency", dependency.toString(), dependency);
+        for (var dependency : dependencies.stream().map(Path::toAbsolutePath).sorted().toList()) {
+            if (Files.isDirectory(dependency)) {
+                try (var files = Files.walk(dependency)) {
+                    files.filter(Files::isRegularFile).sorted().forEach(path -> {
+                        try { file(digest, "dependency", dependency.relativize(path).toString(), path); }
+                        catch (IOException failure) { throw new DigestFailure(failure); }
+                    });
+                } catch (DigestFailure failure) { throw failure.io; }
+            } else {
+                file(digest, "dependency", dependency.toString(), dependency);
+            }
         }
         return HexFormat.of().formatHex(digest.digest());
     }
 
-    private static List<Path> normalized(List<Path> paths) {
-        return paths.stream().map(path -> path.toAbsolutePath().normalize()).sorted().toList();
+    private static final class DigestFailure extends RuntimeException {
+        private final IOException io;
+        private DigestFailure(IOException io) { this.io = io; }
     }
 
     private static void file(MessageDigest digest, String kind, String name, Path path) throws IOException {

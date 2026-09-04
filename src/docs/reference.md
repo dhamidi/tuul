@@ -172,5 +172,6 @@ When the project does not compile, the index keeps the rows of the last
 build that compiled. It records the failure against the current sources.
 The same broken sources are not compiled again until they change.
 
-`tuul build` and `tuul docs` share class files. When `build/classes` matches
-the current sources, the index reads it instead of running the compiler.
+`tuul build` and `tuul docs` share named-module outputs. When the module
+outputs under `build/modules` match the current sources, the index reads them
+instead of running the compiler.

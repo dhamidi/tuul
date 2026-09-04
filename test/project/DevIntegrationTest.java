@@ -33,14 +33,14 @@ public final class DevIntegrationTest {
                 }
             });
             try (var client = HttpClient.newHttpClient()) {
-                var port = awaitPort(output);
+                var port = awaitPort(output, errors);
                 Check.equal("the first generation answers", "one\n", get(client, port));
                 assertNoReloadOutput(root, "before the first reload");
-                Files.writeString(root.resolve("src/web/main.java"), source("two"));
+                Files.writeString(root.resolve("entrypoints/web/Main.java"), source("two"));
                 await("the changed generation answers", () -> "two\n".equals(get(client, port)));
                 assertNoReloadOutput(root, "after the first reload");
 
-                Files.writeString(root.resolve("src/web/main.java"), broken());
+                Files.writeString(root.resolve("entrypoints/web/Main.java"), broken());
                 await("the broken revision is reported", () -> errors.toString().contains("compile:"));
                 Check.equal("a broken revision leaves the last good generation active", "two\n", get(client, port));
                 Check.that("the compiler problem is reported", errors.toString().contains("compile:"));
@@ -52,19 +52,28 @@ public final class DevIntegrationTest {
             remove(root);
         }
         namedProject();
+        externalProject();
+        singleModuleExternalProject();
     }
 
     private static void namedProject() throws Exception {
         var root = Files.createTempDirectory("tuul-dev-module");
         try {
             Files.createDirectories(root.resolve("src/demo"));
-            Files.createDirectories(root.resolve("src/web"));
+            Files.createDirectories(root.resolve("entrypoints/web"));
             Files.createDirectories(root.resolve("src/resources"));
             Files.createDirectories(root.resolve("vendor"));
             Files.writeString(root.resolve("src/module-info.java"), """
-                    module demo {
+                    module demo.app {
                         requires tuul;
                         exports demo;
+                    }
+                    """);
+            Files.writeString(root.resolve("entrypoints/module-info.java"), """
+                    module demo.entrypoints {
+                        requires demo.app;
+                        requires tuul;
+                        provides reload.Program with demo.web.Main;
                     }
                     """);
             Files.writeString(root.resolve("src/demo/Value.java"), """
@@ -81,7 +90,8 @@ public final class DevIntegrationTest {
                     }
                     """);
             Files.writeString(root.resolve("src/resources/value.txt"), "from-module-resource");
-            Files.writeString(root.resolve("src/web/main.java"), """
+            Files.writeString(root.resolve("entrypoints/web/Main.java"), """
+                    package demo.web;
                     import reload.Generation;
                     import reload.Program;
                     import web.Responses;
@@ -90,7 +100,7 @@ public final class DevIntegrationTest {
                     import web.reload.ReloadHandler;
                     import demo.Value;
 
-                    public final class main implements Program {
+                    public final class Main implements Program {
                         private static final RouteRef HOME = RouteRef.of("home", "/");
                         public Generation define() {
                             return ReloadHandler.attach(Generation.empty(), Router.of().get(HOME,
@@ -109,7 +119,7 @@ public final class DevIntegrationTest {
                 }
             });
             try (var client = HttpClient.newHttpClient()) {
-                var port = awaitPort(output);
+                var port = awaitPort(output, errors);
                 Check.equal("a named project loads its module generation", "from-module-resource\n", get(client, port));
                 assertNoReloadOutput(root, "before the named reload");
                 Files.writeString(root.resolve("src/resources/value.txt"), "changed-module-resource");
@@ -126,12 +136,119 @@ public final class DevIntegrationTest {
     }
 
     private static void project(Path root) throws IOException {
-        Files.createDirectories(root.resolve("src/web"));
-        Files.createDirectories(root.resolve("src/cli"));
+        Files.createDirectories(root.resolve("src"));
+        Files.createDirectories(root.resolve("entrypoints/web"));
+        Files.createDirectories(root.resolve("entrypoints/cli"));
         Files.createDirectories(root.resolve("vendor"));
-        Files.writeString(root.resolve("src/web/main.java"), source("one"));
-        Files.writeString(root.resolve("src/cli/main.java"), "void main() {}\n");
+        Files.writeString(root.resolve("src/module-info.java"), "module demo.app { requires tuul; }\n");
+        Files.writeString(root.resolve("entrypoints/module-info.java"), """
+                module demo.entrypoints {
+                    requires demo.app;
+                    requires tuul;
+                    provides reload.Program with demo.web.Main;
+                }
+                """);
+        Files.writeString(root.resolve("entrypoints/web/Main.java"), source("one"));
+        Files.writeString(root.resolve("entrypoints/cli/Main.java"), "package cli; public final class Main { public static void main(String[] args) {} }\n");
         copyTuul(root);
+    }
+
+    private static void externalProject() throws Exception {
+        var root = Files.createTempDirectory("tuul-dev-external");
+        try {
+            Files.createDirectories(root.resolve("src").resolve("external"));
+            Files.createDirectories(root.resolve("entrypoints/http"));
+            Files.createDirectories(root.resolve("vendor"));
+            Files.writeString(root.resolve("src/module-info.java"), "module demo.external.app { }");
+            Files.writeString(root.resolve("entrypoints/module-info.java"), """
+                    module demo.external.entrypoints {
+                        requires demo.external.app;
+                        requires jdk.httpserver;
+                        provides com.sun.net.httpserver.HttpHandler with external.Handler;
+                    }
+                    """);
+            Files.writeString(root.resolve("entrypoints/http/Handler.java"), externalHandler("external-one"));
+            var output = new StringWriter();
+            var errors = new StringWriter();
+            var thread = Thread.ofVirtual().start(() -> {
+                try {
+                    Dev.run(new Layout(root), "http", 0, output, errors);
+                } catch (IOException failure) {
+                    throw new RuntimeException(failure);
+                }
+            });
+            try (var client = HttpClient.newHttpClient()) {
+                var port = awaitPort(output, errors);
+                Check.equal("an external JDK-only module answers", "external-one\n", get(client, port));
+                assertNoReloadOutput(root, "before the external reload");
+                Files.writeString(root.resolve("entrypoints/http/Handler.java"), externalHandler("external-two"));
+                await("the external handler reloads", () -> "external-two\n".equals(get(client, port)));
+                assertNoReloadOutput(root, "after the external reload");
+                Check.that("the external module does not import tuul", !Files.readString(
+                        root.resolve("entrypoints/http/Handler.java")).contains("tuul."));
+            } finally {
+                thread.interrupt();
+                thread.join();
+            }
+        } finally {
+            remove(root);
+        }
+    }
+
+    private static String externalHandler(String answer) {
+        return """
+                package external;
+
+                import com.sun.net.httpserver.HttpExchange;
+                import com.sun.net.httpserver.HttpHandler;
+                import java.nio.charset.StandardCharsets;
+
+                public final class Handler implements HttpHandler {
+                    public void handle(HttpExchange exchange) throws java.io.IOException {
+                        var body = "%s\\n".getBytes(StandardCharsets.UTF_8);
+                        exchange.sendResponseHeaders(200, body.length);
+                        try (var output = exchange.getResponseBody()) {
+                            output.write(body);
+                        }
+                    }
+                }
+                """.formatted(answer);
+    }
+
+    private static void singleModuleExternalProject() throws Exception {
+        var root = Files.createTempDirectory("tuul-dev-single-external");
+        try {
+            Files.createDirectories(root.resolve("src/external"));
+            Files.createDirectories(root.resolve("vendor"));
+            Files.writeString(root.resolve("src/module-info.java"), """
+                    module demo.external {
+                        requires jdk.httpserver;
+                        provides com.sun.net.httpserver.HttpHandler with external.Handler;
+                    }
+                    """);
+            Files.writeString(root.resolve("src/external/Handler.java"), externalHandler("single-one"));
+            var output = new StringWriter();
+            var errors = new StringWriter();
+            var thread = Thread.ofVirtual().start(() -> {
+                try {
+                    Dev.run(new Layout(root), "", 0, output, errors);
+                } catch (IOException failure) {
+                    throw new RuntimeException(failure);
+                }
+            });
+            try (var client = HttpClient.newHttpClient()) {
+                var port = awaitPort(output, errors);
+                Check.equal("a single named JDK module answers", "single-one\n", get(client, port));
+                Files.writeString(root.resolve("src/external/Handler.java"), externalHandler("single-two"));
+                await("the single named module reloads", () -> "single-two\n".equals(get(client, port)));
+                assertNoReloadOutput(root, "after the single-module reload");
+            } finally {
+                thread.interrupt();
+                thread.join();
+            }
+        } finally {
+            remove(root);
+        }
     }
 
     private static void copyTuul(Path root) throws IOException {
@@ -151,6 +268,8 @@ public final class DevIntegrationTest {
 
     private static String source(String answer) {
         return """
+                package demo.web;
+
                 import reload.Generation;
                 import reload.Program;
                 import web.Responses;
@@ -158,7 +277,7 @@ public final class DevIntegrationTest {
                 import web.Router;
                 import web.reload.ReloadHandler;
 
-                public final class main implements Program {
+                public final class Main implements Program {
                     private static final RouteRef HOME = RouteRef.of("home", "/");
                     public Generation define() {
                         return ReloadHandler.attach(Generation.empty(), Router.of().get(HOME,
@@ -172,9 +291,10 @@ public final class DevIntegrationTest {
         return source("broken").replace("public Generation define()", "public Generation define(");
     }
 
-    private static int awaitPort(StringWriter output) throws Exception {
+    private static int awaitPort(StringWriter output, StringWriter errors) throws Exception {
         await("the development server starts", () -> output.toString().contains("development server at"));
-        var line = output.toString().lines().filter(value -> value.startsWith("development server at")).findFirst().orElseThrow();
+        var line = output.toString().lines().filter(value -> value.startsWith("development server at")).findFirst()
+                .orElseThrow(() -> new IllegalStateException("dev did not start:\n" + errors));
         return Integer.parseInt(line.substring(line.lastIndexOf(':') + 1).trim());
     }
 

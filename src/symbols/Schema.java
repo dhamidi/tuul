@@ -26,8 +26,9 @@ final class Schema {
     /// search. Version 6 adds package documents and their search rows. Version
     /// 7 stores the root summary that lets a browser start without discovery.
     /// Version 8 files a package's `README.md` as a document and records
-    /// why the last refresh of an origin failed.
-    static final int VERSION = 8;
+    /// why the last refresh of an origin failed. Version 9 retains JPMS
+    /// ownership and descriptor facts with each symbol.
+    static final int VERSION = 9;
 
     /// The whole format. It stores types, members, parameters, tags, package
     /// documents, and the origin of each stored item.
@@ -65,6 +66,14 @@ final class Schema {
                 doc        text    not null,
                 source     text    not null default '',
                 line       integer not null default 0,
+                module     text    not null default '',
+                module_kind text   not null default '',
+                module_origin text not null default '',
+                module_requires text not null default '',
+                module_exports text not null default '',
+                module_opens text not null default '',
+                module_uses text not null default '',
+                module_provides text not null default '',
                 unique (origin, name)
             );
 

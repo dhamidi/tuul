@@ -1,13 +1,11 @@
 package project;
 
-import java.io.File;
 import java.io.IOException;
 import java.io.Writer;
 import java.nio.file.Path;
 import java.util.ArrayList;
 import java.util.List;
 import java.util.Map;
-import java.util.stream.Collectors;
 
 /// Runs a program in a JVM of its own and streams what it says.
 ///
@@ -51,17 +49,17 @@ public final class Launch {
         return processes.run(ProcessRunner.Command.inherited(command, directory), out);
     }
 
-    /// A command line for the JVM tuul is running on. Native access is enabled
-    /// because a project is expected to bind to its own C, and a warning on
-    /// every run is not a thing anyone should have to read.
-    public static List<String> java(List<String> options, List<Path> classpath, String main, List<String> arguments) {
+    /// A command line for one named module and its resolved module path.
+    public static List<String> javaModule(List<String> options, List<Path> modulePath,
+            String module, String main, List<String> arguments) {
         var command = new ArrayList<String>();
         command.add(Path.of(System.getProperty("java.home"), "bin", "java").toString());
-        command.add("--enable-native-access=ALL-UNNAMED");
         command.addAll(options);
-        command.add("-classpath");
-        command.add(classpath.stream().map(path -> path.toAbsolutePath().toString()).collect(Collectors.joining(File.pathSeparator)));
-        command.add(main);
+        command.add("--module-path");
+        command.add(String.join(java.io.File.pathSeparator,
+                modulePath.stream().map(path -> path.toAbsolutePath().toString()).toList()));
+        command.add("--module");
+        command.add(module + "/" + main);
         command.addAll(arguments);
         return command;
     }

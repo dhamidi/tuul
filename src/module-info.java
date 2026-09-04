@@ -1,6 +1,5 @@
-/// The Tuul library packages. The build compiles these packages as one module.
-/// A project declares `requires tuul` to use them. The CLI stays outside this
-/// module and runs from the classpath.
+/// The Tuul library and tool support packages. The CLI is a separate named
+/// module in `entrypoints/` and requires this module.
 module tuul {
     requires java.compiler;
     requires java.xml;
@@ -9,6 +8,10 @@ module tuul {
     requires static jdk.jfr;
 
     requires transitive java.net.http;
+
+    uses reload.Program;
+
+    uses com.sun.net.httpserver.HttpHandler;
 
     exports actors;
     exports actors.transport;
@@ -25,6 +28,7 @@ module tuul {
     exports jsonrpc2.transport;
     exports jsonschema;
     exports markdown;
+    exports modules;
     exports peg;
     exports project;
     exports reload;

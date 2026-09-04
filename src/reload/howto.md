@@ -106,7 +106,7 @@ Events are observations. A slow event subscriber does not delay activation.
 Keep the earlier source artifact in deployment storage. Submit it again as a
 new candidate. It goes through compilation, validation, actor replay, state
 policy checks, and normal activation. The coordinator does not reactivate a
-closed class loader and does not undo external effects.
+closed module layer and does not undo external effects.
 
 ## Test without files or sockets
 

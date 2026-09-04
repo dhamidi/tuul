@@ -1,13 +1,16 @@
 package project;
 
 import compiler.Compiler;
+import modules.ModuleGraph;
 import reload.Reload;
 import reload.Revision;
 import reload.RevisionSource;
 import symbols.Vendor;
 import web.serve.Http;
+import web.reload.JdkGenerationFactory;
+import web.reload.JdkReloadHandler;
+import reload.ProgramGenerationFactory;
 import web.reload.ReloadHandler;
-
 import java.io.IOException;
 import java.io.Writer;
 import java.nio.file.FileVisitResult;
@@ -21,14 +24,17 @@ import java.time.Duration;
 import java.util.ArrayList;
 import java.util.List;
 import java.util.Objects;
+import java.util.regex.Pattern;
 import java.util.function.Consumer;
-
 /// Runs a reloadable project during development.
 ///
 /// Compilation and directory observation live at this edge of the reload
 /// system. [Reload] owns generation boundaries, leases, and the last-good
 /// generation. Consequently a compiler error never changes the HTTP server or
 /// the code that is currently answering requests.
+/// The source root is a named module. When `entrypoints/` exists, its module
+/// is the root of the application-plus-entrypoint closure. Otherwise `src/`
+/// is the root and must provide exactly one reload service.
 public final class Dev {
 
     /// The delay after the last filesystem event before a revision is built.
@@ -45,15 +51,18 @@ public final class Dev {
         Objects.requireNonNull(out, "out");
         Objects.requireNonNull(err, "err");
         if (port < 0 || port > 65_535) throw new IllegalArgumentException("port must be between 0 and 65535");
-        var selected = entrypoint(layout, entrypoint == null ? "" : entrypoint);
-        if (selected.isEmpty()) {
-            write(err, "error: no entrypoint; create src/<name>/main.java\n");
+        var reload = new Reload();
+        var chosen = entrypoint == null ? "" : entrypoint;
+        Builder builder;
+        try {
+            builder = new Builder(layout, chosen, err);
+        } catch (IllegalArgumentException failure) {
+            write(err, "error: " + (failure.getMessage() == null ? failure : failure.getMessage()) + "\n");
+            reload.close();
             return 1;
         }
-
-        var reload = new Reload();
-        var http = new ReloadHandler(reload);
-        var builder = new Builder(layout, selected, err);
+        var mode = builder.mode();
+        var http = mode == Mode.EXTERNAL ? new JdkReloadHandler(reload) : new ReloadHandler(reload);
         var first = builder.build();
         if (first == null) {
             reload.close();
@@ -66,8 +75,11 @@ public final class Dev {
             return 1;
         }
 
-        var source = new DirectorySource(layout, selected, builder, QUIET_PERIOD, err, false);
-        try (var server = Http.start(http, port, failure -> write(err, "web: " + failure + "\n"))) {
+        var source = new DirectorySource(layout, chosen, builder, QUIET_PERIOD, err, false);
+        try (var server = mode == Mode.EXTERNAL
+                ? Http.start((com.sun.net.httpserver.HttpHandler) http, port,
+                        failure -> write(err, "web: " + failure + "\n"))
+                : Http.start((web.Handler) http, port, failure -> write(err, "web: " + failure + "\n"))) {
             write(out, "development server at http://localhost:" + server.port() + "\n");
             write(out, "active generation " + status.activeRevision() + "\n");
             write(out, "watching " + layout.src().toAbsolutePath().normalize() + "\n");
@@ -95,20 +107,15 @@ public final class Dev {
         }
     }
 
-    private static String entrypoint(Layout layout, String named) throws IOException {
-        if (!named.isBlank()) return named;
-        var available = layout.entrypoints();
-        if (available.contains("web")) return "web";
-        return available.size() == 1 ? available.getFirst() : "";
-    }
+    private enum Mode { TUUL, EXTERNAL }
 
     /// An injectable directory source for complete project revisions.
     ///
-    /// Each revision carries a lazy in-memory program. The source does not know
-    /// how activation or HTTP routing works.
+    /// Each revision carries a lazy in-memory program. The source watches all
+    /// source modules and vendor inputs; it does not know how activation or
+    /// HTTP routing works.
     public static final class DirectorySource implements RevisionSource {
         private final Layout layout;
-        private final String entrypoint;
         private final Builder builder;
         private final Duration quiet;
         private final boolean submitInitial;
@@ -129,7 +136,7 @@ public final class Dev {
         private DirectorySource(Layout layout, String entrypoint, Builder builder, Duration quiet, Writer errors,
                 boolean submitInitial) {
             this.layout = Objects.requireNonNull(layout, "layout");
-            this.entrypoint = Objects.requireNonNull(entrypoint, "entrypoint");
+            Objects.requireNonNull(entrypoint, "entrypoint");
             this.builder = Objects.requireNonNull(builder, "builder");
             this.quiet = requireQuiet(quiet);
             Objects.requireNonNull(errors, "errors");
@@ -143,6 +150,7 @@ public final class Dev {
             try (var service = FileSystems.watch()) {
                 watches = service;
                 register(layout.src(), service);
+                register(layout.entrypointsRoot(), service);
                 // A generation also depends on the vendored binary jars. A
                 // dependency replacement is a revision even when no project
                 // source changed, so keep that input tree in the same source
@@ -234,10 +242,12 @@ public final class Dev {
         }
     }
 
-    /// Collects one project revision and attaches its in-memory compiler.
+    /// Collects one named-module project revision and attaches the JDK's
+    /// in-process compiler. No class output is written to the project tree.
     public static final class Builder {
         private final Layout layout;
-        private final String entrypoint;
+        private final Layout.SourceModule root;
+        private final Layout.SourceModule entrypointModule;
         private final Writer errors;
         private final Compiler compiler;
 
@@ -253,53 +263,74 @@ public final class Dev {
         /// Null arguments throw `NullPointerException`.
         public Builder(Layout layout, String entrypoint, Writer errors, Compiler compiler) {
             this.layout = Objects.requireNonNull(layout, "layout");
-            this.entrypoint = Objects.requireNonNull(entrypoint, "entrypoint");
+            Objects.requireNonNull(entrypoint, "entrypoint");
+            try {
+                var module = layout.entrypointModule();
+                if (module.isPresent()) {
+                    layout.reloadEntrypoint(entrypoint);
+                    this.root = module.get();
+                    this.entrypointModule = module.get();
+                } else {
+                    if (!entrypoint.isBlank()) throw new IOException(
+                            "no entrypoints module; a single-module project has no named entrypoint");
+                    this.root = layout.application();
+                    this.entrypointModule = null;
+                }
+            } catch (IOException failure) { throw new IllegalArgumentException(failure.getMessage(), failure); }
             this.errors = Objects.requireNonNull(errors, "errors");
             this.compiler = Objects.requireNonNull(compiler, "compiler");
         }
 
         Built build() throws IOException {
             var vendor = Vendor.of(List.of(layout.vendor()));
-            var source = layout.src().resolve(entrypoint);
-            if (!Files.isDirectory(source)) {
-                write(errors, "compile: no entrypoint at " + source + "\n");
-                return null;
+            var modules = new ArrayList<Revision.SourceModule>();
+            if (entrypointModule == null) {
+                modules.add(module(root, layout.src()));
+            } else {
+                modules.add(module(layout.application(), layout.src()));
+                modules.add(module(entrypointModule, layout.entrypointsRoot()));
             }
-            var libraries = layout.libraries();
-            var librarySources = sources(libraries);
-            var descriptor = layout.src().resolve("module-info.java");
-            if (Files.isRegularFile(descriptor)) librarySources.add(0, descriptor);
-            var entrySources = sources(List.of(source));
-            if (entrySources.stream().noneMatch(path -> path.getFileName().toString().equals("main.java"))) {
-                write(errors, "compile: no main.java at " + source + "\n");
-                return null;
-            }
-            var sourceFiles = new ArrayList<Path>(librarySources);
-            sourceFiles.addAll(entrySources);
-            var resourceEntries = resources(layout, libraries, source);
-            var classpath = List.of(Home.find().classes());
-            var revision = Revision.fromEntries(layout.root(), entrypoint, sourceFiles,
-                    resourceEntries, vendor.runtime());
-            return new Built(new reload.RevisionCompiler(compiler, classpath).compile(revision));
+            var dependencyPath = vendor.artifacts().isEmpty()
+                    ? List.<Path>of()
+                    : vendor.graph().modules().values().stream()
+                            .map(ModuleGraph.Node::origin)
+                            .flatMap(origin -> origin.path().stream())
+                            .distinct().toList();
+            var revision = Revision.from(root.name(), modules, dependencyPath);
+            var parent = new ArrayList<Path>();
+            parent.add(Home.find().classes());
+            return new Built(new reload.RevisionCompiler(compiler, parent,
+                    mode() == Mode.EXTERNAL ? new JdkGenerationFactory() : new ProgramGenerationFactory())
+                    .compile(revision));
         }
 
-        private static List<Path> sources(List<Path> roots) throws IOException {
-            var found = new ArrayList<Path>();
-            for (var root : roots) {
-                if (!Files.isDirectory(root)) continue;
-                try (var files = Files.walk(root)) {
-                    files.filter(path -> path.toString().endsWith(".java")).sorted().forEach(found::add);
-                }
-            }
-            return found;
+        Mode mode() throws IOException {
+            var descriptor = stripComments(Files.readString(root.descriptor()));
+            var programs = provides(descriptor, "reload.Program");
+            var handlers = provides(descriptor, "com.sun.net.httpserver.HttpHandler");
+            if (programs == handlers) throw new IOException("root module must provide exactly one reload mode");
+            return handlers ? Mode.EXTERNAL : Mode.TUUL;
         }
 
-        private static List<Revision.ResourceEntry> resources(Layout layout, List<Path> libraries, Path entry)
-                throws IOException {
+        private static boolean provides(String descriptor, String service) {
+            return Pattern.compile("\\bprovides\\s+" + Pattern.quote(service) + "\\s+with\\b")
+                    .matcher(descriptor).find();
+        }
+
+        private static String stripComments(String source) {
+            return source.replaceAll("(?s)/\\*.*?\\*/", "").replaceAll("(?m)//.*$", "");
+        }
+
+        private Revision.SourceModule module(Layout.SourceModule module, Path root) throws IOException {
+            var resourceRoot = root.equals(layout.src()) ? layout.resources() : root;
+            var logicalRoot = root.equals(layout.src()) ? layout.resources() : root;
+            var resources = resources(resourceRoot, logicalRoot);
+            return new Revision.SourceModule(module.name(), module.root(), module.descriptor(), module.sources(), resources);
+        }
+
+        private static List<Revision.ResourceEntry> resources(Path root, Path logicalRoot) throws IOException {
             var found = new ArrayList<Revision.ResourceEntry>();
-            for (var root : libraries) collect(root, layout.src(), found);
-            collect(layout.resources(), layout.resources(), found);
-            collect(entry, entry, found);
+            collect(root, logicalRoot, found);
             return found;
         }
 

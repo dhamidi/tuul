@@ -1,5 +1,7 @@
 package project;
 
+import compiler.ClassSink;
+import compiler.Compiler;
 import java.io.IOException;
 import java.io.InputStream;
 import java.nio.charset.StandardCharsets;
@@ -11,28 +13,18 @@ import java.security.NoSuchAlgorithmException;
 import java.util.ArrayList;
 import java.util.Comparator;
 import java.util.List;
-import compiler.Compiler;
-import compiler.Compilation;
+import modules.ModuleGraph;
 import symbols.Vendor;
 
-/// Compiles a project onto disk: the libraries together, then each entrypoint
-/// on top of them, one output directory apart. Successful source fingerprints
-/// live under `build/.tuul`, so asking for the same build again does not start
-/// javac just to discover that nothing changed.
+/// Compiles every project source root as its declared named module.
 ///
-/// A project compiles against the jars in `vendor/` and nothing else. If
-/// `src/module-info.java` exists, javac reads those jars from the module path.
-/// Otherwise, javac reads them from the classpath. Entrypoints and tests stay
-/// unnamed. Tuul does not enable preview features. Files in `src/resources/`
-/// land at the root of `build/classes/` and take part in its fingerprint.
+/// Application, entrypoint, task, and test modules are separate outputs below
+/// `build/modules`. Dependencies are always module-path inputs. A missing
+/// descriptor is an error; there is no unnamed-module project fallback.
 public final class Build {
 
-    /// What a compile did, or what stopped it. Problems are javac's own words.
     public record Result(int classes, List<String> problems) {
-
-        public boolean ok() {
-            return problems.isEmpty();
-        }
+        public boolean ok() { return problems.isEmpty(); }
     }
 
     private Build() {}
@@ -41,146 +33,280 @@ public final class Build {
         return compile(layout, Compiler.system());
     }
 
-    /// Compiles a project through `compiler`. Fingerprints and resources use
-    /// the same filesystem behavior as [#compile(Layout)].
     public static Result compile(Layout layout, Compiler compiler) throws IOException {
         if (!layout.exists()) return new Result(0, List.of("no src/ in " + layout.root().toAbsolutePath()));
         var vendor = Vendor.of(List.of(layout.vendor()));
-        var dependencies = vendor.runtime();
-        var descriptor = layout.src().resolve("module-info.java");
-        var libraryRoots = layout.libraries();
-        var librarySources = sources(libraryRoots);
-        if (Files.isRegularFile(descriptor)) librarySources.addFirst(descriptor);
-
-        var fingerprintRoots = new ArrayList<>(libraryRoots);
-        fingerprintRoots.add(layout.resources());
-        var libraryFingerprint = fingerprint(fingerprintRoots, descriptor, vendor.stamp());
-        var compileFingerprint = Compilation.fingerprint(
-                librarySources, dependencies, Files.isRegularFile(descriptor), Runtime.version().feature(), true);
-        Result libraries;
-        if (current(layout, "libraries", libraryFingerprint, layout.classes())) {
-            libraries = new Result(written(layout.classes()), List.of());
-        } else {
-            clear(layout.classes());
-            libraries = javac(librarySources, layout.classes(), dependencies, Files.isRegularFile(descriptor), compiler);
-            if (!libraries.ok()) return libraries;
-            resources(libraryRoots, layout.src(), layout.classes());
-            resources(List.of(layout.resources()), layout.resources(), layout.classes());
-            remember(layout, "libraries", libraryFingerprint);
+        var vendorModules = modulePath(vendor);
+        var application = layout.application();
+        var expected = new java.util.LinkedHashSet<String>();
+        expected.add(application.name());
+        var preserved = declaredModules(layout, expected);
+        var total = compile(layout, application, vendorModules, compiler);
+        if (!total.ok()) return total;
+        var entrypoint = layout.entrypointModule();
+        if (entrypoint.isPresent()) {
+            var path = new ArrayList<>(vendorModules);
+            path.add(layout.moduleOutput(application.name()));
+            var built = compile(layout, entrypoint.get(), path, compiler);
+            if (!built.ok()) return new Result(total.classes(), built.problems());
+            total = new Result(total.classes() + built.classes(), List.of());
+            expected.add(entrypoint.get().name());
         }
-        remember(layout, "libraries.compile", compileFingerprint);
-
-        var classes = libraries.classes();
-        var entrypoints = layout.entrypoints();
-        clearStaleEntrypoints(layout, entrypoints);
-        for (var entrypoint : entrypoints) {
-            var directory = layout.src().resolve(entrypoint);
-            var fingerprint = fingerprint(List.of(directory), null, vendor.stamp() + libraryFingerprint);
-            Result built;
-            if (current(layout, "entry-" + entrypoint, fingerprint, layout.entry(entrypoint))) {
-                built = new Result(written(layout.entry(entrypoint)), List.of());
-            } else {
-                clear(layout.entry(entrypoint));
-                built = javac(sources(List.of(directory)), layout.entry(entrypoint),
-                        with(dependencies, layout.classes()), false, compiler);
-                if (!built.ok()) return built;
-                resources(List.of(directory), directory, layout.entry(entrypoint));
-                remember(layout, "entry-" + entrypoint, fingerprint);
-            }
-            classes += built.classes();
-        }
-        return new Result(classes, List.of());
+        // A task root is intentionally not part of the application build, but
+        // it must still be a valid named source root when it exists.
+        layout.taskModule();
+        validate(layout, vendorModules, expected.stream().toList());
+        removeStaleModules(layout, preserved);
+        return total;
     }
 
-    /// Tests are compiled on top of a built project, into a directory of their
-    /// own, and run by their `run` class.
     public static Result compileTests(Layout layout) throws IOException {
         return compileTests(layout, Compiler.system());
     }
 
-    /// Compiles tests through `compiler`. A current test fingerprint returns
-    /// without calling the compiler.
     public static Result compileTests(Layout layout, Compiler compiler) throws IOException {
-        if (!Files.isDirectory(layout.test())) return new Result(0, List.of("no test/ in " + layout.root().toAbsolutePath()));
+        var test = layout.testModule();
+        if (test.isEmpty()) return new Result(0, List.of("no test/ in " + layout.root().toAbsolutePath()));
+        var built = compile(layout, compiler);
+        if (!built.ok()) return built;
         var vendor = Vendor.of(List.of(layout.vendor()));
-        var fingerprint = fingerprint(List.of(layout.test()), null, vendor.testStamp() +
-                fingerprint(List.of(layout.src()), null, vendor.stamp()));
-        if (current(layout, "tests", fingerprint, layout.tests())) {
-            return new Result(written(layout.tests()), List.of());
+        var path = new ArrayList<>(modulePath(vendor));
+        path.add(layout.moduleOutput(layout.application().name()));
+        layout.entrypointModule().map(module -> path.add(layout.moduleOutput(module.name())));
+        var roots = new ArrayList<String>();
+        roots.add(layout.application().name());
+        layout.entrypointModule().ifPresent(module -> roots.add(module.name()));
+        roots.add(test.get().name());
+        // Repository tests deliberately retain their production packages so
+        // they can exercise package-private contracts. Compile that one test
+        // root as a patch of `tuul`, then launch its small named runner module.
+        // Generated project tests have test-owned packages and compile as a
+        // normal named module, so they never create a split package.
+        if (!test.get().name().equals("tuul.test")) {
+            var result = compile(layout, test.get(), path, compiler);
+            if (result.ok()) {
+                validate(layout, path, roots);
+                removeStaleModules(layout, declaredModules(layout, roots));
+            }
+            return result.ok() ? new Result(built.classes() + result.classes(), List.of()) : result;
         }
-        clear(layout.tests());
-        var classpath = with(vendor.test(), layout.classes());
-        var built = javac(sources(List.of(layout.test())), layout.tests(), classpath, false, compiler);
-        if (built.ok()) {
-            resources(List.of(layout.test()), layout.test(), layout.tests());
-            remember(layout, "tests", fingerprint);
-        }
-        return built;
+        var patchSources = test.get().sources().stream()
+                .filter(source -> !source.equals(test.get().descriptor()))
+                .filter(source -> !source.getFileName().toString().equals("Run.java"))
+                .toList();
+        var patched = compilePatch(layout, test.get(), patchSources, path, compiler);
+        if (!patched.ok()) return new Result(built.classes(), patched.problems());
+        var runnerSources = test.get().sources().stream()
+                .filter(source -> source.equals(test.get().descriptor())
+                        || source.getFileName().toString().equals("Run.java"))
+                .toList();
+        var runner = new Layout.SourceModule(test.get().name(), test.get().root(), test.get().descriptor(), runnerSources);
+        var result = compile(layout, runner, path, compiler,
+                java.util.Optional.of(new Compiler.Request.Patch(layout.application().name(),
+                        layout.root().resolve("build/patches").resolve(layout.application().name()))),
+                patchSources.stream().map(Build::packageName).flatMap(java.util.Optional::stream)
+                        .distinct().map(name -> "tuul/" + name + "=tuul.test").toList(), false);
+        if (!result.ok()) return new Result(built.classes() + patched.classes(), result.problems());
+        validate(layout, path, roots);
+        removeStaleModules(layout, declaredModules(layout, roots));
+        return new Result(built.classes() + patched.classes() + result.classes(), List.of());
     }
 
-    private static boolean current(Layout layout, String name, String fingerprint, Path output) throws IOException {
-        var stamp = stamp(layout, name);
-        return Files.isDirectory(output) && Files.isRegularFile(stamp)
-                && Files.readString(stamp).equals(fingerprint);
+    private static Result compile(Layout layout, Layout.SourceModule module, List<Path> modulePath,
+            Compiler compiler) throws IOException {
+        return compile(layout, module, modulePath, compiler, java.util.Optional.empty(), List.of());
     }
 
-    private static void remember(Layout layout, String name, String fingerprint) throws IOException {
-        var directory = layout.root().resolve("build/.tuul");
-        Files.createDirectories(directory);
-        var stamp = directory.resolve(name + ".stamp");
-        var temporary = Files.createTempFile(directory, name + ".", ".tmp");
+    private static Result compile(Layout layout, Layout.SourceModule module, List<Path> modulePath,
+            Compiler compiler, java.util.Optional<Compiler.Request.Patch> patch,
+            List<String> addExports) throws IOException {
+        return compile(layout, module, modulePath, compiler, patch, addExports, true);
+    }
+
+    private static Result compile(Layout layout, Layout.SourceModule module, List<Path> modulePath,
+            Compiler compiler, java.util.Optional<Compiler.Request.Patch> patch,
+            List<String> addExports, boolean copyResources) throws IOException {
+        var output = layout.moduleOutput(module.name());
+        var fingerprint = fingerprint(module, modulePath) + (copyResources ? "" : "-code-only");
+        if (current(layout, module.name(), fingerprint, output)) {
+            return new Result(written(output), List.of());
+        }
+        var stagingRoot = layout.root().resolve("build/.tuul");
+        Files.createDirectories(stagingRoot);
+        var staging = Files.createTempDirectory(stagingRoot, "module-" + module.name() + "-");
         try {
-            Files.writeString(temporary, fingerprint);
-            try {
-                Files.move(temporary, stamp, StandardCopyOption.ATOMIC_MOVE, StandardCopyOption.REPLACE_EXISTING);
-            } catch (java.nio.file.AtomicMoveNotSupportedException unsupported) {
-                Files.move(temporary, stamp, StandardCopyOption.REPLACE_EXISTING);
-            }
+            var result = compiler.compile(new Compiler.Request(module.sources(), modulePath, module.name(),
+                    Runtime.version().feature(), true, patch, addExports, java.util.Map.of()), sink(staging));
+            if (!result.ok()) return new Result(0, report(result.problems()));
+            if (copyResources) resources(layout, module.root(), staging);
+            replace(output, staging);
+            remember(layout, module.name(), fingerprint);
+            return new Result(result.classes(), List.of());
         } finally {
-            Files.deleteIfExists(temporary);
+            if (Files.exists(staging)) clear(staging);
         }
     }
 
-    private static Path stamp(Layout layout, String name) {
-        return layout.root().resolve("build/.tuul").resolve(name + ".stamp");
+    private static Result compilePatch(Layout layout, Layout.SourceModule test, List<Path> sources,
+            List<Path> modulePath, Compiler compiler) throws IOException {
+        if (sources.isEmpty()) return new Result(0, List.of());
+        var output = layout.root().resolve("build/patches").resolve(layout.application().name());
+        var fingerprint = fingerprint(test, modulePath) + "-patch-resources";
+        if (current(layout, test.name() + "-patch", fingerprint, output)) return new Result(written(output), List.of());
+        // javac treats module-info.java specially even when it is not an
+        // explicit source argument if the patch root contains it. Stage only
+        // test sources so the test root's descriptor can remain the separate
+        // named runner module.
+        var patchRoot = layout.root().resolve("build/.tuul/patch-sources-" + test.name());
+        clear(patchRoot);
+        Files.createDirectories(patchRoot);
+        var staged = new ArrayList<Path>();
+        for (var source : sources) {
+            var target = patchRoot.resolve(test.root().relativize(source));
+            Files.createDirectories(target.getParent());
+            Files.copy(source, target, StandardCopyOption.REPLACE_EXISTING);
+            staged.add(target);
+        }
+        var result = compiler.compile(new Compiler.Request(staged, modulePath, layout.application().name(),
+                Runtime.version().feature(), true,
+                java.util.Optional.of(new Compiler.Request.Patch(layout.application().name(), patchRoot)),
+                List.of(), java.util.Map.of()), sink(output));
+        if (!result.ok()) return new Result(0, report(result.problems()));
+        resources(layout, test.root(), output);
+        remember(layout, test.name() + "-patch", fingerprint);
+        return new Result(result.classes(), List.of());
     }
 
-    private static String fingerprint(List<Path> roots, Path descriptor, String dependency) throws IOException {
-        var digest = sha256();
-        update(digest, dependency);
-        for (var root : roots) {
-            update(digest, root.toString());
-            if (Files.isRegularFile(root)) {
-                file(digest, root, root.getFileName().toString());
-                continue;
+    private static void validate(Layout layout, List<Path> dependencies, List<String> roots) throws IOException {
+        var artifacts = new ArrayList<Path>();
+        artifacts.add(layout.moduleOutput(layout.application().name()));
+        layout.entrypointModule().ifPresent(module -> artifacts.add(layout.moduleOutput(module.name())));
+        layout.testModule().ifPresent(module -> {
+            var output = layout.moduleOutput(module.name());
+            if (Files.isDirectory(output)) artifacts.add(output);
+        });
+        artifacts.addAll(dependencies);
+        ModuleGraph.resolve(artifacts.stream().filter(Files::exists).distinct().toList(), roots);
+    }
+
+    private static void removeStaleModules(Layout layout, java.util.Set<String> expected) throws IOException {
+        var root = layout.root().resolve("build/modules");
+        if (!Files.isDirectory(root)) return;
+        try (var children = Files.list(root)) {
+            for (var child : children.filter(Files::isDirectory).toList()) {
+                if (!expected.contains(child.getFileName().toString())) clear(child);
             }
-            if (!Files.isDirectory(root)) continue;
-            try (var tree = Files.walk(root)) {
-                for (var path : tree.filter(Files::isRegularFile).sorted().toList()) {
-                    file(digest, path, root.relativize(path).toString());
+        }
+    }
+
+    private static java.util.Set<String> declaredModules(Layout layout,
+            java.util.Collection<String> roots) throws IOException {
+        var declared = new java.util.LinkedHashSet<>(roots);
+        layout.entrypointModule().ifPresent(module -> declared.add(module.name()));
+        layout.testModule().ifPresent(module -> declared.add(module.name()));
+        layout.taskModule().ifPresent(module -> declared.add(module.name()));
+        return declared;
+    }
+
+    /// ModuleGraph is the dependency authority. The path list is only the
+    /// javac/java representation of the already-resolved named artifacts.
+    private static List<Path> modulePath(Vendor vendor) throws IOException {
+        if (vendor.artifacts().isEmpty()) return List.of();
+        return vendor.graph().modules().values().stream()
+                .map(ModuleGraph.Node::origin)
+                .flatMap(origin -> origin.path().stream())
+                .distinct().toList();
+    }
+
+    private static java.util.Optional<String> packageName(Path source) {
+        try {
+            var text = Files.readString(source).replaceAll("(?s)/\\*.*?\\*/", "")
+                    .replaceAll("(?m)//.*$", "");
+            var match = java.util.regex.Pattern.compile("(?m)^\\s*package\\s+([A-Za-z_$][\\w$]*(?:\\.[A-Za-z_$][\\w$]*)*)\\s*;").matcher(text);
+            return match.find() ? java.util.Optional.of(match.group(1)) : java.util.Optional.empty();
+        } catch (IOException failure) {
+            throw new java.io.UncheckedIOException(failure);
+        }
+    }
+
+    private static ClassSink sink(Path output) {
+        return name -> {
+            var file = output.resolve(name.replace('.', '/') + ".class");
+            Files.createDirectories(file.getParent());
+            return Files.newOutputStream(file);
+        };
+    }
+
+    private static String fingerprint(Layout.SourceModule module, List<Path> modulePath) throws IOException {
+        var digest = sha256();
+        update(digest, module.name());
+        for (var source : module.sources()) file(digest, module.root().relativize(source).toString(), source);
+        try (var tree = Files.walk(module.root())) {
+            for (var resource : tree.filter(Files::isRegularFile)
+                    .filter(path -> !path.toString().endsWith(".java")).sorted().toList()) {
+                file(digest, module.root().relativize(resource).toString(), resource);
+            }
+        }
+        for (var path : modulePath) {
+            update(digest, path.toString());
+            if (Files.isRegularFile(path)) file(digest, path.toString(), path);
+            else if (Files.isDirectory(path)) {
+                try (var tree = Files.walk(path)) {
+                    for (var child : tree.filter(Files::isRegularFile).sorted().toList()) {
+                        file(digest, path.relativize(child).toString(), child);
+                    }
                 }
             }
         }
-        if (descriptor != null && Files.isRegularFile(descriptor)) file(digest, descriptor, descriptor.toString());
         update(digest, String.valueOf(Runtime.version().feature()));
         return java.util.HexFormat.of().formatHex(digest.digest());
     }
 
-    private static MessageDigest sha256() {
-        try {
-            return MessageDigest.getInstance("SHA-256");
-        } catch (NoSuchAlgorithmException impossible) {
-            throw new AssertionError(impossible);
+    private static void resources(Layout layout, Path root, Path output) throws IOException {
+        try (var tree = Files.walk(root)) {
+            for (var file : tree.filter(Files::isRegularFile)
+                    .filter(path -> !path.toString().endsWith(".java"))
+                    .filter(path -> !root.equals(layout.src()) || !path.startsWith(layout.resources()))
+                    .sorted().toList()) {
+                var destination = output.resolve(root.relativize(file).toString());
+                Files.createDirectories(destination.getParent());
+                Files.copy(file, destination, StandardCopyOption.REPLACE_EXISTING);
+            }
+        }
+        if (root.equals(layout.src()) && Files.isDirectory(layout.resources())) {
+            try (var tree = Files.walk(layout.resources())) {
+                for (var file : tree.filter(Files::isRegularFile).sorted().toList()) {
+                    var destination = output.resolve(layout.resources().relativize(file).toString());
+                    Files.createDirectories(destination.getParent());
+                    Files.copy(file, destination, StandardCopyOption.REPLACE_EXISTING);
+                }
+            }
         }
     }
 
-    private static void file(MessageDigest digest, Path path, String name) throws IOException {
+    private static boolean current(Layout layout, String module, String fingerprint, Path output) throws IOException {
+        var stamp = layout.root().resolve("build/.tuul/module-" + module + ".stamp");
+        return Files.isDirectory(output) && Files.isRegularFile(stamp)
+                && Files.readString(stamp).equals(fingerprint);
+    }
+
+    private static void remember(Layout layout, String module, String fingerprint) throws IOException {
+        var directory = layout.root().resolve("build/.tuul");
+        Files.createDirectories(directory);
+        Files.writeString(directory.resolve("module-" + module + ".stamp"), fingerprint);
+    }
+
+    private static MessageDigest sha256() {
+        try { return MessageDigest.getInstance("SHA-256"); }
+        catch (NoSuchAlgorithmException impossible) { throw new AssertionError(impossible); }
+    }
+
+    private static void file(MessageDigest digest, String name, Path path) throws IOException {
         update(digest, name);
         try (InputStream input = Files.newInputStream(path)) {
             var buffer = new byte[8192];
-            for (var read = input.read(buffer); read >= 0;) {
+            for (var read = input.read(buffer); read >= 0; read = input.read(buffer)) {
                 if (read > 0) digest.update(buffer, 0, read);
-                read = input.read(buffer);
             }
         }
     }
@@ -190,16 +316,6 @@ public final class Build {
         digest.update((byte) 0);
     }
 
-    private static void clearStaleEntrypoints(Layout layout, List<String> entrypoints) throws IOException {
-        var output = layout.root().resolve("build/entry");
-        if (!Files.isDirectory(output)) return;
-        try (var tree = Files.list(output)) {
-            for (var directory : tree.filter(Files::isDirectory).toList()) {
-                if (!entrypoints.contains(directory.getFileName().toString())) clear(directory);
-            }
-        }
-    }
-
     private static void clear(Path directory) throws IOException {
         if (!Files.exists(directory)) return;
         try (var tree = Files.walk(directory)) {
@@ -207,73 +323,34 @@ public final class Build {
         }
     }
 
-    private static Result javac(List<Path> sources, Path out, List<Path> classpath, boolean module, Compiler compiler)
-            throws IOException {
-        if (sources.isEmpty()) return new Result(0, List.of());
-        Files.createDirectories(out);
-        var result = compiler.compile(new Compiler.Request(
-                sources, classpath, module, Runtime.version().feature(), true), name -> {
-                    var file = out.resolve(name.replace('.', '/') + ".class");
-                    Files.createDirectories(file.getParent());
-                    return Files.newOutputStream(file);
-                });
-        return result.ok() ? new Result(result.classes(), List.of()) : new Result(0, report(result.problems()));
-    }
-
-    /// Copies non-Java files to their classpath locations.
-    ///
-    /// `from` defines the resource path. A normal library resource is relative
-    /// to `src/` and stays package-local. A root resource is relative to
-    /// `src/resources/` and lands directly in `build/classes/`. An entrypoint
-    /// resource is relative to its entrypoint directory.
-    private static void resources(List<Path> roots, Path from, Path out) throws IOException {
-        for (var root : roots) {
-            if (!Files.isDirectory(root)) continue;
-            try (var tree = Files.walk(root)) {
-                for (var file : tree.filter(Files::isRegularFile).sorted().toList()) {
-                    if (file.toString().endsWith(".java")) continue;
-                    var to = out.resolve(from.relativize(file).toString());
-                    Files.createDirectories(to.getParent());
-                    Files.copy(file, to, StandardCopyOption.REPLACE_EXISTING);
-                }
-            }
+    /// Publishes a completed module without exposing a partially written tree.
+    /// The old tree is moved aside only after compilation and resource copying
+    /// finish, so a self-hosted build never removes classes needed by its CLI.
+    private static void replace(Path output, Path staging) throws IOException {
+        Files.createDirectories(output.getParent());
+        var backup = output.resolveSibling("." + output.getFileName() + "-old-"
+                + Long.toUnsignedString(System.nanoTime()));
+        var hadOld = Files.exists(output);
+        if (hadOld) Files.move(output, backup);
+        try {
+            Files.move(staging, output);
+        } catch (IOException failure) {
+            if (hadOld && !Files.exists(output)) Files.move(backup, output);
+            throw failure;
         }
+        if (hadOld) clear(backup);
     }
 
-    private static List<Path> sources(List<Path> roots) throws IOException {
-        var sources = new ArrayList<Path>();
-        for (var root : roots) {
-            if (!Files.isDirectory(root)) continue;
-            try (var tree = Files.walk(root)) {
-                tree.filter(path -> path.toString().endsWith(".java")).sorted().forEach(sources::add);
-            }
-        }
-        return sources;
-    }
-
-    private static int written(Path out) throws IOException {
-        try (var tree = Files.walk(out)) {
+    private static int written(Path output) throws IOException {
+        try (var tree = Files.walk(output)) {
             return (int) tree.filter(path -> path.toString().endsWith(".class")).count();
         }
     }
 
     private static List<String> report(List<Compiler.Problem> problems) {
-        return problems.stream()
-                .map(Build::describe)
-                .limit(20)
-                .toList();
-    }
-
-    private static String describe(Compiler.Problem problem) {
-        var where = problem.source() == null
-                ? ""
-                : problem.source().getFileName() + ":" + problem.line() + " ";
-        return where + problem.message();
-    }
-
-    private static List<Path> with(List<Path> classpath, Path extra) {
-        var all = new ArrayList<>(classpath);
-        all.add(extra);
-        return all;
+        return problems.stream().map(problem -> {
+            var source = problem.source() == null ? "" : problem.source().getFileName() + ":" + problem.line() + " ";
+            return source + problem.message();
+        }).limit(20).toList();
     }
 }

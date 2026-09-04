@@ -3,6 +3,7 @@ package compiler;
 import java.io.IOException;
 import java.nio.file.Path;
 import java.util.List;
+import java.util.Optional;
 
 /// Compiles Java source paths and streams each class file to a [ClassSink].
 ///
@@ -11,12 +12,29 @@ import java.util.List;
 @FunctionalInterface
 public interface Compiler {
 
-    /// Everything one compiler invocation reads.
-    record Request(List<Path> sources, List<Path> classpath, boolean module, int release, boolean debug) {
+    /// Everything one named-module compiler invocation reads.
+    record Request(List<Path> sources, List<Path> modulePath, String module, int release, boolean debug,
+            Optional<Patch> patch, List<String> addExports, java.util.Map<String, Path> moduleSources) {
 
         public Request {
             sources = List.copyOf(sources);
-            classpath = List.copyOf(classpath);
+            modulePath = List.copyOf(modulePath);
+            if (module == null || module.isBlank()) throw new IllegalArgumentException("module must not be blank");
+            patch = patch == null ? Optional.empty() : patch;
+            addExports = addExports == null ? List.of() : List.copyOf(addExports);
+            moduleSources = moduleSources == null ? java.util.Map.of() : java.util.Map.copyOf(moduleSources);
+        }
+
+        public Request(List<Path> sources, List<Path> modulePath, String module, int release,
+                boolean debug, Optional<Patch> patch) {
+            this(sources, modulePath, module, release, debug, patch, List.of(), java.util.Map.of());
+        }
+
+        public record Patch(String module, Path sourceRoot) {
+            public Patch {
+                if (module == null || module.isBlank()) throw new IllegalArgumentException("patch module must not be blank");
+                if (sourceRoot == null) throw new NullPointerException("patch source root");
+            }
         }
     }
 

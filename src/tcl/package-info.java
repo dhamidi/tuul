@@ -9,6 +9,9 @@
 /// Use [tcl.Repl] when a caller needs one result for each complete command.
 /// Pass classes to [tcl.Tcl#types(java.lang.Class...)] when a script must
 /// create objects with `Name new` or test them with `instanceof`.
+/// [tcl.Tcl#of(java.lang.ModuleLayer)] selects the named-module layer searched
+/// by `import`; the thread context class loader and unnamed modules are never
+/// searched.
 ///
 /// ```
 /// var tcl = Tcl.of();

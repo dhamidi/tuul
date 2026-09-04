@@ -42,6 +42,11 @@ The host permits classes with `imports(patterns…)`, or passes them with
 `types(classes…)`. `import` registers only a permitted class. The default
 permits none. See [`Tcl`](reference-runtime.md#tcl).
 
+`import` searches the named modules in the layer supplied to `Tcl.of(layer)`
+and its parents. `Tcl.of()` uses the boot layer. It does not search the thread
+context class loader, a class path, or an unnamed module. A host with a
+generation layer must construct the interpreter with that layer.
+
 `import` does not initialize the class. Static initializers run at the first
 `new` or static method call.
 

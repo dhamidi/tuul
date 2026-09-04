@@ -17,6 +17,7 @@ import java.util.concurrent.atomic.AtomicInteger;
 import java.util.jar.JarEntry;
 import java.util.jar.JarOutputStream;
 import symbols.Vendor;
+import symbols.Sources;
 
 public final class AddIntegrationTest {
     private AddIntegrationTest() {}
@@ -83,12 +84,6 @@ public final class AddIntegrationTest {
         server.createContext("/com/acme/bad/1.0/bad-1.0.jar", exchange -> serve(exchange, jar("bad")));
         server.createContext("/com/acme/bad/1.0/bad-1.0.jar.sha256",
                 exchange -> serve(exchange, "0000000000000000000000000000000000000000000000000000000000000000"));
-        for (var artifact : List.of("duplicate-one", "duplicate-two")) {
-            server.createContext("/com/acme/" + artifact + "/1.0/" + artifact + "-1.0.pom",
-                    exchange -> serve(exchange, pom("com.acme", artifact, "1.0")));
-            server.createContext("/com/acme/" + artifact + "/1.0/" + artifact + "-1.0.jar",
-                    exchange -> serve(exchange, jar(Map.of("same/Type.class", new byte[] {0, 1, 2}))));
-        }
         server.start();
         var root = Files.createTempDirectory("tuul-add");
         try (var client = Add.client()) {
@@ -105,8 +100,8 @@ public final class AddIntegrationTest {
                     .map(file -> Files.isRegularFile(root.resolve("vendor").resolve(file)))
                     .allMatch(Boolean.TRUE::equals));
             var vendor = Vendor.of(List.of(root.resolve("vendor")));
-            Check.that("runtime binaries exclude source and javadoc archives",
-                    vendor.runtime().size() == 2 && vendor.runtime().stream().noneMatch(path ->
+            Check.that("binary artifacts exclude source and javadoc archives",
+                    vendor.artifacts().size() == 2 && vendor.artifacts().keySet().stream().noneMatch(path ->
                             path.toString().endsWith("-sources.jar") || path.toString().endsWith("-javadoc.jar")));
             Check.that("documentation archives have separate selected views",
                     vendor.sources().size() == 2 && vendor.javadocs().size() == 2);
@@ -126,9 +121,9 @@ public final class AddIntegrationTest {
             var excludedRoot = root.resolve("excluded");
             var excluded = client.into(new Layout(excludedRoot), List.of("com.acme:one:1.0"), List.of(repository),
                     new StringWriter(), Add.Mode.EVENTS,
-                    new Add.Options(java.util.Set.of("com.acme:two"), java.util.Set.of(), false));
+                    new Add.Options(java.util.Set.of("com.acme:two"), false));
             Check.that("an explicit graph exclusion applies without becoming stored state",
-                    excluded.ok() && Vendor.of(List.of(excludedRoot.resolve("vendor"))).runtime().size() == 1);
+                    excluded.ok() && Vendor.of(List.of(excludedRoot.resolve("vendor"))).artifacts().size() == 1);
 
             var retried = client.into(new Layout(root), List.of("com.acme:retry:1.0"),
                     List.of(repository), new StringWriter(), Add.Mode.EVENTS);
@@ -146,30 +141,7 @@ public final class AddIntegrationTest {
             Check.that("a checksum mismatch fails the required binary", !failed.ok());
             Check.that("a failed staged add leaves vendor unchanged",
                     Files.notExists(root.resolve("vendor/com.acme/bad"))
-                            && Vendor.of(List.of(root.resolve("vendor"))).runtime().size() == 3);
-
-            String duplicateFailure;
-            try {
-                client.into(new Layout(root), List.of("com.acme:duplicate-one:1.0", "com.acme:duplicate-two:1.0"),
-                        List.of(repository), new StringWriter(), Add.Mode.EVENTS);
-                duplicateFailure = "";
-            } catch (IOException expected) {
-                duplicateFailure = expected.getMessage();
-            }
-            Check.that("duplicate classes report every owner and do not publish",
-                    duplicateFailure.contains("same.Type") && duplicateFailure.contains("duplicate-one")
-                            && duplicateFailure.contains("duplicate-two")
-                            && Files.notExists(root.resolve("vendor/com.acme/duplicate-one"))
-                            && Files.notExists(root.resolve("vendor/com.acme/duplicate-two")));
-            var accepted = client.into(new Layout(root),
-                    List.of("com.acme:duplicate-one:1.0", "com.acme:duplicate-two:1.0"), List.of(repository),
-                    new StringWriter(), Add.Mode.EVENTS,
-                    new Add.Options(java.util.Set.of(), java.util.Set.of("same.Type"), false));
-            Check.that("an explicit duplicate exception applies without becoming stored state",
-                    accepted.ok() && Files.isRegularFile(root.resolve(
-                            "vendor/com.acme/duplicate-one/1.0/duplicate-one-1.0.jar"))
-                            && Files.isRegularFile(root.resolve(
-                                    "vendor/com.acme/duplicate-two/1.0/duplicate-two-1.0.jar")));
+                            && Vendor.of(List.of(root.resolve("vendor"))).artifacts().size() == 3);
 
             var existingRoot = root.resolve("existing-project");
             var existingVendor = existingRoot.resolve("vendor");
@@ -181,7 +153,7 @@ public final class AddIntegrationTest {
             var dryOutput = new StringWriter();
             var dry = client.into(new Layout(existingRoot), List.of("com.acme:one:1.0"), List.of(repository),
                     dryOutput, Add.Mode.EVENTS,
-                    new Add.Options(java.util.Set.of(), java.util.Set.of(), true));
+                    new Add.Options(java.util.Set.of(), true));
             Check.that("dry-run reports missing files and leaves vendor unchanged",
                     dry.ok() && dryOutput.toString().contains("add.add com.acme/one/1.0/one-1.0.jar")
                             && Files.isRegularFile(local)
@@ -192,7 +164,7 @@ public final class AddIntegrationTest {
                     added.ok() && Files.isRegularFile(local) && Files.isRegularFile(localSources)
                             && Files.isRegularFile(existingVendor.resolve("com.acme/one/1.0/one-1.0.jar"))
                             && Files.isRegularFile(existingVendor.resolve("com.acme/two/2.0/two-2.0.jar"))
-                            && Vendor.of(List.of(existingVendor)).runtime().size() == 3);
+                            && Vendor.of(List.of(existingVendor)).artifacts().size() == 3);
         } finally {
             server.stop(0);
             delete(root);
@@ -256,7 +228,22 @@ public final class AddIntegrationTest {
     }
 
     private static byte[] jar(String body) throws IOException {
-        return jar(Map.of("fixture.txt", body.getBytes(StandardCharsets.UTF_8)));
+        var entries = new java.util.LinkedHashMap<String, byte[]>();
+        entries.put("module-info.class", moduleInfo(body));
+        entries.put("fixture.txt", body.getBytes(StandardCharsets.UTF_8));
+        return jar(entries);
+    }
+
+    private static byte[] moduleInfo(String name) throws IOException {
+        var source = Files.createTempDirectory("tuul-fixture-module");
+        try {
+            Files.writeString(source.resolve("module-info.java"), "module " + name + " { }\n");
+            return Sources.compile(List.of(source)).get("module-info");
+        } finally {
+            try (var paths = Files.walk(source)) {
+                for (var path : paths.sorted(java.util.Comparator.reverseOrder()).toList()) Files.deleteIfExists(path);
+            }
+        }
     }
 
     private static byte[] jar(Map<String, byte[]> entries) throws IOException {

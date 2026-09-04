@@ -38,7 +38,8 @@ interface. An application or deployment system supplies those policies.
 | `Generation` | Complete capability, application, actor, effect, and resource definition. |
 | `Revision` | Immutable materialized input and content identity. |
 | `RevisionSource` | Producer that submits revisions without activating them. |
-| `RevisionCompiler` | In-memory compiler and child-loader bridge for a path-backed revision. |
+| `RevisionCompiler` | In-memory compiler and named-layer bridge for a path-backed revision. |
+| `GenerationFactory` | Defines a generation from a resolved module layer. |
 | `Reload` | Coordinator that stages, validates, activates, drains, and closes generations. |
 | `ApplicationDefinition` | Named application factory and optional JSON state transfer. |
 | `Applications` | Stable dispatcher for named applications. |
@@ -55,8 +56,11 @@ contract. Web adapters can use the same contract.
 
 ## `Program`
 
-`Program` is loaded from each candidate generation. The parent loader owns the
-interface. The candidate loader owns the implementation.
+`Program` is loaded from each candidate generation when the source uses Tuul.
+The parent module owns the interface. The candidate module owns the
+implementation. An external source can provide
+`com.sun.net.httpserver.HttpHandler` instead; `web.reload` defines that
+generation through a JDK service provider.
 
 `define()` returns one complete `Generation`. The coordinator calls it once for
 a candidate. The method may construct resources. It must not start the host
@@ -67,9 +71,11 @@ If `define()` throws, the candidate is rejected. The program must close a
 resource that it constructed but could not return in a `Generation`. Resources
 in a returned generation close when validation later rejects that candidate.
 
-The conventional implementation is the `main` class in the selected
-`src/<entrypoint>/main.java` source set. It needs an accessible no-argument
-constructor.
+The host selects the generation factory. A Tuul-aware module provides exactly
+one `reload.Program` service with an accessible no-argument constructor. An
+external HTTP module provides exactly one
+`com.sun.net.httpserver.HttpHandler` service. The service descriptor is part of
+the compiled module and remains in the in-memory layer.
 
 ## `Generation`
 
@@ -94,8 +100,8 @@ state can refuse the removal during preflight.
 
 ## `Revision`
 
-A revision has an identity, root, selected entrypoint, sources, resources,
-dependencies, and an optional host-owned program.
+A revision has an identity, a root module, a complete named source-module
+closure, dependencies, and an optional host-owned program.
 
 The identity is a SHA-256 digest of normalized entry names and contents. Entry
 order and filesystem modification time do not change it. A caller that supplies
@@ -125,19 +131,19 @@ host can submit to `Reload`. A source does not load or activate classes. A
 typical host wires a source like this:
 
 ```java
-var compiler = new RevisionCompiler(hostClasspath);
+var compiler = new RevisionCompiler(hostModulePath, new ProgramGenerationFactory());
 var source = new MemoryRevisionSource();
 reload.source(source.map(compiler::compile));
 ```
 
-The compiler is host code because compilation and class loading are deployment
-policy. The source only materializes an immutable tree.
+The compiler is host code because compilation and module-layer loading are
+deployment policy. The source only materializes an immutable tree.
 
 ## Directory source
 
-`project.Dev.DirectorySource` observes `src/` and `vendor/`. It submits one
-revision after their content changes and becomes stable for the configured
-quiet period. Project resources are below `src/resources/`.
+`project.Dev.DirectorySource` observes `src/`, `entrypoints/`, and `vendor/`.
+It submits one revision after their content changes and becomes stable for the
+configured quiet period. Project resources are below `src/resources/`.
 
 It ignores build output because build output is outside those roots. It ignores
 event names that start with `.` or end with `~`, `.swp`, or `.tmp`. Create,
@@ -150,27 +156,28 @@ without a second initial scan.
 ## Compilation and loading
 
 `RevisionCompiler` and `project.Dev.Builder` capture each candidate class and
-resource in memory. Reload compilation creates no class output directory.
+resource in memory. Reload compilation writes no `.class` file to disk.
 
 The compiler receives the selected source set, runtime dependencies, the
 current JDK release, and debug output enabled. A compiler failure rejects the
 candidate and records javac diagnostics as compile problems.
 
-The loader delegates Tuul and JDK contracts to its parent. It loads application
-classes and resources from the candidate snapshot. A revision may contain
-`module-info.java`; reload compilation omits that descriptor and loads the
-candidate as an unnamed child generation.
+The compiler includes every `module-info.java` and source in the selected
+module closure. It defines a fresh `ModuleLayer` for each generation. The
+parent layer supplies host contracts and the candidate layer supplies the
+revision modules. Compilation writes no `.class` files to disk.
 
-Closing a retired loader stops new class and resource loads. Loaded classes
-remain usable while a lease or resource still refers to them.
+Retirement stops new leases for the old layer. Loaded classes and resources
+remain usable while a lease or generation resource still refers to them. The
+generation closes its resources after the last lease drains.
 
 ### `RevisionCompiler`
 
-Construct `RevisionCompiler(parentClasspath)` for the JDK compiler, or pass a
-`compiler.Compiler` and `parentClasspath` for a test double. The compiler
-captures classes and resources in memory. `parentClasspath` makes the
-host-owned contracts visible to javac; the running parent class loader must own
-the same contracts.
+Construct `RevisionCompiler(parentModulePath, factory)` for the JDK compiler,
+or pass a `compiler.Compiler`, parent module path, and factory for a test
+double. The compiler captures classes and resources in memory. The module path
+must contain every resolved project and dependency module required by the
+candidate.
 
 `compile(revision)` preserves identity and paths and attaches a lazy `Program`.
 It returns an in-process revision that `Reload.submit` can stage. Compilation
@@ -363,7 +370,7 @@ candidate order.
 
 ## Earlier revisions
 
-The coordinator does not retain a live class loader for rollback. Submit an
+The coordinator does not retain a live module layer for rollback. Submit an
 earlier source artifact again to compile it into a new candidate. Normal actor
 replay and application state policy checks apply. External effects are not
 reversed.

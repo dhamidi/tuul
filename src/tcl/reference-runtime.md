@@ -75,7 +75,8 @@ The caller closes the input and output streams. The REPL does not close them.
 
 | Member | Action |
 |---|---|
-| `Tcl.of()` | Create an interpreter. Install builtins in `::`. Current namespace is `::`. |
+| `Tcl.of()` | Create an interpreter using named modules in the boot layer. Install builtins in `::`. |
+| `Tcl.of(layer)` | Create an interpreter using named modules in `layer` and its parents. |
 | `set(name, value)` | Store `value` under `name`. Resolve `name` from `::`. Create intermediate namespaces. Return this interpreter. |
 | `get(name)` | Return the value. Resolve `name` from `::`. Throw `TclException` if the name is not set. |
 | `exists(name)` | Return whether the name is set. `null` is set. Unset is not. |

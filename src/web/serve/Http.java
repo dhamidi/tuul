@@ -12,6 +12,7 @@ import java.util.LinkedHashMap;
 import java.util.List;
 import java.util.Locale;
 import java.util.Map;
+import java.util.Objects;
 import java.util.concurrent.Executors;
 import java.util.function.Consumer;
 import web.Handler;
@@ -64,11 +65,38 @@ public final class Http implements AutoCloseable {
         return start(handler, new InetSocketAddress(port), 0, failures);
     }
 
+    /// Starts a server for a raw JDK HTTP handler. This overload is the
+    /// boundary for an external named module that uses only
+    /// `com.sun.net.httpserver`; the listener still belongs to the host.
+    public static Http start(com.sun.net.httpserver.HttpHandler handler, int port) throws IOException {
+        return start(handler, new InetSocketAddress(port), 0, Http::complain);
+    }
+
+    /// Starts a server for a raw JDK HTTP handler and reports handler failures.
+    public static Http start(com.sun.net.httpserver.HttpHandler handler, int port,
+            Consumer<Exception> failures) throws IOException {
+        return start(handler, new InetSocketAddress(port), 0, failures);
+    }
+
     /// A server on a given address, and what to do about a handler that throws.
     /// Failures go somewhere by default rather than nowhere, because a server
     /// that silently answers 500 is a server nobody can debug.
     public static Http start(Handler handler, InetSocketAddress address, int backlog, Consumer<Exception> failures)
             throws IOException {
+        timeouts();
+        var server = HttpServer.create(address, backlog);
+        server.setExecutor(Executors.newVirtualThreadPerTaskExecutor());
+        server.createContext("/", exchange -> answer(handler, exchange, failures));
+        server.start();
+        return new Http(server);
+    }
+
+    /// Starts a server for a raw JDK HTTP handler on `address`.
+    public static Http start(com.sun.net.httpserver.HttpHandler handler, InetSocketAddress address,
+            int backlog, Consumer<Exception> failures) throws IOException {
+        Objects.requireNonNull(handler, "handler");
+        Objects.requireNonNull(address, "address");
+        Objects.requireNonNull(failures, "failures");
         timeouts();
         var server = HttpServer.create(address, backlog);
         server.setExecutor(Executors.newVirtualThreadPerTaskExecutor());
@@ -110,6 +138,21 @@ public final class Http implements AutoCloseable {
             } catch (Exception e) {
                 if (!left(e)) failures.accept(e);
                 fail(response);
+            }
+        }
+    }
+
+    private static void answer(com.sun.net.httpserver.HttpHandler handler, HttpExchange exchange,
+            Consumer<Exception> failures) {
+        try (exchange) {
+            try {
+                handler.handle(exchange);
+            } catch (Exception failure) {
+                if (!left(failure)) failures.accept(failure);
+                if (exchange.getResponseCode() < 0) {
+                    try { exchange.sendResponseHeaders(Status.ERROR, -1); }
+                    catch (IOException ignored) {}
+                }
             }
         }
     }

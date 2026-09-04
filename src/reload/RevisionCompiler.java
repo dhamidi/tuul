@@ -6,55 +6,49 @@ import java.io.ByteArrayInputStream;
 import java.io.ByteArrayOutputStream;
 import java.io.IOException;
 import java.io.OutputStream;
-import java.net.URI;
-import java.net.URL;
-import java.net.URLClassLoader;
-import java.net.URLConnection;
-import java.net.URLStreamHandler;
+import java.lang.module.Configuration;
+import java.lang.module.ModuleDescriptor;
+import java.lang.module.ModuleFinder;
 import java.nio.file.Files;
 import java.nio.file.Path;
 import java.util.ArrayList;
 import java.util.HashMap;
+import java.util.HashSet;
+import java.util.LinkedHashMap;
 import java.util.List;
 import java.util.Map;
 import java.util.Objects;
+import java.util.Set;
+import modules.MemoryModule;
+import modules.MemoryModuleFinder;
+import modules.MemoryModuleLoader;
 
-/// Compiles a path-backed [Revision] into a disposable program when the host activates it.
+/// Compiles a named source-module closure and defines it in a fresh JPMS layer.
 ///
-/// Pass [#compile] to [RevisionSource#map(java.util.function.UnaryOperator)]
-/// to compile revisions before submission. Compilation runs when the returned
-/// program is defined by [Reload]. Each definition gets a new child loader
-/// backed by an in-memory class and resource snapshot. The parent owns Tuul
-/// and the contracts shared with the running process.
+/// The host factory chooses and constructs the generation entrypoint from the
+/// resolved layer supplied to it. Compilation writes no output in the revision
+/// tree. Class bytes and module resources remain in memory for the generation
+/// lifetime.
 public final class RevisionCompiler {
 
     private final Compiler compiler;
-    private final List<Path> parentClasspath;
+    private final List<Path> parentModulePath;
+    private final GenerationFactory factory;
 
-    /// Creates an in-process JDK compiler with the supplied parent class path.
-    ///
-    /// An empty or null path supplies no host classes to javac. Candidate class
-    /// and resource bytes remain in memory until their generation retires.
-    public RevisionCompiler(List<Path> parentClasspath) {
-        this(Compiler.system(), parentClasspath);
+    /// Creates a compiler with the system compiler and a host generation factory.
+    public RevisionCompiler(List<Path> parentModulePath, GenerationFactory factory) {
+        this(Compiler.system(), parentModulePath, factory);
     }
 
-    /// Creates a compiler with an injectable compiler and parent class path.
-    ///
-    /// Pass a test double instead of [Compiler#system()] to control diagnostics.
-    /// An empty or null path supplies no host classes to the compiler.
-    public RevisionCompiler(Compiler compiler, List<Path> parentClasspath) {
+    /// Creates a compiler with an injectable compiler, module path, and factory.
+    public RevisionCompiler(Compiler compiler, List<Path> parentModulePath,
+            GenerationFactory factory) {
         this.compiler = Objects.requireNonNull(compiler, "compiler");
-        this.parentClasspath = parentClasspath == null ? List.of()
-                : parentClasspath.stream().map(path -> path.toAbsolutePath().normalize()).toList();
+        this.parentModulePath = paths(parentModulePath);
+        this.factory = Objects.requireNonNull(factory, "factory");
     }
 
-    /// Attaches a lazy in-memory program to a path-backed revision.
-    ///
-    /// The returned revision compiles when [Reload#submit(Revision)] defines
-    /// its program. A compiler diagnostic rejects that candidate. This method
-    /// writes no class or resource output. The revision source still owns its
-    /// input tree. A revision that already has a program returns unchanged.
+    /// Attaches lazy layer compilation to a source revision.
     public Revision compile(Revision revision) {
         Objects.requireNonNull(revision, "revision");
         if (revision.program() != null) return revision;
@@ -64,217 +58,191 @@ public final class RevisionCompiler {
     private final class LoadedProgram implements Program {
         private final Revision revision;
 
-        private LoadedProgram(Revision revision) {
-            this.revision = revision;
-        }
+        private LoadedProgram(Revision revision) { this.revision = revision; }
 
         @Override
         public Generation define() throws Exception {
-            if (revision.root() == null) throw new CompilationFailure("revision has no source root");
-            CandidateLoader loader = null;
-            try {
-                var classes = new HashMap<String, byte[]>();
-                compileSources(classes);
-                var resources = resources();
-                loader = loader(classes, resources, revision.dependencies());
-                var type = Class.forName("main", true, loader);
-                var value = type.getDeclaredConstructor().newInstance();
-                if (!(value instanceof Program program)) {
-                    throw new CompilationFailure("main must implement reload.Program");
+            var modules = compileModules();
+            var finder = MemoryModuleFinder.of(modules);
+            var external = dependencyFinder();
+            var configuration = resolve(finder, external);
+            // Each candidate module gets its own loader. The host Tuul module
+            // keeps its parent loader so Program and the host API retain one
+            // class identity; candidate and external module bytes stay in
+            // memory and never become class-path classes.
+            var sourceByName = new HashMap<String, MemoryModule>();
+            for (var module : modules) sourceByName.put(module.name(), module);
+            var inMemory = new ArrayList<MemoryModule>();
+            var hostModule = RevisionCompiler.class.getModule().getName();
+            for (var resolved : configuration.modules()) {
+                var name = resolved.name();
+                if (name.equals(hostModule)) continue;
+                var source = sourceByName.get(name);
+                if (source != null) inMemory.add(source);
+                else {
+                    var reference = external.find(name).orElseThrow(() ->
+                            new CompilationFailure("resolved module has no reference: " + name));
+                    inMemory.add(MemoryModuleLoader.read(reference));
                 }
-                var defined = Objects.requireNonNull(program.define(), "main.define returned null");
-                var ownedLoader = loader;
-                loader = null;
-                return defined.closing(ownedLoader);
-            } catch (Throwable failure) {
-                closeOwned(loader);
-                if (failure instanceof Exception exception) throw exception;
-                if (failure instanceof Error error) throw error;
-                throw new Exception(failure);
             }
+            var parent = RevisionCompiler.class.getClassLoader();
+            var loaders = MemoryModuleLoader.create(inMemory, parent);
+            var layer = ModuleLayer.defineModules(configuration, List.of(ModuleLayer.boot()),
+                    name -> loaders.containsKey(name) ? loaders.get(name) : parent).layer();
+            MemoryModuleLoader.configure(loaders, layer);
+            return Objects.requireNonNull(factory.define(layer),
+                    "generation factory returned null");
         }
 
-        private void compileSources(Map<String, byte[]> classes) throws Exception {
-            var sources = revision.sources();
-            if (sources.isEmpty()) throw new CompilationFailure("revision has no source files");
-            var root = revision.root();
-            for (var source : sources) inside(root, source, "source");
-            // A revision can carry module-info.java for project metadata. The
-            // reload generation itself is unnamed, so compile the application
-            // sources only and never define the module descriptor.
-            sources = sources.stream()
-                    .filter(path -> !path.getFileName().toString().equals("module-info.java")).toList();
-            if (sources.isEmpty()) throw new CompilationFailure("revision has no compilable source files");
-            var classpath = new ArrayList<Path>(parentClasspath);
-            classpath.addAll(revision.dependencies());
-            var result = compiler.compile(new Compiler.Request(sources, classpath, false,
-                    Runtime.version().feature(), true), sink(classes));
+        private List<MemoryModule> compileModules() throws Exception {
+            if (revision.modules().isEmpty()) throw new CompilationFailure("revision has no source modules");
+            var names = new HashSet<String>();
+            var sources = new ArrayList<Path>();
+            var moduleSources = new LinkedHashMap<String, Path>();
+            for (var module : revision.modules()) {
+                if (!names.add(module.name())) throw new CompilationFailure("duplicate source module: " + module.name());
+                moduleSources.put(module.name(), module.root());
+                for (var source : module.sources()) { inside(module.root(), source, "source"); sources.add(source); }
+                if (!module.sources().contains(module.descriptor())) throw new CompilationFailure(
+                        "module sources omit descriptor: " + module.name());
+            }
+            var modulePath = new ArrayList<Path>(parentModulePath);
+            modulePath.addAll(revision.dependencies());
+            for (var path : modulePath) if (!Files.exists(path)) throw new CompilationFailure(
+                    "module path entry does not exist: " + path);
+            var classes = new HashMap<String, Map<String, byte[]>>();
+            var result = compiler.compile(new Compiler.Request(sources, modulePath, revision.rootModule(),
+                    Runtime.version().feature(), true, java.util.Optional.empty(), List.of(), moduleSources),
+                    sink(classes));
             if (!result.ok()) throw new CompilationFailure(result.problems());
-        }
-
-        private Map<String, byte[]> resources() throws Exception {
-            var snapshot = new HashMap<String, byte[]>();
-            for (var resource : revision.resourceEntries()) {
-                inside(revision.root(), resource.path(), "resource");
-                if (!Files.isRegularFile(resource.path())) throw new CompilationFailure(
-                        "resource does not exist: " + resource.path());
-                snapshot.put(resource.name(), Files.readAllBytes(resource.path()));
+            if (result.classes() == 0) throw new CompilationFailure("compiler emitted no classes");
+            var compiled = new ArrayList<MemoryModule>();
+            for (var module : revision.modules()) {
+                var output = classes.get(module.name());
+                if (output == null || !output.containsKey("module-info")) throw new CompilationFailure(
+                        "compiler produced no module-info.class for " + module.name() + " (outputs: " + classes.keySet() + ")");
+                var descriptor = descriptor(output);
+                if (!descriptor.name().equals(module.name())) throw new CompilationFailure(
+                        "module descriptor name " + descriptor.name() + " differs from " + module.name());
+                var entries = new HashMap<String, byte[]>();
+                output.forEach((name, bytes) -> entries.put(classEntry(name), bytes));
+                for (var resource : module.resources()) {
+                    inside(module.root(), resource.path(), "resource");
+                    if (entries.put(resource.name(), Files.readAllBytes(resource.path())) != null) {
+                        throw new CompilationFailure("duplicate module entry: " + resource.name());
+                    }
+                }
+                compiled.add(new MemoryModule(descriptor, entries));
             }
-            return Map.copyOf(snapshot);
+            return compiled;
         }
 
-        private ClassSink sink(Map<String, byte[]> classes) {
-            return binaryName -> {
-                var output = new ByteArrayOutputStream();
-                return new OutputStream() {
-                    @Override
-                    public void write(int value) { output.write(value); }
+        private ModuleFinder dependencyFinder() throws Exception {
+            var paths = new ArrayList<Path>(parentModulePath);
+            paths.addAll(revision.dependencies());
+            if (paths.isEmpty()) return ModuleFinder.of();
+            for (var path : paths) if (!Files.exists(path)) throw new CompilationFailure(
+                    "module path entry does not exist: " + path);
+            try {
+                var finder = ModuleFinder.of(paths.toArray(Path[]::new));
+                var automatic = finder.findAll().stream()
+                        .filter(reference -> reference.descriptor().isAutomatic())
+                        .map(reference -> reference.descriptor().name()).sorted().toList();
+                if (!automatic.isEmpty()) throw new CompilationFailure(
+                        "automatic modules are not supported; add module-info.class to "
+                                + String.join(", ", automatic));
+                return finder;
+            } catch (RuntimeException failure) {
+                throw new CompilationFailure("invalid module path: " + failure.getMessage());
+            }
+        }
 
-                    @Override
-                    public void write(byte[] bytes, int offset, int length) {
+        private Configuration resolve(ModuleFinder project, ModuleFinder external) throws Exception {
+            try {
+                var finder = ModuleFinder.compose(project, external);
+                var configuration = ModuleLayer.boot().configuration().resolve(
+                        ModuleFinder.of(), finder, List.of(revision.rootModule()));
+                var packages = new HashMap<String, String>();
+                for (var boot : ModuleLayer.boot().modules()) {
+                    for (var name : boot.getPackages()) packages.putIfAbsent(name, boot.getName());
+                }
+                for (var resolved : configuration.modules()) {
+                    var owner = resolved.name();
+                    var reference = finder.find(owner).orElseThrow();
+                    for (var name : reference.descriptor().packages()) {
+                        var prior = packages.putIfAbsent(name, owner);
+                        if (prior != null && !prior.equals(owner)) throw new CompilationFailure(
+                                "split package " + name + " in " + prior + " and " + owner);
+                    }
+                }
+                return configuration;
+            } catch (CompilationFailure failure) {
+                throw failure;
+            } catch (RuntimeException failure) {
+                throw new CompilationFailure("cannot resolve module graph: " + failure.getMessage());
+            }
+        }
+
+    }
+
+    private static ModuleDescriptor descriptor(Map<String, byte[]> classes) throws Exception {
+        var bytes = classes.get("module-info");
+        if (bytes == null) throw new CompilationFailure("compiler produced no module-info.class");
+        try (var input = new ByteArrayInputStream(bytes)) {
+            return ModuleDescriptor.read(input);
+        } catch (IllegalArgumentException | IOException failure) {
+            throw new CompilationFailure("invalid compiled module descriptor: " + failure.getMessage());
+        }
+    }
+
+    private static ClassSink sink(Map<String, Map<String, byte[]>> classes) {
+        return new ClassSink() {
+            @Override public OutputStream open(String binaryName) { return open("", binaryName); }
+            @Override public OutputStream open(String module, String binaryName) {
+                var output = new ByteArrayOutputStream();
+                var target = classes.computeIfAbsent(module, ignored -> new HashMap<>());
+                return new OutputStream() {
+                    @Override public void write(int value) { output.write(value); }
+                    @Override public void write(byte[] bytes, int offset, int length) {
                         output.write(bytes, offset, length);
                     }
-
-                    @Override
-                    public void close() {
-                        classes.put(binaryName, output.toByteArray());
-                    }
+                    @Override public void close() { target.put(binaryName, output.toByteArray()); }
                 };
-            };
-        }
-
-        private CandidateLoader loader(Map<String, byte[]> classes, Map<String, byte[]> resources,
-                List<Path> dependencies) throws Exception {
-            var urls = new ArrayList<URL>();
-            for (var dependency : dependencies) {
-                if (!Files.exists(dependency)) throw new CompilationFailure("dependency does not exist: " + dependency);
-                urls.add(dependency.toUri().toURL());
             }
-            return new CandidateLoader(classes, resources, urls.toArray(URL[]::new),
-                    RevisionCompiler.class.getClassLoader());
-        }
+        };
+    }
+
+    private static String classEntry(String binaryName) {
+        return binaryName.replace('.', '/') + ".class";
+    }
+
+    private static List<Path> paths(List<Path> paths) {
+        return paths == null ? List.of() : paths.stream()
+                .map(path -> Objects.requireNonNull(path, "module path entry")
+                        .toAbsolutePath().normalize()).toList();
     }
 
     private static void inside(Path root, Path path, String kind) throws Exception {
-        if (path == null || !path.toAbsolutePath().normalize().startsWith(root)) {
-            throw new CompilationFailure(kind + " is outside revision root: " + path);
+        var normalized = path == null ? null : path.toAbsolutePath().normalize();
+        if (normalized == null || !normalized.startsWith(root.toAbsolutePath().normalize())) {
+            throw new CompilationFailure(kind + " is outside module root: " + path);
         }
-        if (!Files.isRegularFile(path)) throw new CompilationFailure(kind + " does not exist: " + path);
+        if (!Files.isRegularFile(normalized)) throw new CompilationFailure(kind + " does not exist: " + path);
     }
 
-    private static void closeOwned(CandidateLoader loader) throws Exception {
-        if (loader != null) loader.close();
-    }
 
-    /// Loads the selected default-package entrypoint from the candidate while
-    /// delegating shared contracts to the host class loader.
-    private static final class CandidateLoader extends URLClassLoader {
-        private final Map<String, byte[]> classes;
-        private final Map<String, byte[]> resources;
-
-        private CandidateLoader(Map<String, byte[]> classes, Map<String, byte[]> resources,
-                URL[] urls, ClassLoader parent) {
-            super(urls, parent);
-            this.classes = Map.copyOf(classes);
-            this.resources = resources;
-        }
-
-        @Override
-        protected Class<?> loadClass(String name, boolean resolve) throws ClassNotFoundException {
-            if (!classes.containsKey(name)) return super.loadClass(name, resolve);
-            synchronized (getClassLoadingLock(name)) {
-                var loaded = findLoadedClass(name);
-                if (loaded == null) loaded = findClass(name);
-                if (resolve) resolveClass(loaded);
-                return loaded;
-            }
-        }
-
-        @Override
-        protected Class<?> findClass(String name) throws ClassNotFoundException {
-            var bytes = classes.get(name);
-            if (bytes == null) throw new ClassNotFoundException(name);
-            return defineClass(name, bytes, 0, bytes.length);
-        }
-
-        @Override
-        public URL getResource(String name) {
-            var candidate = memoryResource(name);
-            return candidate == null ? super.getResource(name) : candidate;
-        }
-
-        @Override
-        public java.util.Enumeration<URL> getResources(String name) throws IOException {
-            var found = new ArrayList<URL>();
-            var candidate = memoryResource(name);
-            if (candidate != null) found.add(candidate);
-            if (getParent() != null) getParent().getResources(name).asIterator().forEachRemaining(found::add);
-            super.findResources(name).asIterator().forEachRemaining(found::add);
-            return java.util.Collections.enumeration(found);
-        }
-
-        @Override
-        public URL findResource(String name) {
-            var candidate = memoryResource(name);
-            return candidate == null ? super.findResource(name) : candidate;
-        }
-
-        private URL memoryResource(String name) {
-            if (!resources.containsKey(name)) return null;
-            try {
-                return URL.of(new URI("memory", null, "/" + name, null),
-                        new MemoryUrlHandler(resources.get(name)));
-            } catch (java.net.URISyntaxException | java.net.MalformedURLException impossible) {
-                throw new AssertionError(impossible);
-            }
-        }
-    }
-
-    private static final class MemoryUrlHandler extends URLStreamHandler {
-        private final byte[] bytes;
-
-        private MemoryUrlHandler(byte[] bytes) { this.bytes = bytes; }
-
-        @Override
-        protected URLConnection openConnection(URL url) {
-            return new URLConnection(url) {
-                @Override
-                public void connect() {}
-
-                @Override
-                public java.io.InputStream getInputStream() {
-                    return new ByteArrayInputStream(bytes);
-                }
-
-                @Override
-                public long getContentLengthLong() { return bytes.length; }
-            };
-        }
-    }
-
-    /// A compiler diagnostic which keeps all javac problems together for the
-    /// coordinator's normal candidate failure report.
+    /// A compiler diagnostic which keeps all javac problems together.
     public static final class CompilationFailure extends Exception {
         private final List<Compiler.Problem> problems;
-
-        private CompilationFailure(String message) {
-            super(message);
-            problems = List.of();
-        }
-
-        private CompilationFailure(List<Compiler.Problem> problems) {
-            super(format(problems));
-            this.problems = List.copyOf(problems);
-        }
-
-        /// Returns javac diagnostics in compiler order. A non-javac failure has
-        /// an empty list and uses the exception message.
+        private CompilationFailure(String message) { super(message); problems = List.of(); }
+        private CompilationFailure(List<Compiler.Problem> problems) { super(format(problems)); this.problems = List.copyOf(problems); }
+        /// Returns javac diagnostics in compiler order.
         public List<Compiler.Problem> problems() { return problems; }
-
         private static String format(List<Compiler.Problem> problems) {
-            return problems.isEmpty() ? "compilation failed"
-                    : problems.stream().map(problem -> (problem.source() == null ? "" : problem.source() + ":")
-                            + problem.line() + " " + problem.message()).reduce((one, two) -> one + "; " + two).orElse("compilation failed");
+            return problems.isEmpty() ? "compilation failed" : problems.stream()
+                    .map(problem -> (problem.source() == null ? "" : problem.source() + ":")
+                            + problem.line() + " " + problem.message())
+                    .reduce((one, two) -> one + "; " + two).orElse("compilation failed");
         }
     }
 }
