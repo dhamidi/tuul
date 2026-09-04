@@ -1,36 +1,24 @@
 package project;
 
 import compiler.Compiler;
-import reload.Generation;
-import reload.Program;
 import reload.Reload;
 import reload.Revision;
 import reload.RevisionSource;
 import symbols.Vendor;
 import web.serve.Http;
+import web.reload.ReloadHandler;
 
 import java.io.IOException;
 import java.io.Writer;
-import java.net.URL;
-import java.net.URLClassLoader;
-import java.lang.module.ModuleDescriptor;
-import java.lang.module.ModuleFinder;
-import java.lang.module.ModuleReference;
-import java.lang.module.ModuleReader;
-import java.net.URI;
 import java.nio.file.FileVisitResult;
 import java.nio.file.Files;
 import java.nio.file.Path;
 import java.nio.file.SimpleFileVisitor;
-import java.nio.file.StandardCopyOption;
 import java.nio.file.StandardWatchEventKinds;
 import java.nio.file.WatchKey;
 import java.nio.file.WatchService;
 import java.time.Duration;
 import java.util.ArrayList;
-import java.util.Comparator;
-import java.util.Optional;
-import java.util.Set;
 import java.util.List;
 import java.util.Objects;
 import java.util.function.Consumer;
@@ -64,6 +52,7 @@ public final class Dev {
         }
 
         var reload = new Reload();
+        var http = new ReloadHandler(reload);
         var builder = new Builder(layout, selected, err);
         var first = builder.build();
         if (first == null) {
@@ -78,7 +67,7 @@ public final class Dev {
         }
 
         var source = new DirectorySource(layout, selected, builder, QUIET_PERIOD, err, false);
-        try (var server = Http.start(reload.handler(), port, failure -> write(err, "web: " + failure + "\n"))) {
+        try (var server = Http.start(http, port, failure -> write(err, "web: " + failure + "\n"))) {
             write(out, "development server at http://localhost:" + server.port() + "\n");
             write(out, "active generation " + status.activeRevision() + "\n");
             write(out, "watching " + layout.src().toAbsolutePath().normalize() + "\n");
@@ -113,8 +102,10 @@ public final class Dev {
         return available.size() == 1 ? available.getFirst() : "";
     }
 
-    /// An injectable directory revision source. It submits complete compiled
-    /// programs; it does not know how activation or HTTP routing works.
+    /// An injectable directory source for complete project revisions.
+    ///
+    /// Each revision carries a lazy in-memory program. The source does not know
+    /// how activation or HTTP routing works.
     public static final class DirectorySource implements RevisionSource {
         private final Layout layout;
         private final String entrypoint;
@@ -243,17 +234,23 @@ public final class Dev {
         }
     }
 
-    /// Compiler seam used by tests and by [DirectorySource].
+    /// Collects one project revision and attaches its in-memory compiler.
     public static final class Builder {
         private final Layout layout;
         private final String entrypoint;
         private final Writer errors;
         private final Compiler compiler;
 
+        /// Uses the compiler in the running JDK for revisions from `layout`.
         public Builder(Layout layout, String entrypoint, Writer errors) {
             this(layout, entrypoint, errors, Compiler.system());
         }
 
+        /// Uses `compiler` for revisions from `layout`.
+        ///
+        /// Input-discovery problems are written to `errors`. [Dev#run] writes
+        /// compiler diagnostics after the coordinator rejects a candidate.
+        /// Null arguments throw `NullPointerException`.
         public Builder(Layout layout, String entrypoint, Writer errors, Compiler compiler) {
             this.layout = Objects.requireNonNull(layout, "layout");
             this.entrypoint = Objects.requireNonNull(entrypoint, "entrypoint");
@@ -279,51 +276,11 @@ public final class Dev {
             }
             var sourceFiles = new ArrayList<Path>(librarySources);
             sourceFiles.addAll(entrySources);
-            var resources = resources(layout, libraries, source);
-            Files.createDirectories(layout.root().resolve("build/reload"));
-            var root = Files.createTempDirectory(layout.root().resolve("build/reload"), "generation-");
-            var classes = root.resolve("classes");
-            var entry = root.resolve("entry");
-            try {
-                var librariesResult = compile(librarySources, classes, vendor.runtime(), Files.isRegularFile(descriptor));
-                if (!librariesResult.ok()) return fail(root, describe(librariesResult.problems()));
-                copy(libraries, layout.src(), classes);
-                copy(List.of(layout.resources()), layout.resources(), classes);
-                var entryResult = compile(entrySources, entry, append(vendor.runtime(), classes), false);
-                if (!entryResult.ok()) return fail(root, describe(entryResult.problems()));
-                copy(List.of(source), source, entry);
-                var identity = Revision.from(layout.root(), entrypoint, sourceFiles, resources, vendor.runtime()).identity();
-                var loader = loader(classes, entry, vendor.runtime(), Files.isRegularFile(descriptor));
-                return new Built(Revision.of(identity, new LoadedProgram(loader, root)), loader.entry(), root);
-            } catch (Throwable failed) {
-                remove(root);
-                if (failed instanceof IOException io) throw io;
-                throw new IOException("cannot build reload generation", failed);
-            }
-        }
-
-        private Built fail(Path root, List<String> problems) throws IOException {
-            for (var problem : problems) write(errors, "compile: " + problem + "\n");
-            remove(root);
-            return null;
-        }
-
-        private static List<String> describe(List<Compiler.Problem> problems) {
-            return problems.stream().map(problem -> {
-                var source = problem.source() == null ? "" : problem.source() + ":" + problem.line() + " ";
-                return source + problem.message();
-            }).toList();
-        }
-
-        private Compiler.Result compile(List<Path> sources, Path out, List<Path> classpath, boolean module)
-                throws IOException {
-            Files.createDirectories(out);
-            return compiler.compile(new Compiler.Request(sources, classpath, module,
-                    Runtime.version().feature(), true), name -> {
-                var file = out.resolve(name.replace('.', '/') + ".class");
-                Files.createDirectories(file.getParent());
-                return Files.newOutputStream(file);
-            });
+            var resourceEntries = resources(layout, libraries, source);
+            var classpath = List.of(Home.find().classes());
+            var revision = Revision.fromEntries(layout.root(), entrypoint, sourceFiles,
+                    resourceEntries, vendor.runtime());
+            return new Built(new reload.RevisionCompiler(compiler, classpath).compile(revision));
         }
 
         private static List<Path> sources(List<Path> roots) throws IOException {
@@ -337,206 +294,26 @@ public final class Dev {
             return found;
         }
 
-        private static List<Path> resources(Layout layout, List<Path> libraries, Path entry) throws IOException {
-            var found = new ArrayList<Path>();
-            for (var root : libraries) collect(root, found);
-            collect(layout.resources(), found);
-            collect(entry, found);
+        private static List<Revision.ResourceEntry> resources(Layout layout, List<Path> libraries, Path entry)
+                throws IOException {
+            var found = new ArrayList<Revision.ResourceEntry>();
+            for (var root : libraries) collect(root, layout.src(), found);
+            collect(layout.resources(), layout.resources(), found);
+            collect(entry, entry, found);
             return found;
         }
 
-        private static void collect(Path root, List<Path> into) throws IOException {
+        private static void collect(Path root, Path logicalRoot, List<Revision.ResourceEntry> into) throws IOException {
             if (!Files.isDirectory(root)) return;
             try (var files = Files.walk(root)) {
                 files.filter(Files::isRegularFile).filter(path -> !path.toString().endsWith(".java"))
-                        .forEach(into::add);
-            }
-        }
-
-        private static void copy(List<Path> roots, Path from, Path to) throws IOException {
-            for (var root : roots) {
-                if (!Files.isDirectory(root)) continue;
-                try (var files = Files.walk(root)) {
-                    for (var file : files.filter(Files::isRegularFile)
-                            .filter(path -> !path.toString().endsWith(".java")).toList()) {
-                        var destination = to.resolve(from.relativize(file).toString());
-                        Files.createDirectories(destination.getParent());
-                        Files.copy(file, destination, StandardCopyOption.REPLACE_EXISTING);
-                    }
-                }
-            }
-        }
-
-        private static List<Path> append(List<Path> paths, Path path) {
-            var result = new ArrayList<>(paths);
-            result.add(path);
-            return result;
-        }
-
-        /// Creates the candidate's class-loading boundary. A project without a
-        /// module descriptor is an ordinary child URL loader. A named project
-        /// gets a module layer for its library classes and a small child loader
-        /// for the selected default-package `main` entrypoint. The latter is
-        /// deliberately separate: a default-package entrypoint cannot belong
-        /// to a named module, but it still must be replaced on every revision.
-        private static GenerationLoader loader(Path classes, Path entry, List<Path> dependencies,
-                boolean named) throws IOException {
-            var parent = Dev.class.getClassLoader();
-            if (!named) {
-                var urls = new ArrayList<URL>();
-                urls.add(classes.toUri().toURL());
-                urls.add(entry.toUri().toURL());
-                for (var dependency : dependencies) urls.add(dependency.toUri().toURL());
-                var child = new ProjectClassLoader(urls.toArray(URL[]::new), parent);
-                return new GenerationLoader(child, List.of(child), null);
-            }
-
-            var projectFinder = ModuleFinder.of(classes);
-            var project = projectFinder.findAll().stream()
-                    .findFirst()
-                    .orElseThrow(() -> new IOException("named project has no module descriptor"));
-            var module = project.descriptor().name();
-            var finder = ModuleFinder.of(modulePaths(classes, dependencies));
-            var framework = frameworkLayer(parent);
-            var configuration = framework.configuration().resolve(ModuleFinder.of(), finder, Set.of(module));
-            try {
-                var controller = ModuleLayer.defineModulesWithOneLoader(configuration, List.of(framework), parent);
-                var layer = controller.layer();
-                var namedModule = layer.findModule(module)
-                        .orElseThrow(() -> new IOException("named project module did not load: " + module));
-                // The host is normally on the class path. A module descriptor
-                // can say `requires tuul` for compilation, but the actual
-                // framework classes are owned by the host's unnamed module. Add
-                // the edge so those classes retain one identity across
-                // generations.
-                controller.addReads(namedModule, Dev.class.getModule());
-                var loadedModuleLoader = layer.findLoader(module);
-                var child = new ProjectClassLoader(new URL[] { entry.toUri().toURL() }, loadedModuleLoader);
-                return new GenerationLoader(child, List.of(child), layer);
-            } catch (Throwable failure) {
-                if (failure instanceof IOException io) throw io;
-                throw new IOException("cannot load named project module", failure);
-            }
-        }
-
-        private static Path[] modulePaths(Path classes, List<Path> dependencies) {
-            var paths = new ArrayList<Path>();
-            paths.add(classes);
-            paths.addAll(dependencies);
-            return paths.toArray(Path[]::new);
-        }
-
-        /// A small parent layer supplies the module name used by installed
-        /// projects (`requires tuul`) without loading a second copy of Tuul.
-        /// Its loader is the host loader, so every framework type still comes
-        /// from the parent class path. The project's controller additionally
-        /// reads the host unnamed module for the same reason.
-        private static ModuleLayer frameworkLayer(ClassLoader parent) {
-            if (Dev.class.getModule().isNamed() && Dev.class.getModule().getName().equals("tuul")) {
-                return ModuleLayer.boot();
-            }
-            var descriptor = ModuleDescriptor.newModule("tuul").build();
-            var reference = new ModuleReference(descriptor, URI.create("tuul:host")) {
-                @Override
-                public ModuleReader open() {
-                    return new ModuleReader() {
-                        @Override public Optional<java.net.URI> find(String name) { return Optional.empty(); }
-                        @Override public java.util.stream.Stream<String> list() { return java.util.stream.Stream.empty(); }
-                        @Override public Optional<java.nio.ByteBuffer> read(String name) { return Optional.empty(); }
-                        @Override public Optional<java.io.InputStream> open(String name) { return Optional.empty(); }
-                        @Override public void close() {}
-                    };
-                }
-            };
-            var finder = new ModuleFinder() {
-                @Override public Optional<ModuleReference> find(String name) {
-                    return name.equals("tuul") ? Optional.of(reference) : Optional.empty();
-                }
-                @Override public Set<ModuleReference> findAll() { return Set.of(reference); }
-            };
-            var configuration = ModuleLayer.boot().configuration()
-                    .resolve(ModuleFinder.of(), finder, Set.of("tuul"));
-            return ModuleLayer.defineModulesWithOneLoader(configuration, List.of(ModuleLayer.boot()), parent).layer();
-        }
-    }
-
-    private record Built(Revision revision, URLClassLoader loader, Path output) {}
-
-    private record GenerationLoader(ProjectClassLoader entry, List<URLClassLoader> closeable,
-            ModuleLayer layer) implements AutoCloseable {
-        @Override public void close() throws IOException {
-            IOException failure = null;
-            for (var loader : closeable.reversed()) {
-                try {
-                    loader.close();
-                } catch (IOException thrown) {
-                    if (failure == null) failure = thrown;
-                    else failure.addSuppressed(thrown);
-                }
-            }
-            if (failure != null) throw failure;
-        }
-    }
-
-    private static final class LoadedProgram implements Program {
-        private final GenerationLoader loader;
-        private final Path output;
-        private Program delegate;
-
-        private LoadedProgram(GenerationLoader loader, Path output) {
-            this.loader = loader;
-            this.output = output;
-        }
-
-        @Override
-        public Generation define() throws Exception {
-            try {
-                if (delegate == null) {
-                    var type = Class.forName("main", true, loader.entry());
-                    var value = type.getDeclaredConstructor().newInstance();
-                    if (!(value instanceof Program program)) throw new IllegalArgumentException(
-                            "main must implement reload.Program");
-                    delegate = program;
-                }
-                var generation = Objects.requireNonNull(delegate.define(), "main.define returned null");
-                return generation.closing(() -> {
-                    try {
-                        loader.close();
-                    } finally {
-                        remove(output);
-                    }
-                });
-            } catch (Throwable failure) {
-                try { loader.close(); } finally { remove(output); }
-                if (failure instanceof Exception exception) throw exception;
-                if (failure instanceof Error error) throw error;
-                throw new Exception(failure);
+                        .forEach(path -> into.add(new Revision.ResourceEntry(
+                                logicalRoot.relativize(path).toString().replace('\\', '/'), path)));
             }
         }
     }
 
-    /// The conventional entrypoint is named `main`, which is also the name of
-    /// Tuul's CLI class. Load only that selected application class from the
-    /// candidate output first. Every other class keeps URLClassLoader's
-    /// parent-first behavior, so the parent owns one identity for Tuul and its
-    /// shared contracts.
-    private static final class ProjectClassLoader extends URLClassLoader {
-
-        private ProjectClassLoader(URL[] urls, ClassLoader parent) {
-            super(urls, parent);
-        }
-
-        @Override
-        protected Class<?> loadClass(String name, boolean resolve) throws ClassNotFoundException {
-            if (!name.equals("main")) return super.loadClass(name, resolve);
-            synchronized (getClassLoadingLock(name)) {
-                var loaded = findLoadedClass(name);
-                if (loaded == null) loaded = findClass(name);
-                if (resolve) resolveClass(loaded);
-                return loaded;
-            }
-        }
-    }
+    private record Built(Revision revision) {}
 
     private static void printProblems(Writer output, List<reload.Problem> problems) {
         for (var problem : problems) write(output, problem.phase() + ": " + problem.message() + "\n");
@@ -546,15 +323,6 @@ public final class Dev {
         synchronized (output) {
             try { output.write(text); output.flush(); } catch (IOException ignored) {}
         }
-    }
-
-    private static void remove(Path path) {
-        if (path == null || !Files.exists(path)) return;
-        try (var files = Files.walk(path)) {
-            files.sorted(Comparator.reverseOrder()).forEach(file -> {
-                try { Files.deleteIfExists(file); } catch (IOException ignored) {}
-            });
-        } catch (IOException ignored) {}
     }
 
     private static final class FileSystems {

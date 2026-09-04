@@ -35,8 +35,10 @@ public final class DevIntegrationTest {
             try (var client = HttpClient.newHttpClient()) {
                 var port = awaitPort(output);
                 Check.equal("the first generation answers", "one\n", get(client, port));
+                assertNoReloadOutput(root, "before the first reload");
                 Files.writeString(root.resolve("src/web/main.java"), source("two"));
                 await("the changed generation answers", () -> "two\n".equals(get(client, port)));
+                assertNoReloadOutput(root, "after the first reload");
 
                 Files.writeString(root.resolve("src/web/main.java"), broken());
                 await("the broken revision is reported", () -> errors.toString().contains("compile:"));
@@ -85,12 +87,13 @@ public final class DevIntegrationTest {
                     import web.Responses;
                     import web.RouteRef;
                     import web.Router;
+                    import web.reload.ReloadHandler;
                     import demo.Value;
 
                     public final class main implements Program {
                         private static final RouteRef HOME = RouteRef.of("home", "/");
                         public Generation define() {
-                            return Generation.of(Router.of().get(HOME,
+                            return ReloadHandler.attach(Generation.empty(), Router.of().get(HOME,
                                     (request, response) -> Responses.text(Value.text() + "\\n", response)));
                         }
                     }
@@ -108,9 +111,11 @@ public final class DevIntegrationTest {
             try (var client = HttpClient.newHttpClient()) {
                 var port = awaitPort(output);
                 Check.equal("a named project loads its module generation", "from-module-resource\n", get(client, port));
+                assertNoReloadOutput(root, "before the named reload");
                 Files.writeString(root.resolve("src/resources/value.txt"), "changed-module-resource");
                 await("the named generation reloads with its module resource", () ->
                         "changed-module-resource\n".equals(get(client, port)));
+                assertNoReloadOutput(root, "after the named reload");
             } finally {
                 thread.interrupt();
                 thread.join();
@@ -151,11 +156,12 @@ public final class DevIntegrationTest {
                 import web.Responses;
                 import web.RouteRef;
                 import web.Router;
+                import web.reload.ReloadHandler;
 
                 public final class main implements Program {
                     private static final RouteRef HOME = RouteRef.of("home", "/");
                     public Generation define() {
-                        return Generation.of(Router.of().get(HOME,
+                        return ReloadHandler.attach(Generation.empty(), Router.of().get(HOME,
                                 (request, response) -> Responses.text("%s\\n", response)));
                     }
                 }
@@ -185,6 +191,19 @@ public final class DevIntegrationTest {
             Thread.sleep(50);
         }
         Check.that(what, false);
+    }
+
+    private static void assertNoReloadOutput(Path root, String phase) throws IOException {
+        Check.that(phase + " writes no class files", classFiles(root) == 0);
+        Check.that(phase + " creates no reload directory", !Files.exists(root.resolve("build/reload")));
+    }
+
+    private static long classFiles(Path root) throws IOException {
+        try (var files = Files.walk(root)) {
+            return files.filter(Files::isRegularFile)
+                    .filter(path -> path.getFileName().toString().endsWith(".class"))
+                    .count();
+        }
     }
 
     @FunctionalInterface

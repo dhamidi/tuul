@@ -10,10 +10,10 @@ application update while another defines the effect handler that update
 requests. Activating the first class before the second creates behavior that no
 source revision described.
 
-A compiler adapter writes the complete revision into separate output. The
-coordinator defines and validates the complete `Program` result. Web and named
-application work then change through stable dispatchers; actor systems perform
-their own gated turn boundary.
+A compiler adapter captures the complete revision in an isolated in-memory
+loader. The coordinator defines and validates the complete `Program` result.
+Capability adapters and named applications then change through stable
+dispatchers. Actor systems perform their own gated turn boundary.
 
 This rule gives development and production the same behavior. Development gets
 its revisions from a directory. Production may get a signed revision from an
@@ -104,8 +104,8 @@ A watcher answers one question: did a configured tree produce different
 content? It submits a revision after the tree becomes stable.
 
 It does not compile, validate, activate, refresh browsers, or reload actors.
-Those actions belong to the coordinator. An HTTP upload or artifact receiver
-can then replace the watcher without duplicating reload behavior.
+Those actions belong to the coordinator. The `web.reload` HTTP adapter or an
+artifact receiver can replace the watcher without duplicating reload behavior.
 
 ## The coordinator is an application
 
@@ -130,8 +130,7 @@ revision, principal, validation result, activation time, and result of
 submitting an earlier revision.
 
 Use process or operating-system isolation when submitted source is not trusted.
-A module layer controls readability and class lifetime. It is not a security
-sandbox.
+A class-loader boundary controls class lifetime. It is not a security sandbox.
 
 Use canaries by deciding which host receives a verified revision first. Do not
 put percentage routing inside one generation pointer. Each host must still

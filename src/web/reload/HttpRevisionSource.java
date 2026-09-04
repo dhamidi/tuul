@@ -1,4 +1,4 @@
-package reload;
+package web.reload;
 
 import java.io.IOException;
 import java.nio.file.Files;
@@ -24,6 +24,8 @@ import web.uploads.Limits;
 import web.uploads.Multipart;
 import web.uploads.Part;
 import web.uploads.UploadException;
+import reload.Revision;
+import reload.RevisionSource;
 
 /// Accepts a multipart revision and submits it to a [RevisionSource] callback.
 ///
@@ -47,25 +49,27 @@ public final class HttpRevisionSource implements RevisionSource {
     private Consumer<Revision> consumer;
     private boolean closed;
 
-    /// Creates a source with explicit server staging, upload limits, and
-    /// authorization. No authorization policy is implicit.
+    /// Creates a source with explicit staging, upload limits, and authorization.
+    /// A null argument throws `NullPointerException`.
     public HttpRevisionSource(Path staging, Limits limits, RevisionSubmissionPolicy policy) {
         this.staging = Objects.requireNonNull(staging, "staging").toAbsolutePath().normalize();
         this.limits = Objects.requireNonNull(limits, "limits");
         this.policy = Objects.requireNonNull(policy, "policy");
     }
 
+    /// Creates a source with default upload limits and explicit authorization.
+    /// A null staging path or policy throws `NullPointerException`.
     public HttpRevisionSource(Path staging, RevisionSubmissionPolicy policy) {
         this(staging, Limits.DEFAULT, policy);
     }
 
-    /// The handler to mount at the deployment endpoint.
+    /// Returns the handler to mount at the deployment endpoint.
     public Handler handler() {
         return this::handle;
     }
 
-    /// Binds the source callback. The callback normally submits to a
-    /// coordinator. Calling this more than once is an error.
+    /// Binds the callback that receives each valid revision. A second call or
+    /// a call after [#close] throws `IllegalStateException`.
     @Override
     public void start(Consumer<Revision> submit) {
         Objects.requireNonNull(submit, "submit");
@@ -76,8 +80,8 @@ public final class HttpRevisionSource implements RevisionSource {
         }
     }
 
-    /// Stops new uploads from reaching the revision callback. The deployment
-    /// host remains responsible for successful staging trees already submitted.
+    /// Stops new uploads from reaching the callback. The host remains
+    /// responsible for staging trees already submitted.
     @Override
     public void close() {
         synchronized (monitor) {

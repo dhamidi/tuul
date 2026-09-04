@@ -1,8 +1,5 @@
 package reload;
 
-import java.io.IOException;
-import java.io.OutputStream;
-import java.io.Writer;
 import java.time.Instant;
 import java.util.ArrayList;
 import java.util.LinkedHashMap;
@@ -12,14 +9,9 @@ import java.util.Map;
 import java.util.Objects;
 import java.util.Set;
 import java.util.concurrent.LinkedBlockingDeque;
-import java.util.concurrent.atomic.AtomicBoolean;
 import java.util.function.Consumer;
 import actors.ActorSystem;
 import actors.ReloadResult;
-import web.Handler;
-import web.Headers;
-import web.Request;
-import web.Response;
 
 /// Coordinates immutable generations and leases work against the active one.
 public final class Reload implements AutoCloseable {
@@ -42,8 +34,7 @@ public final class Reload implements AutoCloseable {
     private final Applications applications = new Applications();
     private Set<ActorSystem> actorSystems = Set.of();
 
-    /// Creates an idle coordinator. Its stable web handler answers 503 until
-    /// the first revision activates.
+    /// Creates an idle coordinator with no active generation.
     public Reload() {}
 
     /// Creates a coordinator and stages its first program immediately.
@@ -141,10 +132,16 @@ public final class Reload implements AutoCloseable {
         return applications;
     }
 
-    /// The stable HTTP entrypoint. Each call leases the generation before
-    /// routing, so a replacement cannot change a request halfway through.
-    public Handler handler() {
-        return this::handle;
+    /// Acquires the active generation for one unit of work.
+    ///
+    /// The result is empty before activation and after [#close]. Closing the
+    /// lease allows a retired generation to release its resources.
+    public java.util.Optional<Lease> lease() {
+        synchronized (monitor) {
+            if (closed || active == null) return java.util.Optional.empty();
+            active.leases++;
+            return java.util.Optional.of(new GenerationLease(active));
+        }
     }
 
     /// Subscribes to ordered lifecycle events without blocking activation.
@@ -217,7 +214,7 @@ public final class Reload implements AutoCloseable {
     }
 
     /// Applies actor definitions and effect handlers at the same generation
-    /// boundary as the web handler. Actor systems gate and drain their own
+    /// boundary as leased work. Actor systems gate and drain their own
     /// mailboxes, so this call returns only after every affected system has
     /// either activated or rejected the candidate.
     private List<ActorPlan> actorPlans(Generation candidate) {
@@ -296,33 +293,6 @@ public final class Reload implements AutoCloseable {
         }
     }
 
-    private void handle(Request request, Response response) throws Exception {
-        Slot slot;
-        synchronized (monitor) {
-            slot = active;
-            if (slot == null) {
-                response.status(503).close();
-                return;
-            }
-            slot.leases++;
-        }
-        var leased = new LeaseResponse(response, slot);
-        try {
-            slot.generation.handler().handle(request, leased);
-        } catch (Exception failure) {
-            throw failure;
-        } catch (Error failure) {
-            throw failure;
-        } finally {
-            // The server owns the response after Handler.handle returns. A
-            // response body may be closed by that server rather than through
-            // our wrapper, so retaining the lease here would retain a retired
-            // generation forever. Streaming handlers keep handle() open until
-            // the stream itself ends and are therefore still drained safely.
-            leased.release();
-        }
-    }
-
     private void release(Slot slot) {
         var retire = false;
         synchronized (monitor) {
@@ -347,9 +317,10 @@ public final class Reload implements AutoCloseable {
         }
     }
 
-    /// Stops sources and new web and application work. The call waits for an
-    /// admitted application turn, but an in-flight web handler drains after
-    /// this method returns. The host remains responsible for actor systems.
+    /// Stops sources and refuses new leases and application work.
+    ///
+    /// The call waits for an admitted application turn. An existing lease
+    /// keeps its generation until it closes. The host still owns actor systems.
     @Override
     public void close() {
         synchronized (submissions) {
@@ -445,39 +416,21 @@ public final class Reload implements AutoCloseable {
         private void release() { Reload.this.release(this); }
     }
 
-    private final class LeaseResponse implements Response {
-        private final Response delegate;
+    private final class GenerationLease implements Lease {
         private final Slot slot;
-        private final AtomicBoolean released = new AtomicBoolean();
-        private LeaseResponse(Response delegate, Slot slot) {
-            this.delegate = delegate;
+        private boolean released;
+        private GenerationLease(Slot slot) {
             this.slot = slot;
         }
 
-        private void release() {
-            if (released.compareAndSet(false, true)) slot.release();
-        }
+        @Override public Generation generation() { return slot.generation; }
 
-        @Override public Response status(int value) { delegate.status(value); return this; }
-        @Override public int status() { return delegate.status(); }
-        @Override public Response header(String name, String value) { delegate.header(name, value); return this; }
-        @Override public Response add(String name, String value) { delegate.add(name, value); return this; }
-        @Override public Headers headers() { return delegate.headers(); }
-        @Override public boolean sent() { return delegate.sent(); }
-        @Override public OutputStream body() throws IOException {
-            var body = delegate.body();
-            return new java.io.FilterOutputStream(body) {
-                @Override public void close() throws IOException { try { super.close(); } finally { release(); } }
-            };
+        @Override public synchronized void close() {
+            if (!released) {
+                released = true;
+                slot.release();
+            }
         }
-        @Override public Writer writer() throws IOException {
-            var writer = delegate.writer();
-            return new java.io.FilterWriter(writer) {
-                @Override public void close() throws IOException { try { super.close(); } finally { release(); } }
-            };
-        }
-        @Override public void flush() throws IOException { delegate.flush(); }
-        @Override public void close() throws IOException { try { delegate.close(); } finally { release(); } }
     }
 
     private static final class Subscriber implements AutoCloseable {

@@ -1,48 +1,62 @@
 package reload;
 
 import java.util.ArrayList;
+import java.util.HashMap;
 import java.util.List;
+import java.util.Map;
+import java.util.Objects;
+import java.util.Optional;
 import java.util.concurrent.atomic.AtomicBoolean;
 import actors.ActorSystem;
 import actors.Definition;
 import actors.Spawn;
 import application.Effect;
-import web.Handler;
 
 /// The complete immutable set of definitions and resources for one revision.
 public final class Generation implements AutoCloseable {
 
-    private final Handler handler;
+    private final Map<Capability<?>, Object> capabilities;
     private final List<AutoCloseable> resources;
     private final List<ActorDefinition> actorDefinitions;
     private final List<EffectHandler> effectHandlers;
     private final List<ApplicationBinding> applicationDefinitions;
     private final AtomicBoolean closed = new AtomicBoolean();
 
-    private Generation(Handler handler, List<AutoCloseable> resources,
+    private Generation(Map<Capability<?>, Object> capabilities, List<AutoCloseable> resources,
             List<ActorDefinition> actorDefinitions, List<EffectHandler> effectHandlers,
             List<ApplicationBinding> applicationDefinitions) {
-        this.handler = handler;
+        this.capabilities = Map.copyOf(capabilities);
         this.resources = List.copyOf(resources);
         this.actorDefinitions = List.copyOf(actorDefinitions);
         this.effectHandlers = List.copyOf(effectHandlers);
         this.applicationDefinitions = List.copyOf(applicationDefinitions);
     }
 
-    /// Starts a generation with one web root.
-    public static Generation of(Handler handler) {
-        return new Generation(java.util.Objects.requireNonNull(handler, "handler"),
-                List.of(), List.of(), List.of(), List.of());
-    }
-
-    /// Starts a generation that does not serve HTTP.
+    /// Starts a generation with no capabilities, definitions, or resources.
     public static Generation empty() {
-        return of((request, response) -> web.Responses.empty(web.Status.NOT_FOUND, response));
+        return new Generation(Map.of(), List.of(), List.of(), List.of(), List.of());
     }
 
-    /// Returns the web root for this generation.
-    public Handler handler() {
-        return handler;
+    /// Attaches a capability value to this generation.
+    ///
+    /// A later value for the same key replaces the earlier value. The returned
+    /// generation keeps the source generation unchanged.
+    /// A null key or value throws `NullPointerException`.
+    public <T> Generation with(Capability<T> capability, T value) {
+        var next = new HashMap<>(capabilities);
+        next.put(Objects.requireNonNull(capability, "capability"),
+                Objects.requireNonNull(value, "value"));
+        return new Generation(next, resources, actorDefinitions, effectHandlers, applicationDefinitions);
+    }
+
+    /// Finds a capability value attached to this generation.
+    /// The result is empty when the key has no value. A null key throws
+    /// `NullPointerException`.
+    public <T> Optional<T> capability(Capability<T> capability) {
+        Objects.requireNonNull(capability, "capability");
+        @SuppressWarnings("unchecked")
+        var value = (T) capabilities.get(capability);
+        return Optional.ofNullable(value);
     }
 
     /// Returns a new generation with one more owned resource. A null resource
@@ -50,7 +64,7 @@ public final class Generation implements AutoCloseable {
     public Generation closing(AutoCloseable resource) {
         var next = new ArrayList<>(resources);
         if (resource != null) next.add(resource);
-        return new Generation(handler, next, actorDefinitions, effectHandlers, applicationDefinitions);
+        return new Generation(capabilities, next, actorDefinitions, effectHandlers, applicationDefinitions);
     }
 
     /// Returns the resources that this generation closes after it drains.
@@ -67,7 +81,7 @@ public final class Generation implements AutoCloseable {
                 java.util.Objects.requireNonNull(definition, "definition"),
                 java.util.Objects.requireNonNull(spawn, "spawn"),
                 defaultPolicy(spawn)));
-        return new Generation(handler, resources, next, effectHandlers, applicationDefinitions);
+        return new Generation(capabilities, resources, next, effectHandlers, applicationDefinitions);
     }
 
     /// Adds a durable actor type. Durable actors replay their command log on
@@ -90,7 +104,7 @@ public final class Generation implements AutoCloseable {
                 java.util.Objects.requireNonNull(definition, "definition"),
                 java.util.Objects.requireNonNull(spawn, "spawn"),
                 java.util.Objects.requireNonNull(policy, "policy")));
-        return new Generation(handler, resources, next, effectHandlers, applicationDefinitions);
+        return new Generation(capabilities, resources, next, effectHandlers, applicationDefinitions);
     }
 
     /// Adds one effect handler to the actor system used by this generation.
@@ -100,7 +114,7 @@ public final class Generation implements AutoCloseable {
         next.add(new EffectHandler(java.util.Objects.requireNonNull(system, "system"),
                 java.util.Objects.requireNonNull(type, "type"),
                 java.util.Objects.requireNonNull(effectHandler, "handler")));
-        return new Generation(handler, resources, actorDefinitions, next, applicationDefinitions);
+        return new Generation(capabilities, resources, actorDefinitions, next, applicationDefinitions);
     }
 
     /// Returns the actor bindings in registration order.
@@ -126,7 +140,7 @@ public final class Generation implements AutoCloseable {
         var next = new ArrayList<>(applicationDefinitions);
         next.add(new ApplicationBinding(java.util.Objects.requireNonNull(definition, "definition"),
                 java.util.Objects.requireNonNull(policy, "policy")));
-        return new Generation(handler, resources, actorDefinitions, effectHandlers, next);
+        return new Generation(capabilities, resources, actorDefinitions, effectHandlers, next);
     }
 
     /// The named applications carried by this immutable generation.

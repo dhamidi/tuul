@@ -12,8 +12,8 @@ public interface RevisionSource extends AutoCloseable {
     void start(Consumer<Revision> submit) throws Exception;
 
     /// Returns a source that transforms each materialized revision before the
-    /// host receives it. This is the seam for a host compiler: an HTTP source
-    /// can stage source files, and the host can use
+    /// host receives it. This is the seam for a host compiler: a source can
+    /// stage source files, and the host can use
     /// `source.map(compiler::compile).start(reload::submit)` without teaching
     /// the source how candidates are loaded or activated.
     default RevisionSource map(UnaryOperator<Revision> transform) {

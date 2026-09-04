@@ -1,4 +1,4 @@
-package reload;
+package web.reload;
 
 import harness.Check;
 import java.io.ByteArrayInputStream;
@@ -7,6 +7,9 @@ import java.nio.file.Files;
 import java.nio.file.Path;
 import java.util.ArrayList;
 import java.util.List;
+import reload.Generation;
+import reload.MemoryRevisionSource;
+import reload.Revision;
 import web.Headers;
 import web.Request;
 import web.serve.Memory;

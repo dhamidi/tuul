@@ -5,23 +5,6 @@ Each section is one task. Do the steps in order.
 Exact API and state rules are in [reference.md](reference.md). Design reasons
 are in [guide.md](guide.md).
 
-## Run a project during development
-
-1. Put the reloadable entrypoint in `src/<entrypoint>/main.java`.
-2. Make `main` implement `Program`.
-3. Return the complete `Generation` from `define`.
-4. Run `tuul dev <entrypoint> --port <port>`.
-
-```sh
-tuul dev web --port 8080
-```
-
-Omit the entrypoint when the project has a `web` entrypoint or only one
-entrypoint. Omit the port to use 8080.
-
-The command keeps the last valid generation active after a compiler or
-validation failure. Stop it with Control-C.
-
 ## Submit revisions without a file watcher
 
 Use a `RevisionSource` when another system decides that code changed.
@@ -33,45 +16,15 @@ Use a `RevisionSource` when another system decides that code changed.
 5. Submit it to the reload coordinator.
 6. Keep the staged tree until compilation finishes, then remove it.
 
-An HTTP handler, artifact receiver, and test double follow these steps. Do not
-call a watcher from the coordinator. Do not make an upload handler activate a
-class directly.
-
-## Accept a revision through HTTP
-
-Treat source submission as a deployment operation.
-
-1. Authenticate the request before reading its body.
-2. Apply a bounded upload limit.
-3. Write files beneath a private staging directory chosen by the server.
-4. Reject absolute paths, `..` segments, duplicate names, and undeclared files.
-5. Verify the revision digest and signature.
-6. Submit the staged `Revision`.
-7. Return the revision identity and a `submitted` receipt.
-
-Use `web.uploads` to stream multipart bodies. Do not use a client filename as a
-filesystem path. Do not call uploaded Java untrusted. Activated code has the
-application process's authority.
-
-`HttpRevisionSource` implements this protocol. Wire its source-neutral output
-through the host compiler before the coordinator receives it:
-
-```java
-var compiler = new RevisionCompiler(output, hostClasspath);
-var source = new HttpRevisionSource(staging, limits, policy);
-reload.source(source.map(compiler::compile));
-```
-
-The source does not load uploaded classes or activate a revision. The callback
-must retain the staged tree until the compiled revision is accepted or
-rejected.
+An artifact receiver and test double follow these steps. Do not call a watcher
+from the coordinator. Do not make a source activate a class directly.
 
 ## Validate a generation before activation
 
 Register validators on the coordinator before a source submits work.
 
-1. Compile every source into a new generation output.
-2. Load the selected `Program` from that output.
+1. Compile every source into a new in-memory generation.
+2. Load the selected `Program` from that snapshot.
 3. Call `Program.define` once.
 4. Check duplicate application, actor, and actor-effect bindings.
 5. Run the configured smoke validators.
@@ -80,20 +33,6 @@ Register validators on the coordinator before a source submits work.
 
 A validator does not change the active generation. It does not run an external
 effect. It records a `Problem` when it rejects the candidate.
-
-## Reload web handlers and UI
-
-Return the web root from `Generation.of(handler)`. Build the router, features,
-pages, components, import map, and assets inside the same `define` call.
-
-The host leases the active generation at the start of a handler call. It
-releases the lease when the handler returns or throws. A streaming handler
-keeps the call open until the stream ends. The next request after activation
-uses the new handler.
-
-Browser refresh is separate from code activation. Mount an application-owned
-cable or event endpoint when a browser must learn that a generation changed.
-Subscribe to reload events and publish only the `activated` event.
 
 ## Reload a durable actor definition
 
@@ -156,8 +95,8 @@ that resource with `Generation.closing`.
 Read the coordinator's snapshot for automation. Subscribe to events for a live
 operator view.
 
-The snapshot names the active revision, candidate revision, last rejected
-revision, and web-handler leases by generation. Problems keep
+The snapshot names the active revision, candidate revision, and last rejected
+revision. Problems keep
 their source name, line, and message.
 
 Events are observations. A slow event subscriber does not delay activation.
@@ -171,14 +110,14 @@ closed class loader and does not undo external effects.
 
 ## Test without files or sockets
 
-Use a fake `RevisionSource`. Submit revisions explicitly. Use `web.serve.Memory`
-to call the reload handler.
+Use a fake `RevisionSource`. Submit revisions explicitly. Acquire a lease for
+one unit of work and close it after that work ends.
 
 Assert these transitions:
 
 1. The first valid revision becomes active.
-2. A later valid revision changes the next request.
-3. A request already running finishes on its original generation.
+2. A later valid revision changes the next acquired lease.
+3. Work already admitted finishes on its original generation.
 4. A broken revision leaves the active generation unchanged.
 5. The old generation closes after its last lease ends.
 

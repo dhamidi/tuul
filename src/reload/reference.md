@@ -8,8 +8,8 @@ For a first program, read [tutorial.md](tutorial.md). For tasks, read
 ## Scope
 
 The package defines revision submission, compilation attachment, generation
-validation, activation, web leases, application turns, actor handoff, state
-transfer, status, and events. It provides HTTP and in-process revision sources.
+validation, activation, capabilities, leases, application turns, actor handoff,
+state transfer, status, and events. It provides in-process revision sources.
 The `project.Dev` command provides the directory source.
 
 The package does not define authentication, authorization, signing policy,
@@ -35,10 +35,10 @@ interface. An application or deployment system supplies those policies.
 | Type | Purpose |
 |---|---|
 | `Program` | Stable interface implemented by a reloadable entrypoint. |
-| `Generation` | Complete web, application, actor, effect, asset, and resource definition. |
+| `Generation` | Complete capability, application, actor, effect, and resource definition. |
 | `Revision` | Immutable materialized input and content identity. |
 | `RevisionSource` | Producer that submits revisions without activating them. |
-| `RevisionCompiler` | Compiler and child-loader bridge for an unnamed path-backed revision. |
+| `RevisionCompiler` | In-memory compiler and child-loader bridge for a path-backed revision. |
 | `Reload` | Coordinator that stages, validates, activates, drains, and closes generations. |
 | `ApplicationDefinition` | Named application factory and optional JSON state transfer. |
 | `Applications` | Stable dispatcher for named applications. |
@@ -47,9 +47,11 @@ interface. An application or deployment system supplies those policies.
 | `Status` | Immutable coordinator snapshot. |
 | `Event` | Immutable lifecycle observation. |
 | `Problem` | One compiler, loader, validator, migration, or activation problem. |
+| `Capability` | Typed key for one value carried by a generation. |
+| `Lease` | Claim that keeps one active generation available for one unit of work. |
 
-`HttpRevisionSource` and `MemoryRevisionSource` submit `Revision` values through
-the same `RevisionSource` contract.
+`MemoryRevisionSource` submits `Revision` values through the `RevisionSource`
+contract. Web adapters can use the same contract.
 
 ## `Program`
 
@@ -71,14 +73,14 @@ constructor.
 
 ## `Generation`
 
-`Generation.of(Handler)` starts a generation with one web root. A generation
-without HTTP uses an empty handler that answers 404.
+`Generation.empty()` starts a generation with no capabilities. Attach values
+with `Generation.with` and find them with `Generation.capability`.
 
 Generation construction adds these values:
 
 | Value | Rule |
 |---|---|
-| web handler | At most one root. It includes routes, pages, middleware, and UI. |
+| capability | One typed value carried by the generation. |
 | actor definition | One definition and spawn policy per actor type. |
 | effect handler | One handler per effect type. A later duplicate is rejected. |
 | application definition | One application per stable application name. |
@@ -120,40 +122,16 @@ retire the active generation.
 `RevisionSource#map(UnaryOperator)` creates a source-neutral compilation seam.
 The transform receives a staged `Revision` and returns the revision that the
 host can submit to `Reload`. A source does not load or activate classes. A
-typical host wires an HTTP source like this:
+typical host wires a source like this:
 
 ```java
-var compiler = new RevisionCompiler(output, hostClasspath);
-var source = new HttpRevisionSource(staging, limits, policy);
+var compiler = new RevisionCompiler(hostClasspath);
+var source = new MemoryRevisionSource();
 reload.source(source.map(compiler::compile));
 ```
 
 The compiler is host code because compilation and class loading are deployment
 policy. The source only materializes an immutable tree.
-
-## HTTP source
-
-`HttpRevisionSource#handler()` accepts `POST multipart/form-data`. The request
-has one text field named `manifest` and file parts named `file`. A file's
-client filename is an entry label, not a destination; the source validates it
-as a normalized relative path and writes it below a server-created staging
-directory.
-
-The manifest is a JSON object with a string `entrypoint`, string arrays named
-`sources` and `resources`, and an optional `dependencies` array. It may include
-an `identity` SHA-256 digest. Every manifest entry must have one file part and
-every file part must be declared. Absolute paths, parent segments, duplicate
-entries, malformed manifests, and digest mismatches answer `400`. Upload
-limits are applied while bytes arrive; an over-limit request answers `413`.
-
-The constructor requires a `RevisionSubmissionPolicy`. The policy is called
-before the request body is read and a refusal answers `403`. Authentication
-and authorization are outside `reload`; a missing policy is not treated as
-anonymous access. After a valid upload, the source callback receives a normal
-`Revision` and the response contains its identity and `submitted` status.
-The callback decides whether and how to compile it. After the callback accepts
-the revision, the deployment host owns cleanup of the staged tree. A failed
-parse or write removes the complete temporary tree.
 
 ## Directory source
 
@@ -171,33 +149,32 @@ without a second initial scan.
 
 ## Compilation and loading
 
-`RevisionCompiler` and `project.Dev.Builder` compile into a new output location.
-They never clear or write the active generation output.
+`RevisionCompiler` and `project.Dev.Builder` capture each candidate class and
+resource in memory. Reload compilation creates no class output directory.
 
 The compiler receives the selected source set, runtime dependencies, the
 current JDK release, and debug output enabled. A compiler failure rejects the
 candidate and records javac diagnostics as compile problems.
 
 The loader delegates Tuul and JDK contracts to its parent. It loads application
-classes and resources from the candidate output. `project.Dev` supports a
-named project with a child `ModuleLayer` and an unnamed project with a child
-class loader. `RevisionCompiler` currently accepts unnamed revisions only.
+classes and resources from the candidate snapshot. A revision may contain
+`module-info.java`; reload compilation omits that descriptor and loads the
+candidate as an unnamed child generation.
 
 Closing a retired loader stops new class and resource loads. Loaded classes
 remain usable while a lease or resource still refers to them.
 
 ### `RevisionCompiler`
 
-Construct `RevisionCompiler(output, parentClasspath)` for the JDK compiler, or
-pass a `compiler.Compiler` as the second argument for a test double. The output
-directory receives one temporary child per candidate. `parentClasspath` makes
-the host-owned contracts visible to javac; the running parent class loader must
-own the same contracts.
+Construct `RevisionCompiler(parentClasspath)` for the JDK compiler, or pass a
+`compiler.Compiler` and `parentClasspath` for a test double. The compiler
+captures classes and resources in memory. `parentClasspath` makes the
+host-owned contracts visible to javac; the running parent class loader must own
+the same contracts.
 
 `compile(revision)` preserves identity and paths and attaches a lazy `Program`.
 It returns an in-process revision that `Reload.submit` can stage. Compilation
-happens during staging. A rejected candidate and a retired generation remove
-their compiler output. The source or deployment host still owns the revision's
+happens during staging. The source or deployment host still owns the revision's
 staging root.
 
 ## Validation
@@ -229,34 +206,35 @@ submitted -> staging -> validating -> activating -> active
 ```
 
 The coordinator first prepares application state and preflights every actor
-system. It then performs actor handoffs and commits the application set and web
-pointer. Each surface changes only at its safe boundary. A candidate with more
+system. It then performs actor handoffs and commits the application set. Each
+surface changes only at its safe boundary. A candidate with more
 than one actor system is not a distributed transaction: if a later system has
 an unexpected runtime handoff failure after preflight, an earlier system can
 already be active. Use one actor system per reload coordinator when this
 distinction is not acceptable.
 
-An old in-flight web handler can send an actor command while actor handoff is
+An old in-flight unit of work can send an actor command while actor handoff is
 in progress. The candidate gate validates that command. Keep command schemas
-backward-compatible until old web calls drain. Generation activation does not
+backward-compatible until old calls drain. Generation activation does not
 make an external call across two independent runtimes transactional.
 
 After the pointer changes, the prior generation becomes `draining`. It becomes
 `retired` when its last lease ends and its resources close.
 
-The first valid revision starts the reload surfaces. Before it, the web handler
-answers 503 and the named application dispatcher has no names. The host owns
-each `ActorSystem`; do not register reload-managed actor types outside the
+The first valid revision starts the reload surfaces. Before it, the lease
+result is empty and the named application dispatcher has no names. The host
+owns each `ActorSystem`; do not register reload-managed actor types outside the
 generation protocol.
 
-## Web lease
+## Leases
 
-The reload web handler acquires one lease before it calls the active handler.
-It releases that lease when the handler returns or throws. A streaming handler
-must keep the call open until its stream finishes.
+Call `Reload.lease()` before one unit of work. The result is empty when no
+generation is active or after the coordinator closes. Close a present `Lease`
+when the work ends, including when the work throws. The lease's `generation()`
+value remains fixed until close.
 
-Activation does not cancel an in-flight handler call. There is no forced drain
-deadline in this release.
+An adapter can use this contract to keep one external request on one
+generation. The `web.reload` package provides an HTTP adapter as one example.
 
 ## Application turns
 
@@ -348,7 +326,7 @@ It contains:
 - the active revision and activation time;
 - the candidate revision and phase, when one exists;
 - the last rejected revision and its problems;
-- web-handler lease counts for active and draining generations;
+- lease counts for active and draining generations;
 - submitted, activated, rejected, and retired counts.
 
 No active generation is represented by an absent active revision.
@@ -392,24 +370,11 @@ reversed.
 
 ## Shutdown
 
-Closing the coordinator stops revision sources and new web and application
-work. It waits for an admitted application turn. A web handler call that is
-already running keeps its generation; `close()` returns and that generation
-closes when the call finishes. The coordinator does not close an actor system,
+Closing the coordinator stops revision sources and new application work. It
+waits for an admitted application turn. A leased unit that is already running
+keeps its generation; `close()` returns and that generation closes when the
+unit finishes. The coordinator does not close an actor system,
 because the host owns that stable system.
 
 Closing twice has no effect. An interrupted close restores the interrupt flag
 and continues closing resources that do not require waiting.
-
-## Development command
-
-`tuul dev [entrypoint] [--port PORT]` compiles and hosts one reloadable web
-entrypoint. The default entrypoint is `web`, or the only entrypoint when no
-`web` entrypoint exists. The default port is 8080.
-
-The command prints the URL and active revision after the first activation. It
-prints compiler and validation problems without exiting. It exits nonzero when
-the initial revision cannot become active or when the server cannot start.
-
-Control-C closes the watcher, coordinator, and server. Later candidate
-rejections do not change the command's eventual exit status.

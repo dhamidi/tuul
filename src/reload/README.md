@@ -5,22 +5,21 @@ Reload a running application from a validated, immutable generation.
 A generation contains the application code and resources that change together.
 A source adapter materializes a revision, a `RevisionCompiler` or development
 builder compiles it, and `Reload` loads and validates its `Program`. New work
-uses the active generation. Work already admitted finishes at its web request,
-application turn, or actor turn boundary.
+uses the active generation. Work already admitted finishes at its lease
+boundary.
 
-A revision source only submits revisions. A directory watcher, an HTTP upload,
-and an artifact receiver use the same submission contract. None of the
-`application`, `actors`, or `web` packages knows which source submitted a
-revision.
+A revision source only submits revisions. A directory watcher and an artifact
+receiver use the same submission contract. HTTP upload support belongs to
+`web.reload`.
 
 The host process keeps Tuul and the reload contracts in a parent class loader.
-Each application generation uses a child class loader or module layer. A
-generation must use the parent's `application`, `actors`, `web`, `json`, and
-`reload` classes. It must not carry another copy of those packages.
+Each compiled generation uses an in-memory child class loader. A generation
+must use the parent's `application`, `actors`, `json`, and `reload` classes. It
+must not carry another copy of those packages.
 
 Reload preserves behavior according to the surface that owns the work:
 
-- A web request keeps one generation while its handler runs.
+- A leased unit of work keeps one generation while it runs.
 - A named application changes generation between closed dispatch turns.
 - A durable actor changes generation between turns and rebuilds state by replay.
 - An effect keeps the handler and resources of the turn that requested it.
@@ -40,7 +39,8 @@ Each document answers one kind of question.
 
 | You want | Read |
 |---|---|
-| To build and reload one web application | [tutorial.md](tutorial.md) |
+| To embed the generation coordinator | [tutorial.md](tutorial.md) |
+| To build and reload one web application | [web.reload tutorial](../web/reload/tutorial.md) |
 | To complete a reload task | [howto.md](howto.md) |
 | An API rule, state transition, or failure result | [reference.md](reference.md) |
 | To understand generations, draining, state, and earlier revisions | [guide.md](guide.md) |

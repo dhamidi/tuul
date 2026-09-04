@@ -11,8 +11,6 @@ import application.Message;
 import application.Step;
 import java.util.List;
 import java.util.concurrent.atomic.AtomicInteger;
-import web.Responses;
-import web.serve.Memory;
 
 /// Fast, in-process checks for generation activation and draining.
 public final class ReloadTest {
@@ -20,7 +18,7 @@ public final class ReloadTest {
     private ReloadTest() {}
 
     public static void run() throws Exception {
-        servesLatestGeneration();
+        leasesLatestGeneration();
         rejectsWithoutChangingTheActiveGeneration();
         drainsBeforeClosingResources();
         reloadsAnEphemeralActorAtATypeBoundary();
@@ -30,30 +28,28 @@ public final class ReloadTest {
         closesStableEntrypoints();
     }
 
-    private static void servesLatestGeneration() {
+    private static void leasesLatestGeneration() {
+        var value = Capability.<String>create();
         var reload = new Reload();
-        Check.equal("before the first activation the host is unavailable", 503,
-                Memory.handle(reload.handler(), Memory.get("/")).status());
-        reload.submit(Revision.of("one", () -> Generation.of((request, response) -> Responses.text("one", response))));
-        Check.equal("the first generation answers", "one",
-                Memory.handle(reload.handler(), Memory.get("/")).text());
-        reload.submit(Revision.of("two", () -> Generation.of((request, response) -> Responses.text("two", response))));
-        Check.equal("the next request leases the new generation", "two",
-                Memory.handle(reload.handler(), Memory.get("/")).text());
+        Check.that("before the first activation no generation can be leased", reload.lease().isEmpty());
+        reload.submit(Revision.of("one", () -> Generation.empty().with(value, "one")));
+        Check.equal("the first generation is leased", "one", capability(reload, value));
+        reload.submit(Revision.of("two", () -> Generation.empty().with(value, "two")));
+        Check.equal("the next lease uses the new generation", "two", capability(reload, value));
         Check.equal("two revisions were activated", 2L, reload.status().activated());
         reload.close();
     }
 
     private static void rejectsWithoutChangingTheActiveGeneration() {
+        var value = Capability.<String>create();
         var reload = new Reload();
-        reload.submit(Revision.of("good", () -> Generation.of((request, response) -> Responses.text("good", response))));
+        reload.submit(Revision.of("good", () -> Generation.empty().with(value, "good")));
         reload.validate(candidate -> List.of(new Problem("validate", "the candidate is intentionally bad")));
-        var status = reload.submit(Revision.of("bad", () -> Generation.of((request, response) -> Responses.text("bad", response))));
+        var status = reload.submit(Revision.of("bad", () -> Generation.empty().with(value, "bad")));
         Check.equal("the active revision remains after rejection", "good", status.activeRevision());
         Check.equal("the rejected revision is recorded", "bad", status.rejectedRevision());
         Check.equal("a rejected revision is no longer a candidate", "", status.candidateRevision());
-        Check.equal("the last good handler remains active", "good",
-                Memory.handle(reload.handler(), Memory.get("/")).text());
+        Check.equal("the last good capability remains active", "good", capability(reload, value));
         Check.equal("one candidate was rejected", 1L, status.rejected());
         reload.close();
     }
@@ -61,18 +57,9 @@ public final class ReloadTest {
     private static void drainsBeforeClosingResources() throws Exception {
         var closed = new AtomicInteger();
         var reload = new Reload();
-        var first = Generation.of((request, response) -> {
-                    var stream = Responses.events(response);
-                    try {
-                        Thread.sleep(java.time.Duration.ofDays(1));
-                    } finally {
-                        stream.close();
-                    }
-                })
-                .closing(closed::incrementAndGet);
+        var first = Generation.empty().closing(closed::incrementAndGet);
         reload.submit(Revision.of("stream", () -> first));
-        var open = Memory.open(reload.handler(), Memory.get("/"));
-        open.status();
+        var open = reload.lease().orElseThrow();
         reload.submit(Revision.of("new", Generation::empty));
         Check.equal("the leased generation remains open", 0, closed.get());
         open.close();
@@ -135,8 +122,7 @@ public final class ReloadTest {
     private static void closesStableEntrypoints() {
         var reload = new Reload(Generation::empty);
         reload.close();
-        Check.equal("the stable web handler is unavailable after close", 503,
-                Memory.handle(reload.handler(), Memory.get("/")).status());
+        Check.that("a closed coordinator refuses a lease", reload.lease().isEmpty());
         Check.equal("close is visible in status", "closed", reload.status().phase());
     }
 
@@ -162,6 +148,12 @@ public final class ReloadTest {
                 system.preflight(definitions, spawns, java.util.Map.of(),
                         java.util.Map.of("counter", StatePolicy.RESTART)).size());
         system.close();
+    }
+
+    private static <T> T capability(Reload reload, Capability<T> capability) {
+        try (var lease = reload.lease().orElseThrow()) {
+            return lease.generation().capability(capability).orElseThrow();
+        }
     }
 
     private static final class Counter implements Definition<Integer> {

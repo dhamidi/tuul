@@ -46,4 +46,5 @@ module tuul {
     exports web.text;
     exports web.ui;
     exports web.uploads;
+    exports web.reload;
 }

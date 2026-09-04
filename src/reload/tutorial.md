@@ -1,108 +1,87 @@
-# Tutorial: reload a web application
+# Tutorial: embed the reload coordinator
 
-Build one reloadable web application. Run it with `tuul dev`. Change its Java
-source and observe the next request use the new generation.
+Use one coordinator to replace a complete set of definitions without changing
+work that already acquired the prior generation.
 
 For exact behavior, read [reference.md](reference.md).
 
-You need the `reload`, `web`, and `web.serve` packages. You do not need a build
-plugin or a Java agent.
+## Define a capability
 
-## Define the program
-
-Create `src/web/main.java`. Implement `reload.Program` so the development host
-can build one complete generation without starting a second server.
+Create the capability key in host code. Every generation uses that same key:
 
 ```java
-import reload.Generation;
-import reload.Program;
-import web.Responses;
-import web.RouteRef;
-import web.Router;
+var message = Capability.<String>create();
+```
 
-public final class main implements Program {
+The host owns the key. Candidate code supplies its value.
 
-    private static final RouteRef HOME = RouteRef.of("home", "/");
+## Start the coordinator
 
-    @Override
-    public Generation define() {
-        var routes = Router.of().get(HOME,
-                (request, response) -> Responses.text("hello\n", response));
-        return Generation.of(routes);
-    }
+Connect an in-process source when another component submits revisions:
+
+```java
+var source = new MemoryRevisionSource();
+var reload = new Reload().source(source);
+```
+
+`source` produces revisions. `reload` validates, activates, and retires their
+generations.
+
+## Submit the first generation
+
+Submit a program that attaches the first value:
+
+```java
+source.submit(Revision.of("one",
+        () -> Generation.empty().with(message, "hello")));
+```
+
+Acquire a lease before reading a generation:
+
+```java
+try (var lease = reload.lease().orElseThrow()) {
+    System.out.println(lease.generation().capability(message).orElseThrow());
 }
 ```
 
-`define` returns values. It does not open the listening socket. Add resources
-to the generation when the values own something that must close after drain.
+The program prints `hello`. Closing the lease permits that generation to
+retire after a replacement activates.
 
-The class name is `main` because Tuul entrypoints use `src/<name>/main.java`.
-The development host loads that class from the selected entrypoint.
+## Replace the generation
 
-## Start the development host
+Submit another complete program:
 
-Run the web entrypoint on port 8080:
-
-```sh
-tuul dev web --port 8080
+```java
+source.submit(Revision.of("two",
+        () -> Generation.empty().with(message, "hello again")));
 ```
 
-The command compiles the project before it starts the server. It prints the
-active generation and the listening URL. It then watches the project sources
-and resources.
+A new lease reads `hello again`. A lease acquired before the replacement keeps
+reading `hello` until it closes.
 
-Open the application:
+## Reject a candidate
 
-```sh
-curl http://localhost:8080/
+Submit a program that throws:
+
+```java
+source.submit(Revision.of("broken", () -> {
+    throw new IllegalStateException("not ready");
+}));
 ```
 
-The response is:
+The coordinator records a problem for `broken`. The next lease still acquires
+revision `two`.
 
-```text
-hello
+## Stop the coordinator
+
+Close the coordinator when the host stops:
+
+```java
+reload.close();
 ```
 
-## Change the application
+Close stops its sources and refuses new leases. A lease already acquired keeps
+its generation until that lease closes.
 
-Change `"hello\n"` to `"hello again\n"` and save the file.
-
-The watcher submits a new revision. The host compiles the revision into a new
-generation. It activates that generation only after `main.define()` succeeds.
-
-Request the page again:
-
-```sh
-curl http://localhost:8080/
-```
-
-The response is now:
-
-```text
-hello again
-```
-
-The server kept its port. The host process did not restart. A request that was
-already running when the generation changed completed on the prior code.
-
-## Make a compiler error
-
-Remove a closing parenthesis and save the file.
-
-The host prints the compiler problem. It rejects the revision. Request the page
-again. The last valid generation still answers with `hello again`.
-
-Fix the source and save it. The watcher submits another revision. The host
-activates it after compilation and validation succeed.
-
-## Stop the host
-
-Press Control-C. The host closes the watcher and HTTP server. The coordinator
-stops new work and closes a generation when its current handler calls finish.
-
-## Next
-
-- [howto.md](howto.md) covers actors, applications, effects, HTTP submission,
-  and validation.
-- [reference.md](reference.md) specifies the public values and state machine.
-- [guide.md](guide.md) explains why reload uses whole generations.
+Use the [web.reload tutorial](../web/reload/tutorial.md) when the leased
+capability is an HTTP handler.

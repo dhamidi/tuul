@@ -254,6 +254,7 @@ public final class SelfTest {
     /// in the finally block even when an assertion or request fails.
     private static void hotReloads(Path project, List<Report.Check> checks)
             throws IOException, InterruptedException {
+        var classesBefore = classFiles(project);
         var port = freePort();
         var child = new ProcessBuilder(command(List.of("dev", "--port", Integer.toString(port))))
                 .directory(project.toFile())
@@ -268,6 +269,8 @@ public final class SelfTest {
         try {
             var first = await(client, uri, "Hello from demo!", Duration.ofSeconds(20));
             check(checks, "tuul dev serves the initial generation", first.reached(), detail(first.body(), output));
+            check(checks, "tuul dev creates no reload output directory",
+                    !Files.exists(project.resolve("build/reload")), listing(project.resolve("build")));
 
             var changed = original.replace("Hello from demo!\\n", "Hello from changed!\\n");
             Files.writeString(source, changed);
@@ -286,6 +289,8 @@ public final class SelfTest {
             var repaired = await(client, uri, "Hello from repaired!", Duration.ofSeconds(20));
             check(checks, "fixing the source activates again", repaired.reached(), detail(repaired.body(), output));
             check(checks, "reload keeps the host process", child.pid() == pid && child.isAlive(), detail("pid " + child.pid(), output));
+            check(checks, "reload materializes no class files",
+                    classFiles(project) == classesBefore, listing(project.resolve("build")));
         } finally {
             Files.writeString(source, original);
             child.destroy();
@@ -530,6 +535,14 @@ import java.util.Map;
 
     private static boolean exists(Path project, String path) {
         return Files.isRegularFile(project.resolve(path));
+    }
+
+    private static long classFiles(Path root) throws IOException {
+        try (var files = Files.walk(root)) {
+            return files.filter(Files::isRegularFile)
+                    .filter(path -> path.getFileName().toString().endsWith(".class"))
+                    .count();
+        }
     }
 
     /// Whether the vendored tuul jar holds an entry. Assets travel inside it

@@ -37,6 +37,7 @@ public final class Status {
 
     public static final int TOO_MANY = 429;
     public static final int ERROR = 500;
+    public static final int SERVICE_UNAVAILABLE = 503;
 
     private Status() {}
 
@@ -69,6 +70,7 @@ public final class Status {
             case UNPROCESSABLE -> "Unprocessable Content";
             case TOO_MANY -> "Too Many Requests";
             case ERROR -> "Internal Server Error";
+            case SERVICE_UNAVAILABLE -> "Service Unavailable";
             default -> status >= 500 ? "Server Error" : status >= 400 ? "Client Error" : "OK";
         };
     }

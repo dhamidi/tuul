@@ -117,6 +117,7 @@ public final class Scaffold {
         return """
                 import reload.Generation;
                 import reload.Program;
+                import web.reload.ReloadHandler;
                 import web.Responses;
                 import web.RouteRef;
                 import web.Router;
@@ -131,7 +132,7 @@ public final class Scaffold {
                     public Generation define() {
                         var routes = Router.of().get(HOME,
                                 (request, response) -> Responses.text("Hello from %s!\\n", response));
-                        return Generation.of(routes);
+                        return ReloadHandler.attach(Generation.empty(), routes);
                     }
                 }
                 """.formatted(name);
