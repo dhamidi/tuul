@@ -20,8 +20,10 @@ import modules.MemoryModule;
 import modules.MemoryModuleFinder;
 import java.util.Map;
 import reload.Generation;
+import reload.CandidateContext;
 import reload.Reload;
 import reload.Revision;
+import web.Responses;
 
 /// Fast checks for the JDK HTTP adapter's lease and drain boundary.
 public final class JdkReloadHandlerTest {
@@ -31,7 +33,10 @@ public final class JdkReloadHandlerTest {
     public static void run() throws Exception {
         unavailableWithoutGeneration();
         servesAndDrains();
+        switchesContributionKinds();
         rejectsMissingProvider();
+        rejectsAmbiguousContributions();
+        rejectsMultipleProviders();
     }
 
     private static void rejectsMissingProvider() throws Exception {
@@ -42,11 +47,57 @@ public final class JdkReloadHandlerTest {
         var layer = ModuleLayer.boot().defineModulesWithOneLoader(configuration,
                 JdkReloadHandlerTest.class.getClassLoader());
         try {
-            new JdkGenerationFactory().define(layer);
+            new JdkGenerationFactory().define(new CandidateContext(layer,
+                    layer.findModule("empty.external").orElseThrow()));
             throw new AssertionError("missing provider was accepted");
         } catch (IllegalStateException expected) {
             Check.that("missing provider reports a clear failure",
-                    expected.getMessage().contains("no com.sun.net.httpserver.HttpHandler provider"));
+                    expected.getMessage().contains("root module empty.external must provide exactly one HTTP")
+                            && expected.getMessage().contains("found none"));
+        }
+    }
+
+    private static void rejectsAmbiguousContributions() throws Exception {
+        var descriptor = ModuleDescriptor.newModule("ambiguous.external")
+                .requires("tuul")
+                .requires("jdk.httpserver")
+                .provides("reload.Program", List.of("app.Program"))
+                .provides("com.sun.net.httpserver.HttpHandler", List.of("app.Handler"))
+                .build();
+        var finder = MemoryModuleFinder.of(new MemoryModule(descriptor, Map.of()));
+        var configuration = ModuleLayer.boot().configuration().resolve(ModuleFinder.of(), finder,
+                List.of("ambiguous.external"));
+        var layer = ModuleLayer.boot().defineModulesWithOneLoader(configuration,
+                JdkReloadHandlerTest.class.getClassLoader());
+        try {
+            new JdkGenerationFactory().define(new CandidateContext(layer,
+                    layer.findModule("ambiguous.external").orElseThrow()));
+            throw new AssertionError("ambiguous contribution was accepted");
+        } catch (IllegalStateException expected) {
+            Check.that("both contribution kinds report deterministic providers",
+                    expected.getMessage().contains("ambiguous.external/app.Handler")
+                            && expected.getMessage().contains("ambiguous.external/app.Program"));
+        }
+    }
+
+    private static void rejectsMultipleProviders() throws Exception {
+        var descriptor = ModuleDescriptor.newModule("multiple.external")
+                .requires("jdk.httpserver")
+                .provides("com.sun.net.httpserver.HttpHandler", List.of("app.One", "app.Two"))
+                .build();
+        var finder = MemoryModuleFinder.of(new MemoryModule(descriptor, Map.of()));
+        var configuration = ModuleLayer.boot().configuration().resolve(ModuleFinder.of(), finder,
+                List.of("multiple.external"));
+        var layer = ModuleLayer.boot().defineModulesWithOneLoader(configuration,
+                JdkReloadHandlerTest.class.getClassLoader());
+        try {
+            new JdkGenerationFactory().define(new CandidateContext(layer,
+                    layer.findModule("multiple.external").orElseThrow()));
+            throw new AssertionError("multiple providers were accepted");
+        } catch (IllegalStateException expected) {
+            Check.that("multiple providers report deterministic names",
+                    expected.getMessage().contains("multiple.external/app.One")
+                            && expected.getMessage().contains("multiple.external/app.Two"));
         }
     }
 
@@ -95,6 +146,29 @@ public final class JdkReloadHandlerTest {
         running.join();
         Check.equal("the retired provider closes after its lease drains", 1, closed.get());
         Check.equal("the first handler answered", 200, request.status);
+        reload.close();
+    }
+
+    private static void switchesContributionKinds() throws Exception {
+        var reload = new Reload();
+        var ingress = new JdkReloadHandler(reload);
+        reload.submit(Revision.of("tuul", () -> ReloadHandler.attach(Generation.empty(),
+                (request, response) -> Responses.text("tuul\n", response))));
+        var tuul = new Exchange();
+        ingress.handle(tuul);
+        Check.equal("the stable ingress serves a Tuul handler", 200, tuul.status);
+        Check.equal("the Tuul contribution answers", "tuul\n", tuul.body.toString());
+
+        reload.submit(Revision.of("jdk", () -> JdkReloadHandler.attach(Generation.empty(),
+                exchange -> {
+                    var body = "jdk\n".getBytes();
+                    exchange.sendResponseHeaders(200, body.length);
+                    exchange.getResponseBody().write(body);
+                })));
+        var jdk = new Exchange();
+        ingress.handle(jdk);
+        Check.equal("the same ingress switches to a raw JDK handler", 200, jdk.status);
+        Check.equal("the raw contribution answers", "jdk\n", jdk.body.toString());
         reload.close();
     }
 

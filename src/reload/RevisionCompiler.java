@@ -90,7 +90,9 @@ public final class RevisionCompiler {
             var layer = ModuleLayer.defineModules(configuration, List.of(ModuleLayer.boot()),
                     name -> loaders.containsKey(name) ? loaders.get(name) : parent).layer();
             MemoryModuleLoader.configure(loaders, layer);
-            return Objects.requireNonNull(factory.define(layer),
+            var root = layer.findModule(revision.rootModule()).orElseThrow(() ->
+                    new CompilationFailure("root module is not in candidate layer: " + revision.rootModule()));
+            return Objects.requireNonNull(factory.define(new CandidateContext(layer, root)),
                     "generation factory returned null");
         }
 

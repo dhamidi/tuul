@@ -136,3 +136,35 @@ A class-loader boundary controls class lifetime. It is not a security sandbox.
 Use canaries by deciding which host receives a verified revision first. Do not
 put percentage routing inside one generation pointer. Each host must still
 activate one coherent generation for its own work.
+
+## JDK providers stay inside the generation
+
+Use `JdkServiceFactory` to load a supported JDK provider from the candidate
+root module. The factory stores the provider in `Generation.services` and
+registers closeable providers as generation resources.
+
+Use `JdkToolCatalog` to list and run `ToolProvider` values. The catalog reads
+providers under one lease and returns only tool metadata. A duplicate tool name
+rejects the operation in deterministic order.
+
+The [tutorial ToolProvider example](tutorial.md#run-a-generation-owned-jdk-tool)
+shows the complete candidate descriptor, provider class, and host wiring. The
+candidate descriptor provides `java.util.spi.ToolProvider`; `module tuul` owns
+the `uses` declaration. `RevisionCompiler` reads the compiled descriptor rather
+than candidate source text.
+
+The same boundary applies to `com.sun.source.util.Plugin`. The candidate
+provides the plugin, and the host obtains it from `Generation.service` while a
+lease is open. The host creates the `JavacTask`, calls `Plugin.init`, and calls
+the task before closing the lease. The plugin, task listener, and other
+candidate products do not escape that lease.
+
+`RevisionCompiler` compiles the candidate before `JdkServiceFactory` loads its
+providers. A loaded `Processor` or `Plugin` therefore does not affect the
+compilation that creates its generation. The host passes it to a later,
+host-owned compilation task.
+
+Do not install a provider into a JDK global registry. Selector, networking,
+charset, time-zone, logger, security, JDBC, print, sound, attach, RMI, and
+preferences providers keep process-wide or one-shot state and cannot form a
+safe layer boundary.

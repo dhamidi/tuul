@@ -14,8 +14,10 @@ import java.util.regex.Pattern;
 /// The source roots and named modules of one tuul project.
 ///
 /// `src/`, `entrypoints/`, and `test/` are separate named modules. A descriptor
-/// is required for every root that exists. Entrypoints use a named package and
-/// a `Main` class; the directory below `entrypoints/` is its command name.
+/// is required for every root that exists. Command entrypoints use a named
+/// package and a `Main` class. Reload entrypoints use the provider named by the
+/// compiled root descriptor. Each directory below `entrypoints/` is a command
+/// name.
 public record Layout(Path root) {
 
     public static final String ENTRYPOINT = "Main.java";
@@ -107,14 +109,9 @@ public record Layout(Path root) {
         entrypointModule().orElseThrow(() -> new IOException("no entrypoints/ module"));
         var candidates = new ArrayList<String>();
         try (var children = Files.list(entrypointsRoot())) {
-            for (var child : children.filter(Files::isDirectory).sorted().toList()) {
-                try (var tree = Files.walk(child)) {
-                    if (tree.anyMatch(path -> Files.isRegularFile(path)
-                            && path.getFileName().toString().endsWith(".java"))) {
-                        candidates.add(child.getFileName().toString());
-                    }
-                }
-            }
+            children.filter(Files::isDirectory)
+                    .map(path -> path.getFileName().toString())
+                    .sorted().forEach(candidates::add);
         }
         var selected = named == null || named.isBlank()
                 ? (candidates.contains("web") ? "web" : candidates.size() == 1 ? candidates.getFirst() : "")

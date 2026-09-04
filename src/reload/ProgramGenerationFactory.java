@@ -1,17 +1,24 @@
 package reload;
 
-import java.util.ServiceLoader;
-
-/// Creates a generation from the single [Program] provider in a module layer.
+/// Creates a generation from the single [Program] provider in the candidate root.
 public final class ProgramGenerationFactory implements GenerationFactory {
 
-    /// Loads exactly one [Program] provider from the candidate layer.
+    /// Loads exactly one root provider and defines its generation.
     @Override
-    public Generation define(ModuleLayer layer) throws Exception {
-        var programs = ServiceLoader.load(layer, Program.class).stream()
-                .map(ServiceLoader.Provider::get).toList();
-        if (programs.size() != 1) throw new IllegalStateException(
-                "candidate layer must provide exactly one reload.Program, found " + programs.size());
-        return programs.getFirst().define();
+    public Generation define(CandidateContext candidate) throws Exception {
+        var services = new ServiceGenerationFactory(Program.class).define(candidate);
+        var programs = services.services(Program.class);
+        if (programs.size() != 1) {
+            try { services.close(); } catch (Exception ignored) {}
+            throw new IllegalStateException("root module " + candidate.root().getName()
+                    + " must provide exactly one reload.Program, found " + programs.size()
+                    + " " + candidate.declarations(Program.class));
+        }
+        try {
+            return Generation.merge(java.util.List.of(services, programs.getFirst().define()));
+        } catch (Exception | Error failure) {
+            try { services.close(); } catch (Exception close) { failure.addSuppressed(close); }
+            throw failure;
+        }
     }
 }

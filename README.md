@@ -108,6 +108,61 @@ only `jdk.httpserver` and provide `com.sun.net.httpserver.HttpHandler`.
 one generation, old generations drain, and the last good generation remains
 active after a failed change.
 
+Use `reload.JdkServiceFactory` when a root module provides a reload-safe JDK
+service. Tuul loads `ToolProvider`, custom file-system providers, scripting and
+XML factories, JMX connector providers, processors, and javac plugins from the
+compiled root descriptor. It keeps those instances in the generation. Tuul
+does not install URL, DNS, charset, locale, time-zone, security, or other
+providers that the JDK keeps in process-global state.
+
+## Reloadable JDK services
+
+Put `provides` in the candidate root and keep `uses` in Tuul's host module:
+
+```java
+// candidate/module-info.java
+module example.tools {
+    provides java.util.spi.ToolProvider with example.tools.EchoTool;
+}
+```
+
+```java
+// another candidate/module-info.java
+module example.plugin {
+    requires jdk.compiler;
+    provides com.sun.source.util.Plugin with example.plugin.AuditPlugin;
+}
+```
+
+Construct one `JdkServiceFactory` for each candidate root. Use
+`JdkToolCatalog` to list and run a tool generation. Use a separate reload
+coordinator and one host-owned lease for a plugin generation and its
+`JavacTask`:
+
+```java
+var toolCompiler = new RevisionCompiler(List.of(),
+        new JdkServiceFactory(java.util.spi.ToolProvider.class));
+var pluginCompiler = new RevisionCompiler(List.of(),
+        new JdkServiceFactory(com.sun.source.util.Plugin.class));
+
+var tools = new JdkToolCatalog(toolReload);
+var available = tools.list();
+var exit = tools.run(available.getFirst().name(), out, err, "hello");
+
+try (var lease = pluginReload.lease().orElseThrow()) {
+    var plugin = lease.generation().service(com.sun.source.util.Plugin.class)
+            .orElseThrow();
+    plugin.init(hostTask);
+    var compiled = Boolean.TRUE.equals(hostTask.call());
+}
+```
+
+`RevisionCompiler` loads providers from the compiled module descriptor, not
+candidate source text. Provider instances and products do not escape their
+lease. Loading a processor or plugin does not change the compilation that
+creates its generation. See the [reload tutorial](src/reload/tutorial.md) for
+the complete external modules and host source.
+
 ## Library design: fetch
 
 `fetch` is the foundation for HTTP work in the browser, `web.hyperspec`, and

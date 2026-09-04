@@ -24,8 +24,9 @@ public final class RevisionCompilerModuleLayerTest {
         try {
             var depRoot = Files.createDirectories(root.resolve("dep"));
             var appRoot = Files.createDirectories(root.resolve("app"));
-            var depInfo = write(depRoot, "module-info.java", "module sample.dep { exports dep; opens dep; }\n");
+            var depInfo = write(depRoot, "module-info.java", "module sample.dep { requires tuul; exports dep; opens dep; provides reload.Program with dep.Provider; }\n");
             var depSource = write(depRoot, "dep/Value.java", "package dep; public record Value(String text) { public boolean resource() throws Exception { return new String(Value.class.getResourceAsStream(\"shared.txt\").readAllBytes()).equals(\"dependency\"); } }\n");
+            var depProvider = write(depRoot, "dep/Provider.java", "package dep; public final class Provider implements reload.Program { public reload.Generation define() { throw new AssertionError(\"dependency provider must not load\"); } }\n");
             var appInfo = write(appRoot, "module-info.java", "module sample.app { requires sample.dep; requires tuul; exports app; opens app; provides reload.Program with app.Main; }\n");
             var appSource = write(appRoot, "app/Main.java", "package app; public final class Main implements reload.Program {\n"
                     + " public reload.Generation define() throws Exception {\n"
@@ -35,7 +36,7 @@ public final class RevisionCompilerModuleLayerTest {
             var answer = write(appRoot, "app/shared.txt", "ok");
             var depAnswer = write(depRoot, "dep/shared.txt", "dependency");
             var dep = new Revision.SourceModule("sample.dep", depRoot, depInfo,
-                    List.of(depInfo, depSource), List.of(new Revision.ResourceEntry("dep/shared.txt", depAnswer)));
+                    List.of(depInfo, depSource, depProvider), List.of(new Revision.ResourceEntry("dep/shared.txt", depAnswer)));
             var app = new Revision.SourceModule("sample.app", appRoot, appInfo,
                     List.of(appInfo, appSource), List.of(new Revision.ResourceEntry("app/shared.txt", answer)));
             var host = Path.of(System.getProperty("tuul.test.module", "build/modules/tuul")).toAbsolutePath();
@@ -44,8 +45,21 @@ public final class RevisionCompilerModuleLayerTest {
             var oldResource = new AtomicReference<URL>();
             var compiler = new RevisionCompiler(List.of(),
                     candidate -> {
-                        layer.set(candidate);
-                        var loader = candidate.findLoader("sample.app");
+                        layer.set(candidate.layer());
+                        Check.equal("the context identifies the exact root module", "sample.app",
+                                candidate.root().getName());
+                        Check.equal("root declarations exclude dependency providers", List.of("app.Main"),
+                                candidate.declarations(Program.class));
+                        Check.equal("root provider identities are deterministic", List.of(
+                                new CandidateContext.Provider("sample.app", "app.Main")),
+                                candidate.providers(Program.class));
+                        Check.equal("root loading excludes dependency providers", 1,
+                                candidate.load(Program.class).size());
+                        var loaded = new ServiceGenerationFactory(Program.class).define(candidate);
+                        Check.equal("service providers are attached immutably", 1,
+                                loaded.services(Program.class).size());
+                        loaded.close();
+                        var loader = candidate.layer().findLoader("sample.app");
                         var currentResource = loader.getResource("app/shared.txt");
                         var priorResource = oldResource.getAndSet(currentResource);
                         if (priorResource != null) {
@@ -54,10 +68,10 @@ public final class RevisionCompilerModuleLayerTest {
                         }
                         var appType = loader.loadClass("app.Main");
                         var dependencyType = loader.loadClass("dep.Value");
-                        var appModule = candidate.findModule("sample.app").orElseThrow();
+                        var appModule = candidate.layer().findModule("sample.app").orElseThrow();
                         Check.that("application package is open to the host",
                                 appModule.isOpen("app", RevisionCompilerModuleLayerTest.class.getModule()));
-                        try (var reader = candidate.configuration().findModule("sample.app").orElseThrow()
+                        try (var reader = candidate.layer().configuration().findModule("sample.app").orElseThrow()
                                 .reference().open(); var resource = reader.open("app/shared.txt").orElseThrow()) {
                             Check.that("module reader retains application resource",
                                     !new String(resource.readAllBytes()).isEmpty());
@@ -66,12 +80,12 @@ public final class RevisionCompilerModuleLayerTest {
                                 appType.getModule().getName());
                         Check.equal("dependency class belongs to its named module", "sample.dep",
                                 dependencyType.getModule().getName());
-                        var appReference = candidate.configuration().findModule("sample.app").orElseThrow().reference();
+                        var appReference = candidate.layer().configuration().findModule("sample.app").orElseThrow().reference();
                         try (var reader = appReference.open()) {
                             Check.that("application resource stays in its module",
                                     !new String(reader.open("app/shared.txt").orElseThrow().readAllBytes()).isEmpty());
                         }
-                        var dependencyReference = candidate.configuration().findModule("sample.dep").orElseThrow().reference();
+                        var dependencyReference = candidate.layer().configuration().findModule("sample.dep").orElseThrow().reference();
                         try (var reader = dependencyReference.open()) {
                             Check.equal("dependency resource stays in its module", "dependency",
                                     new String(reader.open("dep/shared.txt").orElseThrow().readAllBytes()));

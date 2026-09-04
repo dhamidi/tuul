@@ -6,11 +6,12 @@ Use these adapters when an HTTP server must serve or receive reloadable code.
 handler stored under `ReloadHandler.HANDLER` and answers `503` before activation
 or when the generation has no handler.
 
-`JdkReloadHandler` serves an external named module that provides exactly one
-`com.sun.net.httpserver.HttpHandler`. `JdkGenerationFactory` discovers that
-service in each fresh `ModuleLayer`. The application needs only `jdk.httpserver`;
-it does not import Tuul or `web`. A closeable provider closes after its last
-leased request drains.
+`JdkReloadHandler` is one stable listener for both HTTP contribution forms.
+`JdkGenerationFactory` reads the compiled root descriptor and requires exactly
+one `reload.Program` or `com.sun.net.httpserver.HttpHandler` provider. It does
+not inspect source text or providers in dependency modules. An external
+handler module needs only `jdk.httpserver`; it does not import Tuul or `web`.
+A closeable provider closes after its last leased request drains.
 
 `HttpRevisionSource` accepts a multipart revision upload and submits a staged
 `reload.Revision`. It does not compile or activate uploaded code.

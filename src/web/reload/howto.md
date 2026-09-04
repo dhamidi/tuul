@@ -37,10 +37,11 @@ module example.app {
 ```
 
 The host supplies `new JdkGenerationFactory()` to its named revision compiler.
-The factory loads the service from each fresh `ModuleLayer`. The layer must
-provide exactly one handler. `JdkReloadHandler` keeps the listener stable,
-leases the active generation for each exchange, and closes an
-`AutoCloseable` provider after its last admitted exchange drains.
+The factory reads the compiled root descriptor in each fresh `ModuleLayer`.
+The root must provide exactly one HTTP contribution. Providers in dependency
+modules do not count. `JdkReloadHandler` keeps the listener stable, leases the
+active generation for each exchange, and closes an `AutoCloseable` provider
+after its last admitted exchange drains.
 
 ## Accept a revision upload
 

@@ -1,7 +1,7 @@
-/// Connects HTTP handlers and revision uploads to the generation coordinator.
+/// Connects HTTP contributions and revision uploads to the generation coordinator.
 ///
-/// [ReloadHandler] serves Tuul's [web.Handler]. [JdkReloadHandler] serves an
-/// external named module's `com.sun.net.httpserver.HttpHandler` service. The
-/// external module does not import Tuul or `web`; [JdkGenerationFactory]
-/// discovers exactly one provider in each candidate [ModuleLayer].
+/// [JdkReloadHandler] is the stable JDK ingress. It serves either a raw
+/// `com.sun.net.httpserver.HttpHandler` or Tuul's [web.Handler] from the active
+/// generation. [JdkGenerationFactory] reads the compiled root descriptor and
+/// accepts exactly one of those contribution kinds.
 package web.reload;

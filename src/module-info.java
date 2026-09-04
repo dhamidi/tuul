@@ -2,6 +2,8 @@
 /// module in `entrypoints/` and requires this module.
 module tuul {
     requires java.compiler;
+    requires java.management;
+    requires java.scripting;
     requires java.xml;
     requires jdk.compiler;
     requires jdk.httpserver;
@@ -12,6 +14,23 @@ module tuul {
     uses reload.Program;
 
     uses com.sun.net.httpserver.HttpHandler;
+    uses java.nio.file.spi.FileSystemProvider;
+    uses java.util.spi.ToolProvider;
+    uses javax.annotation.processing.Processor;
+    uses javax.management.remote.JMXConnectorProvider;
+    uses javax.management.remote.JMXConnectorServerProvider;
+    uses javax.script.ScriptEngineFactory;
+    uses javax.xml.datatype.DatatypeFactory;
+    uses javax.xml.parsers.DocumentBuilderFactory;
+    uses javax.xml.parsers.SAXParserFactory;
+    uses javax.xml.stream.XMLEventFactory;
+    uses javax.xml.stream.XMLInputFactory;
+    uses javax.xml.stream.XMLOutputFactory;
+    uses javax.xml.transform.TransformerFactory;
+    uses javax.xml.validation.SchemaFactory;
+    uses javax.xml.xpath.XPathFactory;
+    uses org.xml.sax.XMLReader;
+    uses com.sun.source.util.Plugin;
 
     exports actors;
     exports actors.transport;

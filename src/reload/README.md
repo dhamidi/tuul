@@ -49,3 +49,63 @@ Each document answers one kind of question.
 
 Start with the tutorial when you add reload to a project. Use the reference
 when you implement a revision source or a reloadable application surface.
+
+## Load JDK services
+
+Use `JdkServiceFactory` in the host when the candidate root module provides an
+adapter-oriented JDK service. The factory loads only providers declared by the
+candidate root module. It stores providers in the generation, and reload closes
+any provider that implements `AutoCloseable` after leases drain.
+
+Use `JdkToolCatalog` with the same `Reload` to list tool metadata or run one
+named `ToolProvider`:
+
+```java
+var tools = new JdkToolCatalog(reload);
+var names = tools.list();
+var status = tools.run("my-tool", out, err, "--check");
+```
+
+The [reload tutorial](tutorial.md#run-a-generation-owned-jdk-tool) contains a
+complete external `example.tools` module, provider class, source-root wiring,
+and host call. Its candidate `module-info.java` has `provides`; the `module tuul`
+descriptor has `uses`. `RevisionCompiler` reads the compiled module descriptor,
+so `CandidateContext` does not scan source text for providers.
+
+Use the same boundary for a javac `Plugin`:
+
+```java
+try (var lease = reload.lease().orElseThrow()) {
+    var plugin = lease.generation().service(com.sun.source.util.Plugin.class)
+            .orElseThrow();
+    plugin.init(hostTask);
+    var compiled = Boolean.TRUE.equals(hostTask.call());
+}
+```
+
+The host creates `hostTask`, calls the plugin, and closes the lease after the
+task. A provider, task listener, parser, engine, or other candidate product
+must not escape that lease. Loading a processor or plugin does not affect the
+compilation that creates its generation. The host passes it to a later task.
+
+The catalog returns names and descriptions. It does not return tool provider
+instances. The run call acquires one lease and closes it after the tool returns.
+Duplicate tool names fail deterministically.
+
+The direct support matrix is intentionally small:
+
+| Service | Adapter | Reload rule |
+|---|---|---|
+| `ToolProvider` | `JdkToolCatalog` | Generation-owned providers and one lease per run |
+| `FileSystemProvider` | `JdkServiceFactory` | Close each file system before its lease ends |
+| `ScriptEngineFactory` | `JdkServiceFactory` | Keep each engine inside its lease |
+| JAXP factories | `JdkServiceFactory` | Keep each parser or transformer task inside its lease |
+| JMX connector providers | `JdkServiceFactory` | Close each connector or server before its lease ends |
+| `Processor`, javac `Plugin` | `JdkServiceFactory` | Pass the provider to one host-owned compilation task |
+
+Tuul rejects JVM-global or one-shot SPIs. Do not install selector,
+asynchronous-channel, URL, content-handler, charset, time-zone, logger,
+security, JDBC, print, sound, attach, RMI, preferences, or
+`HttpServerProvider` implementations through this API. Their JDK consumers
+keep static state or have no reload-safe removal. `HttpHandler` is different:
+the stable server invokes that application callback directly.

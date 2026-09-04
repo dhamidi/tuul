@@ -123,3 +123,53 @@ Assert these transitions:
 
 Keep these checks in a fast suite. Put a real watcher, javac, process, socket,
 or filesystem project in an integration suite.
+
+## Add JDK tools to a generation
+
+Use `JdkServiceFactory` as the generation factory for a tool-only candidate
+root:
+
+```java
+var factory = new JdkServiceFactory(java.util.spi.ToolProvider.class);
+var compiler = new RevisionCompiler(List.of(), factory);
+var revision = compiler.compile(Revision.from("example.tools", List.of(source), List.of()));
+```
+
+Construct `new JdkToolCatalog(reload)` once in the stable host. Call `list()`
+to get immutable names and descriptions. Call `run(name, out, err, args)` to
+run one tool while one lease is held. Close any resources that the tool's own
+API exposes. The catalog rejects unknown and duplicate names.
+
+The complete candidate `module-info.java` and `ToolProvider` class are in the
+[tutorial example](tutorial.md#run-a-generation-owned-jdk-tool). Put
+`provides java.util.spi.ToolProvider with ...` in the candidate root. Keep
+`uses java.util.spi.ToolProvider` in the host's `module tuul` descriptor. The
+compiler reads the compiled descriptor, not candidate source text.
+
+Pass `FileSystemProvider`, `ScriptEngineFactory`, a public JAXP factory, a JMX
+connector provider, `Processor`, or javac `Plugin` to `JdkServiceFactory` when
+the candidate uses that adapter. The factory rejects unsupported global SPIs.
+
+For a javac plugin, put the service and implementation in the candidate root:
+
+```java
+module example.plugin {
+    requires jdk.compiler;
+    provides com.sun.source.util.Plugin with example.plugin.AuditPlugin;
+}
+```
+
+Invoke it in a host-owned task boundary:
+
+```java
+try (var lease = reload.lease().orElseThrow()) {
+    var plugin = lease.generation().service(com.sun.source.util.Plugin.class)
+            .orElseThrow();
+    plugin.init(hostTask);
+    var success = Boolean.TRUE.equals(hostTask.call());
+}
+```
+
+Do not let the plugin, task listener, or another candidate product escape the
+lease. Loading a processor or plugin does not change the candidate compilation;
+the host passes it to a later compilation task.

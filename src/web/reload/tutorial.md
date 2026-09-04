@@ -7,8 +7,9 @@ For exact adapter behavior, read [reference.md](reference.md).
 
 ## Define a Tuul-aware module
 
-Create a named application module and provide one `reload.Program` service. The
-host loads this service from each fresh module layer:
+Create a named application module and provide one `reload.Program` service.
+The host reads this service from the compiled root descriptor in each fresh
+module layer:
 
 ```java
 module example.web {
@@ -116,10 +117,10 @@ Start the host without an entrypoint name:
 tuul dev --port 8080
 ```
 
-`tuul dev` compiles this single named module in-process. It discovers exactly
-one JDK HTTP provider from the fresh module layer and keeps the listener
-stable. If the provider implements `AutoCloseable`, the generation closes it
-after the last request admitted to that layer drains.
+`tuul dev` compiles this single named module in-process. It loads exactly one
+JDK HTTP provider declared by the root and keeps the listener stable. If the
+provider implements `AutoCloseable`, the generation closes it after the last
+request admitted to that layer drains.
 
 ## Change the application
 

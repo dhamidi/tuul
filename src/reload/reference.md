@@ -39,7 +39,7 @@ interface. An application or deployment system supplies those policies.
 | `Revision` | Immutable materialized input and content identity. |
 | `RevisionSource` | Producer that submits revisions without activating them. |
 | `RevisionCompiler` | In-memory compiler and named-layer bridge for a path-backed revision. |
-| `GenerationFactory` | Defines a generation from a resolved module layer. |
+| `GenerationFactory` | Defines a generation from a compiled candidate context. |
 | `Reload` | Coordinator that stages, validates, activates, drains, and closes generations. |
 | `ApplicationDefinition` | Named application factory and optional JSON state transfer. |
 | `Applications` | Stable dispatcher for named applications. |
@@ -50,9 +50,159 @@ interface. An application or deployment system supplies those policies.
 | `Problem` | One compiler, loader, validator, migration, or activation problem. |
 | `Capability` | Typed key for one value carried by a generation. |
 | `Lease` | Claim that keeps one active generation available for one unit of work. |
+| `CandidateContext` | Root module and layer used to load candidate services. |
+| `ServiceGenerationFactory` | Loads selected root services and stores their providers. |
+| `JdkServiceFactory` | Restricts service loading to supported JDK adapter services. |
+| `JdkToolCatalog` | Lists and runs generation-owned `ToolProvider` values. |
 
 `MemoryRevisionSource` submits `Revision` values through the `RevisionSource`
 contract. Web adapters can use the same contract.
+
+## JDK service adapters
+
+Construct `JdkServiceFactory` with the supported service classes that the root
+module can provide. A selected class with no root provider produces an empty
+provider list. Compose the factory with another generation factory when the
+candidate exposes more than one service:
+
+```java
+var factory = GenerationFactory.compose(List.of(
+        new ProgramGenerationFactory(),
+        new JdkServiceFactory(java.util.spi.ToolProvider.class)));
+```
+
+The factory loads only providers declared by the candidate root module. It
+stores immutable provider lists in the generation and closes providers that
+implement `AutoCloseable` after the generation drains. It does not use the
+system loader, the thread context loader, or a JDK global registry.
+
+`JdkServiceFactory.supportedServices()` lists the accepted service classes.
+They include `ToolProvider`, `FileSystemProvider`, `ScriptEngineFactory`, the
+public JAXP factories, JMX connector providers, `Processor`, and javac
+`Plugin`. Invoke a provider while its generation lease is open. Close each
+file system, JMX connector, JMX server, stream, or other closeable product
+before the lease ends. Do not keep an engine, parser, transformer, processor,
+or plugin after the lease ends.
+
+Loading a `Processor` or javac `Plugin` does not apply it to the compilation
+that created the generation. A host can pass the loaded provider to a later,
+host-owned compilation task.
+
+`JdkToolCatalog` takes only a `Reload`. `list()` returns immutable name and
+description records. It returns an empty list before the first activation.
+`run(name, out, err, args)` finds one name, runs it while one lease is open,
+and returns the tool exit code. It throws `IllegalArgumentException` for an
+unknown name and rejects duplicate names in deterministic order. The catalog
+does not expose provider objects.
+
+Do not pass JVM-global or one-shot JDK SPIs to this factory. Tuul rejects
+selector and asynchronous-channel providers, URL and content-handler
+factories, charset and time-zone providers, logger finders, security
+providers, JDBC drivers, print and sound providers, attach providers, RMI
+providers, preferences providers, and `HttpServerProvider`. The JDK caches one
+system-wide `HttpServerProvider`. The web host instead owns one stable server
+and invokes the generation's `HttpHandler` directly.
+
+### External `ToolProvider` module
+
+Put the service declaration and provider class in the candidate root:
+
+```java
+// candidate/module-info.java
+module example.tools {
+    provides java.util.spi.ToolProvider with example.tools.EchoTool;
+}
+```
+
+```java
+// candidate/example/tools/EchoTool.java
+package example.tools;
+
+import java.io.PrintWriter;
+import java.util.spi.ToolProvider;
+
+public final class EchoTool implements ToolProvider {
+    public String name() { return "echo"; }
+    public java.util.Optional<String> description() {
+        return java.util.Optional.of("writes each argument");
+    }
+    public int run(PrintWriter out, PrintWriter err, String... arguments) {
+        for (var argument : arguments) out.println(argument);
+        return 0;
+    }
+}
+```
+
+Build and load that root from the stable host:
+
+```java
+var root = Path.of("candidate");
+var descriptor = root.resolve("module-info.java");
+var provider = root.resolve("example/tools/EchoTool.java");
+var source = new Revision.SourceModule("example.tools", root, descriptor,
+        List.of(descriptor, provider), List.of());
+var factory = new JdkServiceFactory(java.util.spi.ToolProvider.class);
+var compiler = new RevisionCompiler(List.of(), factory);
+var revision = compiler.compile(Revision.from("example.tools", List.of(source), List.of()));
+try (var reload = new Reload()) {
+    reload.submit(revision);
+    var catalog = new JdkToolCatalog(reload);
+    var tools = catalog.list();
+    var exit = catalog.run("echo", out, err, "hello");
+}
+```
+
+`module tuul` owns `uses java.util.spi.ToolProvider`. The candidate root owns
+`provides`. `RevisionCompiler` reads the compiled `module-info.class`, and
+`CandidateContext` loads only provider names from that compiled descriptor. It
+does not inspect source text for providers.
+
+### External javac `Plugin` module
+
+Declare the standard plugin service in the candidate root:
+
+```java
+module example.plugin {
+    requires jdk.compiler;
+    provides com.sun.source.util.Plugin with example.plugin.AuditPlugin;
+}
+```
+
+Implement the provider with the JDK task API:
+
+```java
+package example.plugin;
+
+import com.sun.source.util.JavacTask;
+import com.sun.source.util.Plugin;
+
+public final class AuditPlugin implements Plugin {
+    public String getName() { return "audit"; }
+    public void init(JavacTask task, String... arguments) {
+        task.addTaskListener(new com.sun.source.util.TaskListener() {
+            public void started(com.sun.source.util.TaskEvent event) {}
+            public void finished(com.sun.source.util.TaskEvent event) {}
+        });
+    }
+}
+```
+
+Load the plugin with `new JdkServiceFactory(Plugin.class)`. The host owns the
+compiler task and keeps the plugin call in the lease:
+
+```java
+try (var lease = reload.lease().orElseThrow()) {
+    var plugin = lease.generation().service(com.sun.source.util.Plugin.class)
+            .orElseThrow();
+    plugin.init(hostTask);
+    var ok = Boolean.TRUE.equals(hostTask.call());
+}
+```
+
+`RevisionCompiler` does not pass the loaded plugin to the compilation that
+creates its generation. A later host-owned task can use the plugin. The host
+must not return the provider, task, listener, or another candidate object after
+the lease closes.
 
 ## `Program`
 

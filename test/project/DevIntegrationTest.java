@@ -40,9 +40,38 @@ public final class DevIntegrationTest {
                 await("the changed generation answers", () -> "two\n".equals(get(client, port)));
                 assertNoReloadOutput(root, "after the first reload");
 
+                Files.writeString(root.resolve("entrypoints/module-info.java"), """
+                        module demo.entrypoints {
+                            requires demo.app;
+                            requires tuul;
+                            requires jdk.httpserver;
+                            provides com.sun.net.httpserver.HttpHandler with external.Handler;
+                        }
+                        """);
+                Files.writeString(root.resolve("entrypoints/web/Handler.java"), externalHandler("raw"));
+                Files.delete(root.resolve("entrypoints/web/Main.java"));
+                await("the same listener switches from Program to JDK HttpHandler",
+                        () -> "raw\n".equals(get(client, port)));
+                assertNoReloadOutput(root, "after switching contribution kind");
+
+                Files.writeString(root.resolve("entrypoints/module-info.java"), """
+                        module demo.entrypoints {
+                            requires demo.app;
+                            requires tuul;
+                            // Deliberately unusual spacing is still a compiled descriptor.
+                            provides
+                                reload.Program
+                                with demo.web.Main;
+                        }
+                """);
+                Files.writeString(root.resolve("entrypoints/web/Main.java"), source("three"));
+                Files.delete(root.resolve("entrypoints/web/Handler.java"));
+                await("the same listener switches back to Tuul Program", () -> "three\n".equals(get(client, port)));
+                assertNoReloadOutput(root, "after switching back to Program");
+
                 Files.writeString(root.resolve("entrypoints/web/Main.java"), broken());
                 await("the broken revision is reported", () -> errors.toString().contains("compile:"));
-                Check.equal("a broken revision leaves the last good generation active", "two\n", get(client, port));
+                Check.equal("a broken revision leaves the last good generation active", "three\n", get(client, port));
                 Check.that("the compiler problem is reported", errors.toString().contains("compile:"));
             } finally {
                 thread.interrupt();

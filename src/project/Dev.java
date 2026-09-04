@@ -9,8 +9,6 @@ import symbols.Vendor;
 import web.serve.Http;
 import web.reload.JdkGenerationFactory;
 import web.reload.JdkReloadHandler;
-import reload.ProgramGenerationFactory;
-import web.reload.ReloadHandler;
 import java.io.IOException;
 import java.io.Writer;
 import java.nio.file.FileVisitResult;
@@ -24,7 +22,6 @@ import java.time.Duration;
 import java.util.ArrayList;
 import java.util.List;
 import java.util.Objects;
-import java.util.regex.Pattern;
 import java.util.function.Consumer;
 /// Runs a reloadable project during development.
 ///
@@ -55,16 +52,18 @@ public final class Dev {
         var chosen = entrypoint == null ? "" : entrypoint;
         Builder builder;
         try {
-            builder = new Builder(layout, chosen, err);
+            builder = new Builder(layout, chosen);
         } catch (IllegalArgumentException failure) {
             write(err, "error: " + (failure.getMessage() == null ? failure : failure.getMessage()) + "\n");
             reload.close();
             return 1;
         }
-        var mode = builder.mode();
-        var http = mode == Mode.EXTERNAL ? new JdkReloadHandler(reload) : new ReloadHandler(reload);
-        var first = builder.build();
-        if (first == null) {
+        var http = new JdkReloadHandler(reload);
+        Built first;
+        try {
+            first = builder.build();
+        } catch (IOException failure) {
+            write(err, "error: " + (failure.getMessage() == null ? failure : failure.getMessage()) + "\n");
             reload.close();
             return 1;
         }
@@ -76,10 +75,8 @@ public final class Dev {
         }
 
         var source = new DirectorySource(layout, chosen, builder, QUIET_PERIOD, err, false);
-        try (var server = mode == Mode.EXTERNAL
-                ? Http.start((com.sun.net.httpserver.HttpHandler) http, port,
-                        failure -> write(err, "web: " + failure + "\n"))
-                : Http.start((web.Handler) http, port, failure -> write(err, "web: " + failure + "\n"))) {
+        try (var server = Http.start((com.sun.net.httpserver.HttpHandler) http, port,
+                failure -> write(err, "web: " + failure + "\n"))) {
             write(out, "development server at http://localhost:" + server.port() + "\n");
             write(out, "active generation " + status.activeRevision() + "\n");
             write(out, "watching " + layout.src().toAbsolutePath().normalize() + "\n");
@@ -107,8 +104,6 @@ public final class Dev {
         }
     }
 
-    private enum Mode { TUUL, EXTERNAL }
-
     /// An injectable directory source for complete project revisions.
     ///
     /// Each revision carries a lazy in-memory program. The source watches all
@@ -118,6 +113,7 @@ public final class Dev {
         private final Layout layout;
         private final Builder builder;
         private final Duration quiet;
+        private final Writer errors;
         private final boolean submitInitial;
         private volatile WatchService watches;
         private volatile Thread thread;
@@ -130,7 +126,7 @@ public final class Dev {
         /// Creates a source with the normal builder seam. The first stable
         /// scan is submitted before the source waits for later changes.
         public DirectorySource(Layout layout, String entrypoint, Duration quiet, Writer errors) {
-            this(layout, entrypoint, new Builder(layout, entrypoint, errors), quiet, errors, true);
+            this(layout, entrypoint, new Builder(layout, entrypoint), quiet, errors, true);
         }
 
         private DirectorySource(Layout layout, String entrypoint, Builder builder, Duration quiet, Writer errors,
@@ -139,7 +135,7 @@ public final class Dev {
             Objects.requireNonNull(entrypoint, "entrypoint");
             this.builder = Objects.requireNonNull(builder, "builder");
             this.quiet = requireQuiet(quiet);
-            Objects.requireNonNull(errors, "errors");
+            this.errors = Objects.requireNonNull(errors, "errors");
             this.submitInitial = submitInitial;
         }
 
@@ -159,7 +155,7 @@ public final class Dev {
                 var runner = Thread.currentThread();
                 thread = runner;
                 if (submitInitial && !closed && !runner.isInterrupted()) {
-                    var first = builder.build();
+                    var first = build();
                     if (first != null) submit.accept(first.revision());
                 }
                 for (;;) {
@@ -171,7 +167,7 @@ public final class Dev {
                         if (closed || runner.isInterrupted()) return;
                     }
                     if (closed || runner.isInterrupted()) return;
-                    var built = builder.build();
+                    var built = build();
                     if (built != null) submit.accept(built.revision());
                 }
             } finally {
@@ -214,6 +210,16 @@ public final class Dev {
             return name.startsWith(".") || name.endsWith("~") || name.endsWith(".swp") || name.endsWith(".tmp");
         }
 
+        private Built build() {
+            try {
+                return builder.build();
+            } catch (Exception failure) {
+                write(errors, "reload build failed: "
+                        + (failure.getMessage() == null ? failure : failure.getMessage()) + "\n");
+                return null;
+            }
+        }
+
         private static void register(Path root, WatchService service) throws IOException {
             if (!Files.isDirectory(root)) return;
             Files.walkFileTree(root, new SimpleFileVisitor<>() {
@@ -246,49 +252,48 @@ public final class Dev {
     /// in-process compiler. No class output is written to the project tree.
     public static final class Builder {
         private final Layout layout;
-        private final Layout.SourceModule root;
-        private final Layout.SourceModule entrypointModule;
-        private final Writer errors;
+        private final boolean hasEntrypoints;
+        private final String entrypoint;
         private final Compiler compiler;
 
         /// Uses the compiler in the running JDK for revisions from `layout`.
-        public Builder(Layout layout, String entrypoint, Writer errors) {
-            this(layout, entrypoint, errors, Compiler.system());
+        public Builder(Layout layout, String entrypoint) {
+            this(layout, entrypoint, Compiler.system());
         }
 
         /// Uses `compiler` for revisions from `layout`.
-        ///
-        /// Input-discovery problems are written to `errors`. [Dev#run] writes
-        /// compiler diagnostics after the coordinator rejects a candidate.
         /// Null arguments throw `NullPointerException`.
-        public Builder(Layout layout, String entrypoint, Writer errors, Compiler compiler) {
+        public Builder(Layout layout, String entrypoint, Compiler compiler) {
             this.layout = Objects.requireNonNull(layout, "layout");
-            Objects.requireNonNull(entrypoint, "entrypoint");
+            this.entrypoint = Objects.requireNonNull(entrypoint, "entrypoint");
             try {
                 var module = layout.entrypointModule();
                 if (module.isPresent()) {
                     layout.reloadEntrypoint(entrypoint);
-                    this.root = module.get();
-                    this.entrypointModule = module.get();
+                    this.hasEntrypoints = true;
                 } else {
                     if (!entrypoint.isBlank()) throw new IOException(
                             "no entrypoints module; a single-module project has no named entrypoint");
-                    this.root = layout.application();
-                    this.entrypointModule = null;
+                    this.hasEntrypoints = false;
                 }
             } catch (IOException failure) { throw new IllegalArgumentException(failure.getMessage(), failure); }
-            this.errors = Objects.requireNonNull(errors, "errors");
             this.compiler = Objects.requireNonNull(compiler, "compiler");
         }
 
         Built build() throws IOException {
+            var application = layout.application();
+            var entrypoints = hasEntrypoints
+                    ? layout.entrypointModule().orElseThrow(() -> new IOException("entrypoints module disappeared"))
+                    : null;
+            if (entrypoints != null) layout.reloadEntrypoint(entrypoint);
+            var root = entrypoints == null ? application : entrypoints;
             var vendor = Vendor.of(List.of(layout.vendor()));
             var modules = new ArrayList<Revision.SourceModule>();
-            if (entrypointModule == null) {
+            if (entrypoints == null) {
                 modules.add(module(root, layout.src()));
             } else {
-                modules.add(module(layout.application(), layout.src()));
-                modules.add(module(entrypointModule, layout.entrypointsRoot()));
+                modules.add(module(application, layout.src()));
+                modules.add(module(entrypoints, layout.entrypointsRoot()));
             }
             var dependencyPath = vendor.artifacts().isEmpty()
                     ? List.<Path>of()
@@ -300,25 +305,8 @@ public final class Dev {
             var parent = new ArrayList<Path>();
             parent.add(Home.find().classes());
             return new Built(new reload.RevisionCompiler(compiler, parent,
-                    mode() == Mode.EXTERNAL ? new JdkGenerationFactory() : new ProgramGenerationFactory())
+                    new JdkGenerationFactory())
                     .compile(revision));
-        }
-
-        Mode mode() throws IOException {
-            var descriptor = stripComments(Files.readString(root.descriptor()));
-            var programs = provides(descriptor, "reload.Program");
-            var handlers = provides(descriptor, "com.sun.net.httpserver.HttpHandler");
-            if (programs == handlers) throw new IOException("root module must provide exactly one reload mode");
-            return handlers ? Mode.EXTERNAL : Mode.TUUL;
-        }
-
-        private static boolean provides(String descriptor, String service) {
-            return Pattern.compile("\\bprovides\\s+" + Pattern.quote(service) + "\\s+with\\b")
-                    .matcher(descriptor).find();
-        }
-
-        private static String stripComments(String source) {
-            return source.replaceAll("(?s)/\\*.*?\\*/", "").replaceAll("(?m)//.*$", "");
         }
 
         private Revision.SourceModule module(Layout.SourceModule module, Path root) throws IOException {

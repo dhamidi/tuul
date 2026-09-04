@@ -21,9 +21,11 @@ before activation or when the capability is absent. Each exchange holds its
 lease until the handler returns.
 
 Use `new JdkGenerationFactory()` with `reload.RevisionCompiler`. The factory
-loads providers from the candidate `ModuleLayer` with `ServiceLoader`. Zero or
-more than one provider rejects the candidate. A provider that implements
-`AutoCloseable` closes with its generation after all admitted exchanges drain.
+reads service declarations from the compiled candidate root descriptor. It
+loads providers from that root and excludes providers in parent or dependency
+modules. Zero or more than one HTTP contribution rejects the candidate. A
+provider that implements `AutoCloseable` closes with its generation after all
+admitted exchanges drain.
 The external module declares `requires jdk.httpserver` and
 `provides com.sun.net.httpserver.HttpHandler with ...`; it does not require
 Tuul or `web`.

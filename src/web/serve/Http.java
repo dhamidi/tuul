@@ -113,6 +113,16 @@ public final class Http implements AutoCloseable {
         return server.getAddress();
     }
 
+    /// Handles one JDK exchange with a Tuul [Handler]. The caller owns the
+    /// exchange lifetime and keeps any reload lease around this call.
+    public static void handle(Handler handler, HttpExchange exchange) throws Exception {
+        Objects.requireNonNull(handler, "handler");
+        Objects.requireNonNull(exchange, "exchange");
+        var response = new Exchange(exchange);
+        handler.handle(request(exchange), response);
+        response.close();
+    }
+
     @Override
     public void close() {
         server.stop(0);

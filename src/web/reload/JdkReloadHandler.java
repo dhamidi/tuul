@@ -7,10 +7,14 @@ import reload.Capability;
 import reload.Generation;
 import reload.Lease;
 import reload.Reload;
+import web.Handler;
+import web.serve.Http;
 
-/// Serves a raw JDK [com.sun.net.httpserver.HttpHandler] from the active
-/// generation. The application module only needs `jdk.httpserver`; it does
-/// not need `tuul`, `reload`, or any `web` type.
+/// Dispatches one stable JDK listener to the active HTTP contribution.
+///
+/// A generation may carry either a raw JDK handler or a Tuul [Handler]. The
+/// ingress selects one while holding one lease, so a retired module layer
+/// remains reachable only until its admitted exchanges return.
 public final class JdkReloadHandler implements com.sun.net.httpserver.HttpHandler {
 
     /// The capability carrying the external module's current JDK handler.
@@ -44,11 +48,22 @@ public final class JdkReloadHandler implements com.sun.net.httpserver.HttpHandle
         }
         try (Lease lease = acquired.get()) {
             var handler = lease.generation().capability(HANDLER).orElse(null);
-            if (handler == null) {
-                unavailable(exchange);
+            if (handler != null) {
+                handler.handle(exchange);
                 return;
             }
-            handler.handle(exchange);
+            var tuul = lease.generation().capability(ReloadHandler.HANDLER).orElse(null);
+            if (tuul != null) {
+                try {
+                    Http.handle(tuul, exchange);
+                } catch (IOException failure) {
+                    throw failure;
+                } catch (Exception failure) {
+                    throw new IOException(failure);
+                }
+                return;
+            }
+            unavailable(exchange);
         }
     }
 
