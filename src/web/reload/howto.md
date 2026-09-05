@@ -36,8 +36,8 @@ module example.app {
 }
 ```
 
-The host supplies `new JdkGenerationFactory()` to its named revision compiler.
-The factory reads the compiled root descriptor in each fresh `ModuleLayer`.
+The host supplies `JdkReloadHandler::generation` to its named revision compiler.
+The definition reads the compiled root descriptor in each fresh `ModuleLayer`.
 The root must provide exactly one HTTP contribution. Providers in dependency
 modules do not count. `JdkReloadHandler` keeps the listener stable, leases the
 active generation for each exchange, and closes an `AutoCloseable` provider

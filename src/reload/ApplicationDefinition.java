@@ -6,7 +6,7 @@ import java.util.Objects;
 
 /// Defines one named long-lived application and its state migration functions.
 ///
-/// Use [#of(String, String, Factory)] when a new generation can start with
+/// Use [#of(String, String, Initial)] when a new generation can start with
 /// initial state. Add [#withTransfer(Snapshot, Transfer)] when the definition
 /// uses [StatePolicy#TRANSFER]. The application owns its effect handlers, so
 /// every effect emitted by one turn stays with that turn's definition.
@@ -14,23 +14,23 @@ public final class ApplicationDefinition<S> {
 
     private final String name;
     private final String version;
-    private final Factory<S> factory;
+    private final Initial<S> initial;
     private final Snapshot<S> snapshot;
     private final Transfer<S> transfer;
 
-    private ApplicationDefinition(String name, String version, Factory<S> factory,
+    private ApplicationDefinition(String name, String version, Initial<S> initial,
             Snapshot<S> snapshot, Transfer<S> transfer) {
         this.name = require(name, "name");
         this.version = require(version, "version");
-        this.factory = Objects.requireNonNull(factory, "factory");
+        this.initial = Objects.requireNonNull(initial, "initial");
         this.snapshot = snapshot;
         this.transfer = transfer;
     }
 
-    /// Creates a definition that starts each new instance from its factory.
+    /// Creates a definition that starts each new instance from `initial`.
     public static <S> ApplicationDefinition<S> of(String name, String version,
-            Factory<S> factory) {
-        return new ApplicationDefinition<>(name, version, factory, null, null);
+            Initial<S> initial) {
+        return new ApplicationDefinition<>(name, version, initial, null, null);
     }
 
     /// Returns the stable name used by [Applications#dispatch(String, application.Message...)]
@@ -42,7 +42,7 @@ public final class ApplicationDefinition<S> {
     public String version() { return version; }
 
     Application<S> create() throws Exception {
-        return Objects.requireNonNull(factory.create(), "factory returned null");
+        return Objects.requireNonNull(initial.create(), "initial returned null");
     }
 
     /// Adds versioned JSON state migration functions for [StatePolicy#TRANSFER].
@@ -50,7 +50,7 @@ public final class ApplicationDefinition<S> {
     /// prior version and the snapshot object, then creates the replacement.
     public ApplicationDefinition<S> withTransfer(Snapshot<S> snapshot, Transfer<S> transfer) {
         return new ApplicationDefinition<>(name, version,
-                factory, Objects.requireNonNull(snapshot, "snapshot"),
+                initial, Objects.requireNonNull(snapshot, "snapshot"),
                 Objects.requireNonNull(transfer, "transfer"));
     }
 
@@ -75,7 +75,7 @@ public final class ApplicationDefinition<S> {
 
     /// Creates the initial application state for a definition.
     @FunctionalInterface
-    public interface Factory<S> {
+    public interface Initial<S> {
         Application<S> create() throws Exception;
     }
 

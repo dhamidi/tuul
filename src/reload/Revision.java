@@ -59,7 +59,7 @@ public final class Revision {
     /// Returns the content or caller-supplied identity.
     public String identity() { return identity; }
 
-    /// Returns the module whose resolved layer is passed to the generation factory.
+    /// Returns the module whose resolved layer is passed to the generation definition.
     public String rootModule() { return rootModule; }
 
     /// Returns all source modules in the closure, including the root module.

@@ -39,9 +39,9 @@ interface. An application or deployment system supplies those policies.
 | `Revision` | Immutable materialized input and content identity. |
 | `RevisionSource` | Producer that submits revisions without activating them. |
 | `RevisionCompiler` | In-memory compiler and named-layer bridge for a path-backed revision. |
-| `GenerationFactory` | Defines a generation from a compiled candidate context. |
+| `Generation.Definition` | Defines a generation from a compiled candidate context. |
 | `Reload` | Coordinator that stages, validates, activates, drains, and closes generations. |
-| `ApplicationDefinition` | Named application factory and optional JSON state transfer. |
+| `ApplicationDefinition` | Named application initializer and optional JSON state transfer. |
 | `Applications` | Stable dispatcher for named applications. |
 | `Validator` | Candidate check that runs before activation. |
 | `StatePolicy` | Rule for state that replay cannot reconstruct. |
@@ -51,8 +51,7 @@ interface. An application or deployment system supplies those policies.
 | `Capability` | Typed key for one value carried by a generation. |
 | `Lease` | Claim that keeps one active generation available for one unit of work. |
 | `CandidateContext` | Root module and layer used to load candidate services. |
-| `ServiceGenerationFactory` | Loads selected root services and stores their providers. |
-| `JdkServiceFactory` | Restricts service loading to supported JDK adapter services. |
+| `JdkServices` | Restricts service loading to supported JDK adapter services. |
 | `JdkToolCatalog` | Lists and runs generation-owned `ToolProvider` values. |
 
 `MemoryRevisionSource` submits `Revision` values through the `RevisionSource`
@@ -60,23 +59,23 @@ contract. Web adapters can use the same contract.
 
 ## JDK service adapters
 
-Construct `JdkServiceFactory` with the supported service classes that the root
-module can provide. A selected class with no root provider produces an empty
-provider list. Compose the factory with another generation factory when the
-candidate exposes more than one service:
+Use `JdkServices.define` with the supported service classes that the root module
+can provide. A selected class with no root provider produces an empty provider
+list. Compose definitions with `Generation.compose` when the candidate exposes
+more than one service:
 
 ```java
-var factory = GenerationFactory.compose(List.of(
-        new ProgramGenerationFactory(),
-        new JdkServiceFactory(java.util.spi.ToolProvider.class)));
+var definition = Generation.compose(List.of(
+        Program::generation,
+        candidate -> JdkServices.define(candidate, java.util.spi.ToolProvider.class)));
 ```
 
-The factory loads only providers declared by the candidate root module. It
+The definition loads only providers declared by the candidate root module. It
 stores immutable provider lists in the generation and closes providers that
 implement `AutoCloseable` after the generation drains. It does not use the
 system loader, the thread context loader, or a JDK global registry.
 
-`JdkServiceFactory.supportedServices()` lists the accepted service classes.
+`JdkServices.supported()` lists the accepted service classes.
 They include `ToolProvider`, `FileSystemProvider`, `ScriptEngineFactory`, the
 public JAXP factories, JMX connector providers, `Processor`, and javac
 `Plugin`. Invoke a provider while its generation lease is open. Close each
@@ -95,7 +94,7 @@ and returns the tool exit code. It throws `IllegalArgumentException` for an
 unknown name and rejects duplicate names in deterministic order. The catalog
 does not expose provider objects.
 
-Do not pass JVM-global or one-shot JDK SPIs to this factory. Tuul rejects
+Do not pass JVM-global or one-shot JDK SPIs to this method. Tuul rejects
 selector and asynchronous-channel providers, URL and content-handler
 factories, charset and time-zone providers, logger finders, security
 providers, JDBC drivers, print and sound providers, attach providers, RMI
@@ -141,8 +140,8 @@ var descriptor = root.resolve("module-info.java");
 var provider = root.resolve("example/tools/EchoTool.java");
 var source = new Revision.SourceModule("example.tools", root, descriptor,
         List.of(descriptor, provider), List.of());
-var factory = new JdkServiceFactory(java.util.spi.ToolProvider.class);
-var compiler = new RevisionCompiler(List.of(), factory);
+var compiler = new RevisionCompiler(List.of(),
+        candidate -> JdkServices.define(candidate, java.util.spi.ToolProvider.class));
 var revision = compiler.compile(Revision.from("example.tools", List.of(source), List.of()));
 try (var reload = new Reload()) {
     reload.submit(revision);
@@ -187,7 +186,7 @@ public final class AuditPlugin implements Plugin {
 }
 ```
 
-Load the plugin with `new JdkServiceFactory(Plugin.class)`. The host owns the
+Load the plugin with `JdkServices.define(candidate, Plugin.class)`. The host owns the
 compiler task and keeps the plugin call in the lease:
 
 ```java
@@ -221,7 +220,7 @@ If `define()` throws, the candidate is rejected. The program must close a
 resource that it constructed but could not return in a `Generation`. Resources
 in a returned generation close when validation later rejects that candidate.
 
-The host selects the generation factory. A Tuul-aware module provides exactly
+The host selects the generation definition. A Tuul-aware module provides exactly
 one `reload.Program` service with an accessible no-argument constructor. An
 external HTTP module provides exactly one
 `com.sun.net.httpserver.HttpHandler` service. The service descriptor is part of
@@ -281,7 +280,7 @@ host can submit to `Reload`. A source does not load or activate classes. A
 typical host wires a source like this:
 
 ```java
-var compiler = new RevisionCompiler(hostModulePath, new ProgramGenerationFactory());
+var compiler = new RevisionCompiler(hostModulePath, Program::generation);
 var source = new MemoryRevisionSource();
 reload.source(source.map(compiler::compile));
 ```
@@ -323,8 +322,8 @@ generation closes its resources after the last lease drains.
 
 ### `RevisionCompiler`
 
-Construct `RevisionCompiler(parentModulePath, factory)` for the JDK compiler,
-or pass a `compiler.Compiler`, parent module path, and factory for a test
+Construct `RevisionCompiler(parentModulePath, definition)` for the JDK compiler,
+or pass a `compiler.Compiler`, parent module path, and definition for a test
 double. The compiler captures classes and resources in memory. The module path
 must contain every resolved project and dependency module required by the
 candidate.
@@ -404,7 +403,7 @@ Activation waits for admitted turns to reach their boundary. A definition
 restarts, transfers versioned JSON, or refuses state according to
 `StatePolicy`. Named application replay is not implemented.
 
-Create a definition with a stable name, a state schema version, and a factory:
+Create a definition with a stable name, a state schema version, and an initial-state callback:
 
 ```java
 var counter = ApplicationDefinition.of("counter", "2", () -> counterApplication());

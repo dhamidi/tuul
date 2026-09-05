@@ -5,7 +5,7 @@ Reload a running application from a validated, immutable generation.
 A generation contains the named-module code and resources that change together.
 A source adapter materializes a revision, a `RevisionCompiler` or development
 builder compiles every source module in its closure, and `Reload` loads and
-validates the selected generation factory. New work uses the active
+validates the selected generation definition. New work uses the active
 generation. Work already admitted finishes at its lease boundary.
 
 A revision source only submits revisions. A directory watcher and an artifact
@@ -52,9 +52,9 @@ when you implement a revision source or a reloadable application surface.
 
 ## Load JDK services
 
-Use `JdkServiceFactory` in the host when the candidate root module provides an
-adapter-oriented JDK service. The factory loads only providers declared by the
-candidate root module. It stores providers in the generation, and reload closes
+Use `JdkServices` in the host when the candidate root module provides an
+adapter-oriented JDK service. It loads only providers declared by the candidate
+root module, stores them in the generation, and reload closes
 any provider that implements `AutoCloseable` after leases drain.
 
 Use `JdkToolCatalog` with the same `Reload` to list tool metadata or run one
@@ -97,11 +97,11 @@ The direct support matrix is intentionally small:
 | Service | Adapter | Reload rule |
 |---|---|---|
 | `ToolProvider` | `JdkToolCatalog` | Generation-owned providers and one lease per run |
-| `FileSystemProvider` | `JdkServiceFactory` | Close each file system before its lease ends |
-| `ScriptEngineFactory` | `JdkServiceFactory` | Keep each engine inside its lease |
-| JAXP factories | `JdkServiceFactory` | Keep each parser or transformer task inside its lease |
-| JMX connector providers | `JdkServiceFactory` | Close each connector or server before its lease ends |
-| `Processor`, javac `Plugin` | `JdkServiceFactory` | Pass the provider to one host-owned compilation task |
+| `FileSystemProvider` | `JdkServices` | Close each file system before its lease ends |
+| `ScriptEngineFactory` | `JdkServices` | Keep each engine inside its lease |
+| JAXP factories | `JdkServices` | Keep each parser or transformer task inside its lease |
+| JMX connector providers | `JdkServices` | Close each connector or server before its lease ends |
+| `Processor`, javac `Plugin` | `JdkServices` | Pass the provider to one host-owned compilation task |
 
 Tuul rejects JVM-global or one-shot SPIs. Do not install selector,
 asynchronous-channel, URL, content-handler, charset, time-zone, logger,

@@ -20,8 +20,8 @@ handler)` stores an external JDK handler in a generation. It answers `503`
 before activation or when the capability is absent. Each exchange holds its
 lease until the handler returns.
 
-Use `new JdkGenerationFactory()` with `reload.RevisionCompiler`. The factory
-reads service declarations from the compiled candidate root descriptor. It
+Use `JdkReloadHandler::generation` with `reload.RevisionCompiler`. The
+definition reads service declarations from the compiled candidate root descriptor. It
 loads providers from that root and excludes providers in parent or dependency
 modules. Zero or more than one HTTP contribution rejects the candidate. A
 provider that implements `AutoCloseable` closes with its generation after all
@@ -42,7 +42,7 @@ The manifest contains:
 
 | Field | Value |
 |---|---|
-| `rootModule` | Required name of the module that receives the generation factory. |
+| `rootModule` | Required name of the module that receives the generation definition. |
 | `modules` | Required array of named source-module objects. |
 | `dependencies` | Optional array of dependency entry names. |
 | `identity` | Optional SHA-256 digest that must match the staged entries. |

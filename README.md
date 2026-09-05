@@ -108,7 +108,7 @@ only `jdk.httpserver` and provide `com.sun.net.httpserver.HttpHandler`.
 one generation, old generations drain, and the last good generation remains
 active after a failed change.
 
-Use `reload.JdkServiceFactory` when a root module provides a reload-safe JDK
+Use `reload.JdkServices` when a root module provides a reload-safe JDK
 service. Tuul loads `ToolProvider`, custom file-system providers, scripting and
 XML factories, JMX connector providers, processors, and javac plugins from the
 compiled root descriptor. It keeps those instances in the generation. Tuul
@@ -134,16 +134,16 @@ module example.plugin {
 }
 ```
 
-Construct one `JdkServiceFactory` for each candidate root. Use
+Use one `JdkServices` definition for each candidate root. Use
 `JdkToolCatalog` to list and run a tool generation. Use a separate reload
 coordinator and one host-owned lease for a plugin generation and its
 `JavacTask`:
 
 ```java
 var toolCompiler = new RevisionCompiler(List.of(),
-        new JdkServiceFactory(java.util.spi.ToolProvider.class));
+        candidate -> JdkServices.define(candidate, java.util.spi.ToolProvider.class));
 var pluginCompiler = new RevisionCompiler(List.of(),
-        new JdkServiceFactory(com.sun.source.util.Plugin.class));
+        candidate -> JdkServices.define(candidate, com.sun.source.util.Plugin.class));
 
 var tools = new JdkToolCatalog(toolReload);
 var available = tools.list();

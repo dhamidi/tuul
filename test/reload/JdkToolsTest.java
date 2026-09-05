@@ -63,12 +63,12 @@ public final class JdkToolsTest {
 
     private static void rejectsUnsupportedServices() {
         Check.throwing("unsupported JDK services are rejected", () ->
-                new JdkServiceFactory(Object.class));
+                JdkServices.define(null, Object.class));
     }
 
     private static void exposesToolProviderPolicy() {
         Check.that("ToolProvider is a supported generation service",
-                JdkServiceFactory.supportedServices().contains(ToolProvider.class));
+                JdkServices.supported().contains(ToolProvider.class));
     }
 
     private static final class FakeTool implements ToolProvider {

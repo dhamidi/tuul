@@ -25,27 +25,27 @@ import modules.MemoryModuleLoader;
 
 /// Compiles a named source-module closure and defines it in a fresh JPMS layer.
 ///
-/// The host factory chooses and constructs the generation entrypoint from the
-/// resolved layer supplied to it. Compilation writes no output in the revision
+/// The host definition chooses and constructs the generation entrypoint from
+/// the resolved layer supplied to it. Compilation writes no output in the revision
 /// tree. Class bytes and module resources remain in memory for the generation
 /// lifetime.
 public final class RevisionCompiler {
 
     private final Compiler compiler;
     private final List<Path> parentModulePath;
-    private final GenerationFactory factory;
+    private final Generation.Definition definition;
 
-    /// Creates a compiler with the system compiler and a host generation factory.
-    public RevisionCompiler(List<Path> parentModulePath, GenerationFactory factory) {
-        this(Compiler.system(), parentModulePath, factory);
+    /// Creates a compiler with the system compiler and a host generation definition.
+    public RevisionCompiler(List<Path> parentModulePath, Generation.Definition definition) {
+        this(Compiler.system(), parentModulePath, definition);
     }
 
-    /// Creates a compiler with an injectable compiler, module path, and factory.
+    /// Creates a compiler with an injectable compiler, module path, and definition.
     public RevisionCompiler(Compiler compiler, List<Path> parentModulePath,
-            GenerationFactory factory) {
+            Generation.Definition definition) {
         this.compiler = Objects.requireNonNull(compiler, "compiler");
         this.parentModulePath = paths(parentModulePath);
-        this.factory = Objects.requireNonNull(factory, "factory");
+        this.definition = Objects.requireNonNull(definition, "definition");
     }
 
     /// Attaches lazy layer compilation to a source revision.
@@ -92,8 +92,8 @@ public final class RevisionCompiler {
             MemoryModuleLoader.configure(loaders, layer);
             var root = layer.findModule(revision.rootModule()).orElseThrow(() ->
                     new CompilationFailure("root module is not in candidate layer: " + revision.rootModule()));
-            return Objects.requireNonNull(factory.define(new CandidateContext(layer, root)),
-                    "generation factory returned null");
+            return Objects.requireNonNull(definition.define(new CandidateContext(layer, root)),
+                    "generation definition returned null");
         }
 
         private List<MemoryModule> compileModules() throws Exception {

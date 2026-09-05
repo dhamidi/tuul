@@ -139,8 +139,8 @@ activate one coherent generation for its own work.
 
 ## JDK providers stay inside the generation
 
-Use `JdkServiceFactory` to load a supported JDK provider from the candidate
-root module. The factory stores the provider in `Generation.services` and
+Use `JdkServices` to load a supported JDK provider from the candidate root
+module. It stores the provider in `Generation.services` and
 registers closeable providers as generation resources.
 
 Use `JdkToolCatalog` to list and run `ToolProvider` values. The catalog reads
@@ -159,7 +159,7 @@ lease is open. The host creates the `JavacTask`, calls `Plugin.init`, and calls
 the task before closing the lease. The plugin, task listener, and other
 candidate products do not escape that lease.
 
-`RevisionCompiler` compiles the candidate before `JdkServiceFactory` loads its
+`RevisionCompiler` compiles the candidate before `JdkServices` loads its
 providers. A loaded `Processor` or `Plugin` therefore does not affect the
 compilation that creates its generation. The host passes it to a later,
 host-owned compilation task.

@@ -5,7 +5,7 @@ import java.util.ArrayList;
 import java.util.List;
 import java.util.concurrent.atomic.AtomicInteger;
 
-/// Checks service lookup, generation merging, and composition cleanup.
+/// Checks service lookup, generation merging, and definition cleanup.
 public final class GenerationTest {
 
     private GenerationTest() {}
@@ -64,13 +64,13 @@ public final class GenerationTest {
     private static void compositionClosesPartialGenerations() {
         var closed = new AtomicInteger();
         AutoCloseable shared = closed::incrementAndGet;
-        var first = GenerationFactory.compose(List.of(
+        var first = Generation.compose(List.of(
                 candidate -> Generation.empty().closing(shared),
                 candidate -> Generation.empty().closing(shared),
-                candidate -> { throw new IllegalStateException("second factory failed"); }));
+                candidate -> { throw new IllegalStateException("second definition failed"); }));
         try {
             first.define(null);
-            throw new AssertionError("factory failure was accepted");
+            throw new AssertionError("definition failure was accepted");
         } catch (Exception expected) {
             Check.equal("composition closes shared partial resources once", 1, closed.get());
         }

@@ -120,7 +120,7 @@ public final class EchoTool implements ToolProvider {
 }
 ```
 
-Wire the host factory to that root module. The host owns the source list and
+Wire the host definition to that root module. The host owns the source list and
 the compiler. The candidate root owns `module-info.java` and `EchoTool.java`:
 
 ```java
@@ -138,7 +138,7 @@ import java.io.PrintWriter;
 import java.nio.file.Path;
 import java.util.List;
 import java.util.spi.ToolProvider;
-import reload.JdkServiceFactory;
+import reload.JdkServices;
 import reload.JdkToolCatalog;
 import reload.Reload;
 import reload.Revision;
@@ -151,8 +151,8 @@ public final class Host {
         var provider = root.resolve("example/tools/EchoTool.java");
         var source = new Revision.SourceModule("example.tools", root, descriptor,
                 List.of(descriptor, provider), List.of());
-        var factory = new JdkServiceFactory(ToolProvider.class);
-        var compiler = new RevisionCompiler(List.of(), factory);
+        var compiler = new RevisionCompiler(List.of(),
+                candidate -> JdkServices.define(candidate, ToolProvider.class));
         var revision = compiler.compile(Revision.from("example.tools", List.of(source), List.of()));
 
         try (var reload = new Reload()) {
@@ -171,7 +171,7 @@ public final class Host {
 `module tuul` owns the `uses java.util.spi.ToolProvider` declaration. The
 candidate root owns the `provides` declaration. `RevisionCompiler` compiles
 `module-info.java`, and `CandidateContext` reads the resulting module
-descriptor before `JdkServiceFactory` loads the provider.
+descriptor before `JdkServices` loads the provider.
 
 Construct `JdkToolCatalog` once in the stable host. `list()` returns immutable
 names and descriptions. `run()` acquires one lease, runs the selected provider,
@@ -213,7 +213,7 @@ public final class AuditPlugin implements Plugin {
 }
 ```
 
-Use `new JdkServiceFactory(Plugin.class)` for the `example.plugin` root. Keep
+Use `JdkServices.define(candidate, Plugin.class)` for the `example.plugin` root. Keep
 the host-owned compiler task and the plugin invocation inside one lease:
 
 ```java

@@ -8,12 +8,18 @@ import java.util.Objects;
 import java.util.Optional;
 import java.util.concurrent.atomic.AtomicBoolean;
 import actors.ActorSystem;
-import actors.Definition;
 import actors.Spawn;
 import application.Effect;
 
 /// The complete immutable set of definitions and resources for one revision.
 public final class Generation implements AutoCloseable {
+
+    /// Defines one generation from a compiled candidate.
+    @FunctionalInterface
+    public interface Definition {
+        /// Builds a generation. A thrown exception rejects the candidate.
+        Generation define(CandidateContext candidate) throws Exception;
+    }
 
     private final Map<Capability<?>, Object> capabilities;
     private final Map<Class<?>, List<?>> services;
@@ -39,6 +45,73 @@ public final class Generation implements AutoCloseable {
     /// Starts a generation with no capabilities, definitions, or resources.
     public static Generation empty() {
         return new Generation(Map.of(), Map.of(), List.of(), List.of(), List.of(), List.of());
+    }
+
+    /// Combines definitions in argument order and closes partial generations
+    /// when a later definition fails.
+    public static Definition compose(List<Definition> definitions) {
+        Objects.requireNonNull(definitions, "definitions");
+        var copy = definitions.stream().map(Objects::requireNonNull).toList();
+        return candidate -> {
+            var generations = new ArrayList<Generation>();
+            try {
+                for (var definition : copy) generations.add(Objects.requireNonNull(
+                        definition.define(candidate), "generation definition returned null"));
+                return merge(generations);
+            } catch (Exception | Error failure) {
+                var close = closeAll(generations);
+                if (close != null) failure.addSuppressed(close);
+                throw failure;
+            }
+        };
+    }
+
+    /// Combines definitions in argument order.
+    public static Definition compose(Definition first, Definition... rest) {
+        Objects.requireNonNull(first, "first");
+        var all = new ArrayList<Definition>();
+        all.add(first);
+        if (rest != null) for (var definition : rest) all.add(definition);
+        return compose(all);
+    }
+
+    /// Loads root-module services and attaches them to a new generation.
+    /// Closeable providers belong to the returned generation. The service list
+    /// is checked for duplicates and provider failures close partial work.
+    public static Generation services(CandidateContext candidate,
+            List<? extends Class<?>> serviceTypes) {
+        Objects.requireNonNull(candidate, "candidate");
+        Objects.requireNonNull(serviceTypes, "service types");
+        var types = List.copyOf(serviceTypes);
+        if (types.stream().distinct().count() != types.size()) {
+            throw new IllegalArgumentException("service types must be unique");
+        }
+        var generation = empty();
+        var closeables = new java.util.IdentityHashMap<AutoCloseable, Boolean>();
+        try {
+            for (var service : types) {
+                Objects.requireNonNull(service, "service");
+                var providers = candidate.load(service);
+                @SuppressWarnings({"rawtypes", "unchecked"})
+                var next = generation.withServices((Class) service, (List) providers);
+                generation = next;
+                for (var provider : providers) {
+                    if (provider instanceof AutoCloseable closeable
+                            && closeables.putIfAbsent(closeable, Boolean.TRUE) == null) {
+                        generation = generation.closing(closeable);
+                    }
+                }
+            }
+            return generation;
+        } catch (Exception | Error failure) {
+            try { generation.close(); } catch (Exception close) { failure.addSuppressed(close); }
+            throw failure;
+        }
+    }
+
+    /// Loads root-module services supplied in argument order.
+    public static Generation services(CandidateContext candidate, Class<?>... serviceTypes) {
+        return services(candidate, List.of(serviceTypes));
     }
 
     /// Attaches a capability value to this generation.
@@ -157,7 +230,7 @@ public final class Generation implements AutoCloseable {
     /// Adds one actor type to this generation. The actor system is stable
     /// host infrastructure; the definition and spawn options belong to the
     /// generation and are replaced together at activation.
-    public Generation actor(ActorSystem system, Definition<?> definition, Spawn spawn) {
+    public Generation actor(ActorSystem system, actors.Definition<?> definition, Spawn spawn) {
         var next = new ArrayList<>(actorDefinitions);
         next.add(new ActorDefinition(java.util.Objects.requireNonNull(system, "system"),
                 java.util.Objects.requireNonNull(definition, "definition"),
@@ -168,18 +241,18 @@ public final class Generation implements AutoCloseable {
 
     /// Adds a durable actor type. Durable actors replay their command log on
     /// the new definition during a generation handoff.
-    public Generation actor(ActorSystem system, Definition<?> definition) {
+    public Generation actor(ActorSystem system, actors.Definition<?> definition) {
         return actor(system, definition, Spawn.durable());
     }
 
     /// Adds one actor type with an explicit state handoff policy and default
     /// durable spawn options.
-    public Generation actor(ActorSystem system, Definition<?> definition, StatePolicy policy) {
+    public Generation actor(ActorSystem system, actors.Definition<?> definition, StatePolicy policy) {
         return actor(system, definition, Spawn.durable(), policy);
     }
 
     /// Adds one actor type with an explicit state handoff policy.
-    public Generation actor(ActorSystem system, Definition<?> definition, Spawn spawn,
+    public Generation actor(ActorSystem system, actors.Definition<?> definition, Spawn spawn,
             StatePolicy policy) {
         var next = new ArrayList<>(actorDefinitions);
         next.add(new ActorDefinition(java.util.Objects.requireNonNull(system, "system"),
@@ -235,7 +308,7 @@ public final class Generation implements AutoCloseable {
     }
 
     /// One actor binding in a complete generation.
-    public record ActorDefinition(ActorSystem system, Definition<?> definition,
+    public record ActorDefinition(ActorSystem system, actors.Definition<?> definition,
             Spawn spawn, StatePolicy policy) {}
 
     /// One external effect binding in a complete generation.

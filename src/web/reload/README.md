@@ -7,8 +7,8 @@ handler stored under `ReloadHandler.HANDLER` and answers `503` before activation
 or when the generation has no handler.
 
 `JdkReloadHandler` is one stable listener for both HTTP contribution forms.
-`JdkGenerationFactory` reads the compiled root descriptor and requires exactly
-one `reload.Program` or `com.sun.net.httpserver.HttpHandler` provider. It does
+`JdkReloadHandler.generation` reads the compiled root descriptor and requires
+exactly one `reload.Program` or `com.sun.net.httpserver.HttpHandler` provider. It does
 not inspect source text or providers in dependency modules. An external
 handler module needs only `jdk.httpserver`; it does not import Tuul or `web`.
 A closeable provider closes after its last leased request drains.

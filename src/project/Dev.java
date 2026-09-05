@@ -7,7 +7,6 @@ import reload.Revision;
 import reload.RevisionSource;
 import symbols.Vendor;
 import web.serve.Http;
-import web.reload.JdkGenerationFactory;
 import web.reload.JdkReloadHandler;
 import java.io.IOException;
 import java.io.Writer;
@@ -305,7 +304,7 @@ public final class Dev {
             var parent = new ArrayList<Path>();
             parent.add(Home.find().classes());
             return new Built(new reload.RevisionCompiler(compiler, parent,
-                    new JdkGenerationFactory())
+                    JdkReloadHandler::generation)
                     .compile(revision));
         }
 

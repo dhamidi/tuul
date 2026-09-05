@@ -16,7 +16,7 @@
 /// external HTTP candidate provides `com.sun.net.httpserver.HttpHandler`; the
 /// `web.reload` package adapts that JDK service without a Tuul import.
 ///
-/// [JdkServiceFactory] loads supported adapter-oriented JDK services from the
+/// [JdkServices] loads supported adapter-oriented JDK services from the
 /// candidate root module and stores their providers in the generation.
 /// [JdkToolCatalog] lists and runs `java.util.spi.ToolProvider` values while
 /// holding one [Lease]. These adapters do not use a global JDK registry.

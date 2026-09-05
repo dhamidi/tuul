@@ -24,7 +24,7 @@ public final class JdkToolsIntegrationTest {
             var firstRevision = Revision.from("sample.tools", List.of(dependency, first), List.of());
             var secondRevision = Revision.from("sample.tools", List.of(dependency, second), List.of());
             var compiler = new RevisionCompiler(List.of(),
-                    new JdkServiceFactory(java.util.spi.ToolProvider.class));
+                    candidate -> JdkServices.define(candidate, java.util.spi.ToolProvider.class));
             try (var reload = new Reload()) {
                 var catalog = new JdkToolCatalog(reload);
                 reload.submit(compiler.compile(firstRevision));

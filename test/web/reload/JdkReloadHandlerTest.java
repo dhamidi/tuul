@@ -47,7 +47,7 @@ public final class JdkReloadHandlerTest {
         var layer = ModuleLayer.boot().defineModulesWithOneLoader(configuration,
                 JdkReloadHandlerTest.class.getClassLoader());
         try {
-            new JdkGenerationFactory().define(new CandidateContext(layer,
+            JdkReloadHandler.generation(new CandidateContext(layer,
                     layer.findModule("empty.external").orElseThrow()));
             throw new AssertionError("missing provider was accepted");
         } catch (IllegalStateException expected) {
@@ -70,7 +70,7 @@ public final class JdkReloadHandlerTest {
         var layer = ModuleLayer.boot().defineModulesWithOneLoader(configuration,
                 JdkReloadHandlerTest.class.getClassLoader());
         try {
-            new JdkGenerationFactory().define(new CandidateContext(layer,
+            JdkReloadHandler.generation(new CandidateContext(layer,
                     layer.findModule("ambiguous.external").orElseThrow()));
             throw new AssertionError("ambiguous contribution was accepted");
         } catch (IllegalStateException expected) {
@@ -91,7 +91,7 @@ public final class JdkReloadHandlerTest {
         var layer = ModuleLayer.boot().defineModulesWithOneLoader(configuration,
                 JdkReloadHandlerTest.class.getClassLoader());
         try {
-            new JdkGenerationFactory().define(new CandidateContext(layer,
+            JdkReloadHandler.generation(new CandidateContext(layer,
                     layer.findModule("multiple.external").orElseThrow()));
             throw new AssertionError("multiple providers were accepted");
         } catch (IllegalStateException expected) {

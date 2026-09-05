@@ -55,7 +55,7 @@ public final class RevisionCompilerModuleLayerTest {
                                 candidate.providers(Program.class));
                         Check.equal("root loading excludes dependency providers", 1,
                                 candidate.load(Program.class).size());
-                        var loaded = new ServiceGenerationFactory(Program.class).define(candidate);
+                        var loaded = Generation.services(candidate, Program.class);
                         Check.equal("service providers are attached immutably", 1,
                                 loaded.services(Program.class).size());
                         loaded.close();
@@ -90,11 +90,11 @@ public final class RevisionCompilerModuleLayerTest {
                             Check.equal("dependency resource stays in its module", "dependency",
                                     new String(reader.open("dep/shared.txt").orElseThrow().readAllBytes()));
                         }
-                        return new ProgramGenerationFactory().define(candidate);
+                        return Program.generation(candidate);
                     });
             try (var generation = compiler.compile(revision).program().define()) {
                 Check.that("candidate module is named", layer.get().findModule("sample.app").orElseThrow().isNamed());
-                Check.that("layer factory creates a generation", generation != null);
+                Check.that("layer definition creates a generation", generation != null);
             }
             Files.writeString(answer, "changed");
             var next = Revision.from("sample.app", List.of(dep, app), List.of(host));

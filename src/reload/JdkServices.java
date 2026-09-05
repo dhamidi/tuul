@@ -21,11 +21,8 @@ import org.xml.sax.XMLReader;
 import com.sun.source.util.Plugin;
 import javax.annotation.processing.Processor;
 
-/// Creates generations that load the supported JDK services from the root module.
-///
-/// The factory delegates to [ServiceGenerationFactory]. It does not use the
-/// system class loader, the thread context class loader, or a JDK global registry.
-public final class JdkServiceFactory implements GenerationFactory {
+/// Loads the JDK services that are safe to own inside a reload generation.
+public final class JdkServices {
     private static final Set<Class<?>> SUPPORTED = Set.of(
             FileSystemProvider.class, ScriptEngineFactory.class,
             ToolProvider.class,
@@ -37,39 +34,32 @@ public final class JdkServiceFactory implements GenerationFactory {
             JMXConnectorProvider.class, JMXConnectorServerProvider.class,
             Processor.class, Plugin.class);
 
-    private final ServiceGenerationFactory delegate;
+    private JdkServices() {}
 
-    /// Selects the supported service types to load in argument order.
-    ///
+    /// Loads the selected supported services from the candidate root module.
     /// An unsupported or duplicate type throws `IllegalArgumentException`.
-    /// An empty list creates generations with no JDK services.
-    public JdkServiceFactory(List<Class<?>> services) {
-        Objects.requireNonNull(services, "services");
-        List<Class<?>> copy = services.stream().<Class<?>>map(service -> {
+    public static Generation define(CandidateContext candidate,
+            List<? extends Class<?>> serviceTypes) {
+        Objects.requireNonNull(serviceTypes, "service types");
+        var types = serviceTypes.stream().map(service -> {
             Objects.requireNonNull(service, "service");
             if (!SUPPORTED.contains(service)) throw new IllegalArgumentException(
                     "unsupported JDK service: " + service.getName());
             return service;
         }).toList();
-        if (copy.size() != copy.stream().distinct().count()) {
+        if (types.size() != types.stream().distinct().count()) {
             throw new IllegalArgumentException("duplicate JDK service type");
         }
-        delegate = new ServiceGenerationFactory(copy);
+        return Generation.services(candidate, types);
     }
 
-    /// Selects the supported service types to load in argument order.
-    public JdkServiceFactory(Class<?>... services) {
-        this(List.of(services));
+    /// Loads the selected supported services from the candidate root module.
+    public static Generation define(CandidateContext candidate, Class<?>... serviceTypes) {
+        return define(candidate, List.of(serviceTypes));
     }
 
-    /// Loads the selected root providers and attaches them to the generation.
-    @Override
-    public Generation define(CandidateContext candidate) throws Exception {
-        return delegate.define(Objects.requireNonNull(candidate, "candidate"));
-    }
-
-    /// Returns the supported service types in deterministic name order.
-    public static List<Class<?>> supportedServices() {
+    /// Returns supported services in deterministic name order.
+    public static List<Class<?>> supported() {
         return SUPPORTED.stream().sorted((left, right) ->
                 left.getName().compareTo(right.getName())).toList();
     }

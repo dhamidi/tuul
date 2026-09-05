@@ -126,12 +126,12 @@ or filesystem project in an integration suite.
 
 ## Add JDK tools to a generation
 
-Use `JdkServiceFactory` as the generation factory for a tool-only candidate
+Use `JdkServices` to define a tool-only candidate generation
 root:
 
 ```java
-var factory = new JdkServiceFactory(java.util.spi.ToolProvider.class);
-var compiler = new RevisionCompiler(List.of(), factory);
+var compiler = new RevisionCompiler(List.of(),
+        candidate -> JdkServices.define(candidate, java.util.spi.ToolProvider.class));
 var revision = compiler.compile(Revision.from("example.tools", List.of(source), List.of()));
 ```
 
@@ -147,8 +147,8 @@ The complete candidate `module-info.java` and `ToolProvider` class are in the
 compiler reads the compiled descriptor, not candidate source text.
 
 Pass `FileSystemProvider`, `ScriptEngineFactory`, a public JAXP factory, a JMX
-connector provider, `Processor`, or javac `Plugin` to `JdkServiceFactory` when
-the candidate uses that adapter. The factory rejects unsupported global SPIs.
+connector provider, `Processor`, or javac `Plugin` to `JdkServices` when the
+candidate uses that adapter. It rejects unsupported global SPIs.
 
 For a javac plugin, put the service and implementation in the candidate root:
 
